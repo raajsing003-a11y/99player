@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nova Browser 10</title>
+<title>Nova Browser 11</title>
 <meta name="description" content="A private in-app browser with fast video download and offline playback.">
 <meta name="theme-color" content="#121212">
 <meta name="mobile-web-app-capable" content="yes">
@@ -610,7 +610,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 10</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 11</div>
   </div>
 
   <div class="toolbar">
@@ -896,6 +896,7 @@
       <div class="row-buttons">
         <button id="loopBtn">Loop: Off</button>
         <button id="muteBtn">Mute</button>
+        <button id="autoDlToggleBtn" title="When on, videos download in the background for smooth offline playback. When off, videos just stream online and nothing is saved automatically.">Auto-DL: On</button>
       </div>
     </div>
 
@@ -937,7 +938,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '10';
+const NOVA_VERSION = '11';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -950,7 +951,7 @@ const DOWNLOAD_EXT_RE = /\.(pdf|zip|rar|7z|docx?|xlsx?|pptx?|csv|json|txt|png|jp
 
 let settings = { bright: 100, contrast: 100, sat: 100, sharp: 0, volBoost: 100, loop: false,
   denoise: 0, detail: 0, exposure: 0, gamma: 100, shadows: 0, highlights: 0,
-  vibrance: 100, selHue: 0, selRange: 30, selSat: 100, aiEnhance: 0 };
+  vibrance: 100, selHue: 0, selRange: 30, selSat: 100, aiEnhance: 0, autoDownload: true };
 let customPresets = {};
 const sharpMatrix = document.getElementById('sharpenMatrix');
 
@@ -1609,11 +1610,13 @@ function loadUrl(tabId, rawUrl, isNewNav) {
       // Auto-start the same download the lightning button triggers, in
       // silent/badge mode — the small progress badge over the video, no
       // full-screen overlay — so playback switches to the fully-downloaded
-      // local copy (smooth, no buffering) and gets saved automatically,
-      // without the person needing to tap anything. A link that can't play
-      // at all is handled separately by the 'error' listener below, which
+      // local copy (smooth, no buffering) and gets saved automatically.
+      // Only when the person has left Auto-DL on (Settings ▸ Auto-DL); with
+      // it off the video just streams online and the lightning button still
+      // works to download it manually. A link that can't play at all either
+      // way is handled separately by the 'error' listener below, which
       // tells the person to use the lightning button instead.
-      fastDownloadAndPlay(tab, true);
+      if (settings.autoDownload) fastDownloadAndPlay(tab, true);
     }
   } else {
     tab.el.src = url;
@@ -2173,6 +2176,8 @@ function applyEnhanceSettingsToUI() {
   tabs.forEach(t => { if (t.isVideo) { updateVolumeGain(t, settings.volBoost); t.el.loop = settings.loop; } });
   document.getElementById('loopBtn').textContent = 'Loop: ' + (settings.loop ? 'On' : 'Off');
   document.getElementById('loopBtn').classList.toggle('active-toggle', settings.loop);
+  document.getElementById('autoDlToggleBtn').textContent = 'Auto-DL: ' + (settings.autoDownload ? 'On' : 'Off');
+  document.getElementById('autoDlToggleBtn').classList.toggle('active-toggle', settings.autoDownload);
   updateSelSwatch();
   updateGradingForActiveTab();
   refreshEnhanceLabels();
@@ -3812,10 +3817,8 @@ async function loadVideoViaHlsJs(tab, url) {
   });
   hls.loadSource(url);
   hls.attachMedia(tab.el);
-  // Same auto-start as the direct-link path, so HLS sources also begin
-  // downloading (badge mode) right away — smooth playback + auto-save.
   updateAutoDlIndicator(tab);
-  fastDownloadAndPlay(tab, true);
+  if (settings.autoDownload) fastDownloadAndPlay(tab, true);
 }
 
 // Raw MPEG-TS segments (what most real HLS streams actually use) decode fine
@@ -5016,6 +5019,22 @@ document.getElementById('loopBtn').addEventListener('click', () => {
   document.getElementById('loopBtn').textContent = 'Loop: ' + (settings.loop ? 'On' : 'Off');
   document.getElementById('loopBtn').classList.toggle('active-toggle', settings.loop);
   saveEnhanceSettings();
+});
+document.getElementById('autoDlToggleBtn').addEventListener('click', () => {
+  settings.autoDownload = !settings.autoDownload;
+  document.getElementById('autoDlToggleBtn').textContent = 'Auto-DL: ' + (settings.autoDownload ? 'On' : 'Off');
+  document.getElementById('autoDlToggleBtn').classList.toggle('active-toggle', settings.autoDownload);
+  if (!settings.autoDownload) {
+    // Take effect immediately, not just for the next video — stop any
+    // silent auto-download already running in the background right now,
+    // so switching this off actually lets the current video keep playing
+    // as a plain online stream instead of finishing the download anyway.
+    tabs.forEach(t => {
+      if (t.isVideo && t._autoDLAbort) { try { t._autoDLAbort.abort(); } catch (e) {} t._autoDLAbort = null; updateAutoDlIndicator(t); }
+    });
+  }
+  saveEnhanceSettings();
+  showMiniToast(settings.autoDownload ? 'Videos will download in the background for offline playback' : 'Videos will just stream online \u2014 nothing downloads automatically');
 });
 document.getElementById('muteBtn').addEventListener('click', () => {
   const tab = getTab(activeTabId);
