@@ -610,7 +610,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 6.2</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 6.3</div>
   </div>
 
   <div class="toolbar">
@@ -937,7 +937,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '6.2';
+const NOVA_VERSION = '6.3';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -1782,41 +1782,20 @@ function updateVolumeGain(tab, pct) {
   if (!tab.gainNode) return;
   tab.gainNode.gain.value = pct / 100;
 }
-// Plain currentTime seeks on a remuxed/downloaded blob file can land audio
-// and video on different actual positions: browsers seek the audio track
-// sample-accurately, but for the video track they often snap to the
-// nearest keyframe and trust the container's own seek index — and a
-// mux.js-remuxed MP4's keyframe spacing follows whatever the source
-// stream's GOP size was (sometimes 15-20s+), so a plain seek can leave
-// video sitting up to one full keyframe interval behind/ahead of where
-// audio actually jumped to. That's exactly the "off by 15-20 sec, only on
-// skip/seek" symptom. Re-pointing the element's src at the same blob with
-// a #t=<seconds> media-fragment and reloading forces the browser to
-// rebuild its seek/decode pipeline anchored exactly at that timestamp
-// instead of trusting a possibly-imprecise index, which is what actually
-// fixes it. Falls back to a normal currentTime seek for anything that
-// isn't a blob (still-streaming/live video, where this trick doesn't
-// apply and isn't needed).
+// A blob URL + '#t=' media-fragment reload was tried here to force a
+// keyframe-accurate seek, but Android WebView doesn't reliably support a
+// time-fragment on a blob: URL — instead of seeking it, the element failed
+// to load the source at all (MEDIA_ERR_SRC_NOT_SUPPORTED), which is why
+// playback broke entirely instead of just fixing sync. Reverted to a plain
+// currentTime seek, which is guaranteed to at least keep the video
+// playable everywhere, even though it doesn't correct the keyframe-vs-audio
+// offset on its own.
 function preciseSeek(tab, targetTime) {
   if (!tab || !tab.el) return;
   const el = tab.el;
   const dur = el.duration || 0;
   const t = Math.max(0, dur ? Math.min(dur - 0.05, targetTime) : targetTime);
-  const rawSrc = el.currentSrc || el.src || '';
-  if (!/^blob:/i.test(rawSrc)) { try { el.currentTime = t; } catch (e) {} return; }
-  const base = rawSrc.split('#')[0];
-  const wasPaused = el.paused;
-  const wasMuted = el.muted;
-  el.src = base + '#t=' + t.toFixed(3);
-  el.load();
-  el.addEventListener('loadedmetadata', function onMeta() {
-    el.removeEventListener('loadedmetadata', onMeta);
-    el.muted = true;
-    const p = el.play();
-    const restore = () => { el.muted = wasMuted; if (wasPaused) el.pause(); };
-    if (p && p.then) p.then(() => setTimeout(restore, 100)).catch(restore);
-    else restore();
-  }, { once: true });
+  try { el.currentTime = t; } catch (e) {}
 }
 function updateSharpen(amount) {
   const k = amount / 100;
@@ -4867,15 +4846,11 @@ function swapTabToBlob(tab, objectUrl, blob, sourceUrl) {
   if (blob) { tab._savedBlob = blob; tab._savedFilename = guessFilenameFromUrl(sourceUrl || tab.history[tab.historyIndex] || '', blob.type); }
   const wasTime = tab.el.currentTime || 0;
   const wasMuted = tab.el.muted;
-  // Anchor the src with a #t=<seconds> media fragment when resuming
-  // mid-video instead of loading from 0 and then calling currentTime — for
-  // a remuxed file this makes the browser build its seek/decode pipeline
-  // starting exactly at that timestamp, which is what keeps audio and
-  // video from landing on different actual positions (see preciseSeek).
-  tab.el.src = objectUrl + (wasTime > 0.2 ? '#t=' + wasTime.toFixed(3) : '');
+  tab.el.src = objectUrl;
   tab.el.load();
   tab.el.addEventListener('loadedmetadata', function onMeta() {
     tab.el.removeEventListener('loadedmetadata', onMeta);
+    if (wasTime > 0.2) { try { tab.el.currentTime = wasTime; } catch (e) {} }
     // The background download finishes on its own timer, not in direct
     // response to a tap — so calling play() here on an unmuted element hits
     // the browser's autoplay-without-gesture block and gets silently
