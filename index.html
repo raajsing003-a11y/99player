@@ -93,19 +93,24 @@
 
   /* ---------- Toolbar ---------- */
   .toolbar {
-    display:flex; flex-wrap:wrap; gap:6px; align-items:center;
-    padding:8px; background:#2f2f2f; border-bottom:1px solid #1c1c1c;
+    display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+    padding:8px 8px 10px 8px; background:#2f2f2f; border-bottom:1px solid #1c1c1c;
   }
-  .nav-buttons, .extra-buttons { display:flex; gap:4px; flex-shrink:0; }
+  .nav-buttons { display:flex; gap:4px; flex-shrink:0; }
+  .extra-buttons {
+    display:flex; flex-wrap:wrap; gap:6px; width:100%;
+    padding-top:6px; margin-top:2px; border-top:1px solid #262626;
+  }
   .icon-btn {
-    width:36px; height:36px; border-radius:50%; border:none;
-    background:#3d3d3d; color:#fff; font-size:15px; cursor:pointer;
+    width:40px; height:40px; border-radius:50%; border:none;
+    background:#3d3d3d; color:#fff; font-size:16px; cursor:pointer;
     display:flex; align-items:center; justify-content:center; flex-shrink:0;
     transition:background .15s ease;
   }
   .icon-btn:active { background:#4a4a4a; }
   .icon-btn:disabled { opacity:.3; cursor:default; }
   .icon-btn.active-toggle { background:#d97757; color:#fff; }
+  #downloadsBtn, #offlineBtn { background:#3d3327; box-shadow:inset 0 0 0 1px #6b4a2a; }
   .url-wrap { position:relative; flex:1 1 auto; min-width:0; display:flex; }
   .toolbar input[type="text"], .toolbar input[type="search"] {
     flex:1 1 auto; min-width:0;
@@ -172,9 +177,38 @@
   }
   .stage video.grading-hidden { display:none !important; }
   .empty-tab-hint {
-    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
-    color:#666; font-size:13.5px; text-align:center; padding:30px; line-height:1.6; pointer-events:none;
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    overflow-y:auto; -webkit-overflow-scrolling:touch;
+    background:linear-gradient(165deg,#2b2140 0%,#1c1c2e 38%,#121212 78%);
+    padding-bottom:24px;
   }
+  .home-header { padding:30px 22px 4px; }
+  .home-title { display:flex; align-items:center; gap:10px; font-size:24px; font-weight:800; color:#fff; }
+  .home-title .logo-dot {
+    width:28px; height:28px; border-radius:50%; flex-shrink:0;
+    background:conic-gradient(from 200deg,#d97757,#e8c07d,#7ab8d9,#8e7ad9,#d97757);
+  }
+  .home-search {
+    margin:18px 20px 0; display:flex; align-items:center; gap:10px;
+    background:rgba(255,255,255,0.07); border:1px solid rgba(255,255,255,0.16);
+    border-radius:26px; padding:13px 18px; color:#aaa; font-size:14.5px; cursor:text;
+  }
+  .home-search .hs-icon { font-size:16px; flex-shrink:0; }
+  .home-grid-card {
+    margin:20px 16px 0; background:rgba(255,255,255,0.045);
+    border:1px solid rgba(255,255,255,0.06); border-radius:22px; padding:20px 8px 6px;
+  }
+  .home-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:20px 4px; }
+  .home-shortcut {
+    display:flex; flex-direction:column; align-items:center; gap:8px;
+    background:none; border:none; color:#ddd; font-size:11.5px; cursor:pointer; padding:0 0 14px;
+  }
+  .home-shortcut .circle {
+    width:54px; height:54px; border-radius:50%; display:flex; align-items:center;
+    justify-content:center; font-size:21px; color:#fff; box-shadow:0 4px 10px rgba(0,0,0,0.35);
+  }
+  .home-shortcut span.label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:74px; }
+  .home-hint-text { margin:22px 26px 0; color:#777; font-size:12.5px; text-align:center; line-height:1.6; }
 
   /* Quick video controls overlay (top-right utility icons) */
   .quick-controls {
@@ -437,6 +471,22 @@
   .fastload-pct { font-size:12px; color:#aaa; }
   .fastload-card .secondary { padding:9px 20px; border-radius:12px; border:none; background:#333; color:#eee; font-size:12.5px; cursor:pointer; }
 
+  /* ---------- Bottom nav ---------- */
+  .bottom-nav {
+    display:flex; justify-content:space-around; align-items:center; flex-shrink:0;
+    background:#1a1a1a; border-top:1px solid #292929;
+    padding:7px 4px calc(7px + env(safe-area-inset-bottom, 0px));
+  }
+  .app.player-mode .bottom-nav, .app.immersive-mode .bottom-nav { display:none !important; }
+  .nav-item {
+    display:flex; flex-direction:column; align-items:center; gap:3px;
+    background:none; border:none; color:#8a8a8a; font-size:10.5px;
+    padding:4px 10px; cursor:pointer;
+  }
+  .nav-item .nav-icon { font-size:19px; line-height:1; }
+  .nav-item.active { color:#4fd1c5; }
+  .nav-item:active { opacity:.7; }
+
   @media (min-width: 640px) {
     .toolbar-row2 { width:auto; }
     .go-btn { padding:10px 26px; }
@@ -475,17 +525,17 @@
       <option value="wikipedia">Wikipedia</option>
     </select>
     <div class="extra-buttons">
-      <button class="icon-btn" id="immersiveBtn" title="Hide toolbar (full-page view)">&#128065;</button>
-      <button class="icon-btn" id="bookmarkBtn" title="Bookmark this page">&#9734;</button>
-      <button class="icon-btn" id="historyBtn" title="History">&#8987;</button>
-      <button class="icon-btn" id="bookmarksBtn" title="Bookmarks">&#128278;</button>
       <button class="icon-btn" id="downloadsBtn" title="Downloads">&#8681;</button>
       <button class="icon-btn" id="offlineBtn" title="Offline library">&#128190;</button>
       <button class="icon-btn" id="openFileBtn" title="Open video from device">&#128194;</button>
-      <button class="icon-btn" id="extractVideoBtn" title="Open video from a page link">&#127916;</button>
-      <button class="icon-btn" id="enhanceBtn" title="Video enhancer" disabled><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"/></svg></button>
-      <button class="icon-btn" id="desktopBtn" title="Toggle desktop/mobile view">&#128421;</button>
+      <button class="icon-btn" id="bookmarkBtn" title="Bookmark this page">&#9734;</button>
+      <button class="icon-btn" id="bookmarksBtn" title="Bookmarks">&#128278;</button>
+      <button class="icon-btn" id="historyBtn" title="History">&#8987;</button>
       <button class="icon-btn" id="fullscreenBtn" title="Fullscreen">&#9974;</button>
+      <button class="icon-btn" id="extractVideoBtn" title="Open video from a page link">&#127916;</button>
+      <button class="icon-btn" id="immersiveBtn" title="Hide toolbar (full-page view)">&#128065;</button>
+      <button class="icon-btn" id="desktopBtn" title="Toggle desktop/mobile view">&#128421;</button>
+      <button class="icon-btn" id="enhanceBtn" title="Video enhancer" disabled><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"/></svg></button>
     </div>
     <input type="file" id="fileInput" accept="video/*">
     <div class="toolbar-row2">
@@ -501,7 +551,25 @@
 
   <div class="stage" id="stage">
     <div class="refresh-indicator" id="refreshIndicator">&#8635;</div>
-    <div class="empty-tab-hint" id="emptyHint">Search the web, paste a link, or tap &#128194; to open a video from your device.</div>
+    <div class="empty-tab-hint" id="emptyHint">
+      <div class="home-header">
+        <div class="home-title"><span class="logo-dot"></span>Nova Browser</div>
+      </div>
+      <div class="home-search" id="homeSearchBox"><span class="hs-icon">&#128269;</span>Search or type a URL</div>
+      <div class="home-grid-card">
+        <div class="home-grid">
+          <button class="home-shortcut" data-target="downloadsBtn"><span class="circle" style="background:#1fae7f">&#8681;</span><span class="label">Downloads</span></button>
+          <button class="home-shortcut" data-target="offlineBtn"><span class="circle" style="background:#7a5cd9">&#128190;</span><span class="label">Offline</span></button>
+          <button class="home-shortcut" data-target="openFileBtn"><span class="circle" style="background:#2f7fd9">&#128194;</span><span class="label">Open file</span></button>
+          <button class="home-shortcut" data-target="bookmarkBtn"><span class="circle" style="background:#e08a2c">&#9734;</span><span class="label">Bookmark</span></button>
+          <button class="home-shortcut" data-target="bookmarksBtn"><span class="circle" style="background:#d9527a">&#128278;</span><span class="label">Bookmarks</span></button>
+          <button class="home-shortcut" data-target="historyBtn"><span class="circle" style="background:#5a6b7a">&#8987;</span><span class="label">History</span></button>
+          <button class="home-shortcut" data-target="extractVideoBtn"><span class="circle" style="background:#d9483f">&#127916;</span><span class="label">Get video</span></button>
+          <button class="home-shortcut" data-target="desktopBtn"><span class="circle" style="background:#4a4a4a">&#128421;</span><span class="label">Desktop</span></button>
+        </div>
+      </div>
+      <div class="home-hint-text">Search the web, paste a link, or open a video from your device.</div>
+    </div>
 
     <button class="exit-player-btn" id="exitPlayerBtn" title="Back to browser">&#8592;</button>
     <button class="exit-immersive-btn" id="exitImmersiveBtn" title="Show toolbar">&#8593;</button>
@@ -707,6 +775,14 @@
       <div class="note">"My Preset" stores your own saved look. Tap Reset to clear all sliders back to neutral.</div>
     </div>
   </div>
+  </div>
+
+  <div class="bottom-nav" id="bottomNav">
+    <button class="nav-item active" id="navHome"><span class="nav-icon">&#8962;</span>Home</button>
+    <button class="nav-item" id="navDownloads"><span class="nav-icon">&#8681;</span>Downloads</button>
+    <button class="nav-item" id="navFiles"><span class="nav-icon">&#128190;</span>Files</button>
+    <button class="nav-item" id="navTabs"><span class="nav-icon">&#9635;</span>Tabs</button>
+    <button class="nav-item" id="navBookmarks"><span class="nav-icon">&#128278;</span>Saved</button>
   </div>
 </div>
 
@@ -2106,6 +2182,65 @@ document.addEventListener('webkitfullscreenchange', () => {
   document.getElementById('fullscreenBtnPlayer').classList.toggle('active-toggle', isFs);
   if (!isFs && playerMode) exitPlayerModeFn();
 });
+/* ---- Home screen shortcuts & bottom nav ---- */
+document.querySelectorAll('.home-shortcut[data-target]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const target = document.getElementById(btn.dataset.target);
+    if (target) target.click();
+  });
+});
+document.getElementById('homeSearchBox').addEventListener('click', () => {
+  document.getElementById('urlInput').focus();
+});
+function setActiveNav(id) {
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.id === id));
+}
+document.getElementById('navHome').addEventListener('click', () => {
+  setActiveNav('navHome');
+  closePanels();
+  createTab();
+});
+document.getElementById('navDownloads').addEventListener('click', () => {
+  setActiveNav('navDownloads');
+  document.getElementById('downloadsBtn').click();
+});
+document.getElementById('navFiles').addEventListener('click', () => {
+  setActiveNav('navFiles');
+  document.getElementById('offlineBtn').click();
+});
+document.getElementById('navTabs').addEventListener('click', () => {
+  setActiveNav('navTabs');
+  closePanels();
+  document.getElementById('tabbar').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+});
+document.getElementById('navBookmarks').addEventListener('click', () => {
+  setActiveNav('navBookmarks');
+  document.getElementById('bookmarksBtn').click();
+});
+
+/* ---- Auto-fullscreen on device rotation while a video is active ---- */
+(function () {
+  function isWatchingVideo() {
+    const tab = getTab(activeTabId);
+    return !!(tab && tab.isVideo);
+  }
+  function goFullscreen() {
+    const container = document.getElementById('stage');
+    if (!document.fullscreenElement) (container.requestFullscreen || container.webkitRequestFullscreen || function(){}).call(container);
+  }
+  function isLandscape() {
+    if (screen.orientation && screen.orientation.type) return screen.orientation.type.indexOf('landscape') === 0;
+    return window.innerWidth > window.innerHeight;
+  }
+  function handleOrientation() {
+    if (isWatchingVideo() && isLandscape()) goFullscreen();
+  }
+  if (screen.orientation && screen.orientation.addEventListener) {
+    screen.orientation.addEventListener('change', handleOrientation);
+  } else {
+    window.addEventListener('orientationchange', handleOrientation);
+  }
+})();
 document.getElementById('immersiveBtn').addEventListener('click', () => {
   document.querySelector('.app').classList.add('immersive-mode');
 });
