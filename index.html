@@ -610,7 +610,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 6.0</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 6.1</div>
   </div>
 
   <div class="toolbar">
@@ -937,7 +937,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '6.0';
+const NOVA_VERSION = '6.1';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -1863,18 +1863,72 @@ void main(){
     vec3 lumW = vec3(0.299,0.587,0.114);
     float gx = dot((ne+2.0*e2+se) - (nw+2.0*w+sw), lumW);
     float gy = dot((sw+2.0*s+se) - (nw+2.0*n+ne), lumW);
-    float edge = clamp(sqrt(gx*gx+gy*gy) * 3.0, 0.0, 1.0);
+    // pow() with an exponent under 1 lets moderate (not just hard) edges
+    // register strongly too — a straight linear edge mask only reacts to
+    // the sharpest lines, which is why the old pass looked barely
+    // different: most real footage is full of soft/medium edges (skin,
+    // fabric, foliage) that never crossed the old threshold at all.
+    float edgeRaw = sqrt(gx*gx+gy*gy);
+    // A noise floor: values right at the very bottom (dot dot dot get
+    // squashed toward 0 by smoothstep) are compression grain/dithering, not
+    // real structure — sharpening those just makes the video look noisier,
+    // not more detailed. Everything above that floor now gets pushed
+    // harder (exponent lowered further) so real edges pop a lot more.
+    float edge = smoothstep(0.015, 1.0, pow(edgeRaw * 3.4, 0.5));
     vec3 avg8 = (n+s+w+e2+nw+ne+sw+se) / 8.0;
     // "push" the pixel away from the blurred average along its own contrast,
     // strongest right on edges (this is the core trick Anime4K's line-sharpen
     // pass uses) so lines look crisper without haloing flat/noisy areas.
-    vec3 pushed = col + (col - avg8) * (u_ai * 2.2) * edge;
-    col = clamp(pushed, 0.0, 1.0);
+    vec3 pushed = col + (col - avg8) * (u_ai * 4.6) * edge;
+
+    // Wider-radius pass on top of that: this is what actually makes the
+    // difference show up as "more detailed/higher quality" instead of just
+    // "edges look slightly crunchier". Hard-edge sharpening alone does
+    // nothing for soft, low-contrast mid-tone texture (skin pores, fabric
+    // weave, foliage) which is most of what makes compressed/low-res video
+    // look flat and mushy — pulling contrast back into that texture at a
+    // larger sample radius is the actual "clarity" recovery step.
+    vec3 n2 = texture2D(u_tex, v + vec2(0.0,-2.0)*u_texel).rgb;
+    vec3 s2 = texture2D(u_tex, v + vec2(0.0, 2.0)*u_texel).rgb;
+    vec3 w2 = texture2D(u_tex, v + vec2(-2.0,0.0)*u_texel).rgb;
+    vec3 e3 = texture2D(u_tex, v + vec2( 2.0,0.0)*u_texel).rgb;
+    vec3 nw2 = texture2D(u_tex, v + vec2(-2.0,-2.0)*u_texel).rgb;
+    vec3 ne2 = texture2D(u_tex, v + vec2( 2.0,-2.0)*u_texel).rgb;
+    vec3 sw2 = texture2D(u_tex, v + vec2(-2.0, 2.0)*u_texel).rgb;
+    vec3 se2 = texture2D(u_tex, v + vec2( 2.0, 2.0)*u_texel).rgb;
+    vec3 wideAvg = (n2+s2+w2+e3+nw2+ne2+sw2+se2 + avg8*4.0) / 12.0;
+    vec3 clarity = col + (col - wideAvg) * (u_ai * 2.6);
+
+    // Local adaptive contrast ("CLAHE-lite"): stretches each pixel's
+    // luminance against the min/max already sampled around it instead of a
+    // flat global curve, so dark/flat regions still gain visible texture
+    // instead of the effect only showing up on already-bright, high-contrast
+    // parts of the frame — this is a big part of why a real AI upscaler
+    // looks like it "recovers" detail everywhere, not just at strong edges.
+    vec3 lo = min(min(min(n,s),min(w,e2)),min(min(nw,ne),min(sw,se)));
+    vec3 hi = max(max(max(n,s),max(w,e2)),max(max(nw,ne),max(sw,se)));
+    vec3 range = max(hi - lo, vec3(0.05));
+    vec3 stretched = clamp((col - lo) / range, 0.0, 1.0);
+    vec3 adaptive = mix(col, stretched, u_ai * 0.35 * edge);
+
+    col = clamp(mix(pushed, clarity, 0.55), 0.0, 1.0);
+    col = clamp(mix(col, adaptive, 0.5), 0.0, 1.0);
+    // Global micro-contrast lift scaled with strength — this is the
+    // "punch" that makes higher AI Enhance values read as visibly higher
+    // quality at a glance, not just technically sharper up close.
+    col = clamp((col - 0.5) * (1.0 + u_ai * 0.24) + 0.5, 0.0, 1.0);
   }
   vec3 hsv = rgb2hsv(col);
   float sat = hsv.y;
   float vib = u_vibrance - 1.0;
   sat = clamp(sat + vib * (1.0 - sat) * sat * 2.5, 0.0, 1.0);
+  if (u_ai > 0.0) {
+    // A touch of extra saturation riding on the enhance strength — mirrors
+    // what real "AI upscaler" apps do (they don't just sharpen, they also
+    // punch color back up since compression flattens saturation along with
+    // detail) — kept small so skin tones don't go plasticky.
+    sat = clamp(sat * (1.0 + u_ai * 0.16), 0.0, 1.0);
+  }
   float dist = abs(hsv.x - u_selHue);
   dist = min(dist, 1.0 - dist);
   float mask = 1.0 - smoothstep(0.0, u_selRange, dist);
@@ -1954,8 +2008,8 @@ function drawGradingFrame(tab) {
     const rect = tab.canvas.getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     if (rect.width && rect.height) {
-      tw = Math.max(vw, Math.min(1920, Math.round(rect.width * dpr)));
-      th = Math.max(vh, Math.min(1080, Math.round(rect.height * dpr)));
+      tw = Math.max(vw, Math.min(2560, Math.round(rect.width * dpr)));
+      th = Math.max(vh, Math.min(1440, Math.round(rect.height * dpr)));
     }
   }
   if (tab.canvas.width !== tw || tab.canvas.height !== th) {
@@ -3667,7 +3721,7 @@ async function remuxTsPartsToMp4(parts, onStatus, onProgress) {
   await ensureMuxJs();
   return new Promise((resolve, reject) => {
     try {
-      const transmuxer = new muxjs.mp4.Transmuxer({ keepOriginalTimestamps: true });
+      const transmuxer = new muxjs.mp4.Transmuxer();
       let initSegment = null;
       const mediaChunks = [];
       transmuxer.on('data', (segment) => {
@@ -3927,7 +3981,10 @@ async function playHlsProgressive(tab, url) {
   const muxDonePromise = new Promise((res) => { muxResolve = res; });
   if (!isFmp4Guess) {
     await ensureMuxJs();
-    transmuxer = new muxjs.mp4.Transmuxer({ keepOriginalTimestamps: true });
+    // Default (normalized) mode here too — see the note above downloadHlsBlob's
+    // transmuxer for why keepOriginalTimestamps caused a large fixed
+    // audio/video offset instead of fixing sync.
+    transmuxer = new muxjs.mp4.Transmuxer();
     transmuxer.on('data', (segment) => {
       if (segment.initSegment && !initSegment) { initSegment = segment.initSegment; enqueue(initSegment.buffer.slice(0)); }
       if (segment.data && segment.data.length) {
@@ -4113,23 +4170,23 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
   }
 
   // Download is 100% complete — now run the conversion pass, from scratch,
-  // over every downloaded segment in order. keepOriginalTimestamps:true is
-  // what actually keeps audio and video in sync here: mux.js's default
-  // ("normalized") mode recomputes each track's timeline independently from
-  // its own frame durations every time it's fed a new segment, and small
-  // per-segment rounding differences between the audio and video tracks
-  // then accumulate across dozens/hundreds of segments into a growing,
-  // very noticeable offset by the end of a long video — which matches
-  // exactly what shows up here: fine near the start, badly out of sync by
-  // the time the full download finishes. keepOriginalTimestamps preserves
-  // the source stream's own shared PTS clock instead of letting each track
-  // drift on its own recomputed timeline, so the original audio/video
-  // alignment authored into the stream is kept intact end to end.
+  // over every downloaded segment in order, using mux.js's default
+  // (normalized) timestamp mode. keepOriginalTimestamps was tried here
+  // and made things worse: it bakes in whatever raw PTS gap already exists
+  // between the source stream's separate audio and video tracks (very
+  // common in real HLS — the two are muxed independently and rarely start
+  // at exactly the same timestamp), with nothing correcting for it —
+  // producing exactly the flat, unchanging multi-second offset this was
+  // reported with. Default mode is mux.js's actual intended mode for this
+  // job: it tracks continuity across every push() to the same persistent
+  // Transmuxer instance and aligns both tracks onto one shared, corrected
+  // timeline as it builds the MP4, rather than trusting the source's raw
+  // (and often mutually offset) timestamps as-is.
   let muxResolve, muxReject;
   const muxDonePromise = new Promise((res, rej) => { muxResolve = res; muxReject = rej; });
   try {
     await ensureMuxJs();
-    transmuxer = new muxjs.mp4.Transmuxer({ keepOriginalTimestamps: true });
+    transmuxer = new muxjs.mp4.Transmuxer();
     transmuxer.on('data', (segment) => {
       if (segment.initSegment && !initSegment) initSegment = segment.initSegment;
       if (segment.data && segment.data.length) mediaChunks.push(segment.data);
