@@ -610,7 +610,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 6.3</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 7.0</div>
   </div>
 
   <div class="toolbar">
@@ -937,7 +937,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '6.3';
+const NOVA_VERSION = '7.0';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -1557,6 +1557,7 @@ function loadUrl(tabId, rawUrl, isNewNav) {
     tab._savedBlob = null;
     tab._savedFilename = null;
     tab._blobFallbackTried = false;
+    tab._segmentBoundaries = null;
     // A previous hls.js instance from an earlier video in this same tab
     // must be torn down before attaching a new source — otherwise it keeps
     // fetching the old stream's segments in the background and can fight
@@ -1794,7 +1795,22 @@ function preciseSeek(tab, targetTime) {
   if (!tab || !tab.el) return;
   const el = tab.el;
   const dur = el.duration || 0;
-  const t = Math.max(0, dur ? Math.min(dur - 0.05, targetTime) : targetTime);
+  let t = Math.max(0, dur ? Math.min(dur - 0.05, targetTime) : targetTime);
+  // For transmuxed HLS downloads, seeking to an arbitrary time can land
+  // mid-GOP — the video track jumps to the nearest keyframe while the
+  // audio track resumes exactly at t, so the two start from different
+  // points and drift out of sync for the rest of playback. Snapping to the
+  // start of the HLS segment at/just-before t keeps both tracks starting
+  // from the same keyframe-aligned point, since HLS segments always begin
+  // on a keyframe.
+  const bounds = tab._segmentBoundaries;
+  if (bounds && bounds.length) {
+    let snapped = 0;
+    for (let i = 0; i < bounds.length; i++) {
+      if (bounds[i] <= t) snapped = bounds[i]; else break;
+    }
+    t = snapped;
+  }
   try { el.currentTime = t; } catch (e) {}
 }
 function updateSharpen(amount) {
@@ -2244,6 +2260,7 @@ async function loadVideoViaBlobFallback(tab, url, skipProgressive) {
     // Save/offline UI reflects reality instead of re-downloading it again.
     tab._savedBlob = blob;
     tab._savedFilename = guessFilenameFromUrl(url, blob.type);
+    tab._segmentBoundaries = blob._segmentStarts || null;
     const saveResult = await saveOfflineVideo({ id: 'v' + Date.now() + Math.random().toString(36).slice(2), url, title: guessFilenameFromUrl(url, blob.type), time: Date.now(), size: blob.size, blob });
     if (saveResult.ok) updateAutoDlIndicator(tab);
     // Most real HLS streams use raw MPEG-TS segments, which browsers can
@@ -3781,6 +3798,92 @@ async function remuxTsPartsToMp4(parts, onStatus, onProgress) {
 // (downloadHlsBlob, used for explicit Save) and the progressive MSE player
 // (playHlsProgressive, used so playback can start from already-downloaded
 // segments instead of waiting for the whole stream).
+// Reads the *actual* fragment start times out of a transmuxed fMP4 (init
+// segment + fragments) instead of guessing them from HLS #EXTINF durations.
+// mux.js's "default" mode continuously re-times/normalizes both tracks as
+// it builds the file, so the real fragment timestamps it writes can drift
+// a bit from a naive sum of source segment durations — reading them back
+// out of the actual moov/moof boxes (mdhd timescale + each video traf's
+// tfdt) is the only way to know for certain where a fragment (and thus a
+// safe, keyframe-aligned seek target) really starts.
+function parseMp4KeyframeTimes(initSegment, mediaChunks) {
+  try {
+    const dv = (buf) => new DataView(buf.buffer || buf, buf.byteOffset || 0, buf.byteLength);
+    function readBoxes(view, start, end) {
+      const boxes = [];
+      let offset = start;
+      while (offset + 8 <= end) {
+        const size = view.getUint32(offset);
+        const type = String.fromCharCode(
+          view.getUint8(offset + 4), view.getUint8(offset + 5),
+          view.getUint8(offset + 6), view.getUint8(offset + 7));
+        let boxSize = size, headerSize = 8;
+        if (size === 1) {
+          if (offset + 16 > end) break;
+          boxSize = view.getUint32(offset + 8) * 4294967296 + view.getUint32(offset + 12);
+          headerSize = 16;
+        } else if (size === 0) {
+          boxSize = end - offset;
+        }
+        if (boxSize < headerSize || offset + boxSize > end) break;
+        boxes.push({ type, start: offset, headerSize, size: boxSize });
+        offset += boxSize;
+      }
+      return boxes;
+    }
+    const initView = dv(initSegment);
+    const moov = readBoxes(initView, 0, initSegment.byteLength).find(b => b.type === 'moov');
+    if (!moov) return null;
+    const traks = readBoxes(initView, moov.start + moov.headerSize, moov.start + moov.size)
+      .filter(b => b.type === 'trak');
+    let videoTrackId = null, timescale = null;
+    for (const trak of traks) {
+      const kids = readBoxes(initView, trak.start + trak.headerSize, trak.start + trak.size);
+      const tkhd = kids.find(b => b.type === 'tkhd');
+      const mdia = kids.find(b => b.type === 'mdia');
+      if (!tkhd || !mdia) continue;
+      const tkhdVer = initView.getUint8(tkhd.start + tkhd.headerSize);
+      const trackId = initView.getUint32(tkhd.start + tkhd.headerSize + (tkhdVer === 1 ? 20 : 12));
+      const mdiaKids = readBoxes(initView, mdia.start + mdia.headerSize, mdia.start + mdia.size);
+      const mdhd = mdiaKids.find(b => b.type === 'mdhd');
+      const hdlr = mdiaKids.find(b => b.type === 'hdlr');
+      if (!mdhd || !hdlr) continue;
+      const handlerType = String.fromCharCode(
+        initView.getUint8(hdlr.start + hdlr.headerSize + 8), initView.getUint8(hdlr.start + hdlr.headerSize + 9),
+        initView.getUint8(hdlr.start + hdlr.headerSize + 10), initView.getUint8(hdlr.start + hdlr.headerSize + 11));
+      if (handlerType !== 'vide') continue;
+      const mdhdVer = initView.getUint8(mdhd.start + mdhd.headerSize);
+      timescale = initView.getUint32(mdhd.start + mdhd.headerSize + (mdhdVer === 1 ? 20 : 12));
+      videoTrackId = trackId;
+      break;
+    }
+    if (videoTrackId == null || !timescale) return null;
+
+    const times = [];
+    for (const chunk of mediaChunks) {
+      const view = dv(chunk);
+      const moofs = readBoxes(view, 0, chunk.byteLength).filter(b => b.type === 'moof');
+      for (const moof of moofs) {
+        const trafs = readBoxes(view, moof.start + moof.headerSize, moof.start + moof.size)
+          .filter(b => b.type === 'traf');
+        for (const traf of trafs) {
+          const kids = readBoxes(view, traf.start + traf.headerSize, traf.start + traf.size);
+          const tfhd = kids.find(b => b.type === 'tfhd');
+          const tfdt = kids.find(b => b.type === 'tfdt');
+          if (!tfhd || !tfdt) continue;
+          const trackId = view.getUint32(tfhd.start + tfhd.headerSize + 4);
+          if (trackId !== videoTrackId) continue;
+          const version = view.getUint8(tfdt.start + tfdt.headerSize);
+          const baseMediaDecodeTime = version === 1
+            ? view.getUint32(tfdt.start + tfdt.headerSize + 4) * 4294967296 + view.getUint32(tfdt.start + tfdt.headerSize + 8)
+            : view.getUint32(tfdt.start + tfdt.headerSize + 4);
+          times.push(baseMediaDecodeTime / timescale);
+        }
+      }
+    }
+    return times.length ? times : null;
+  } catch (e) { return null; }
+}
 async function fetchHlsPlaylistSegments(mediaPlaylistUrl, signal) {
   const fetchText = async (u) => {
     try {
@@ -3808,10 +3911,27 @@ async function fetchHlsPlaylistSegments(mediaPlaylistUrl, signal) {
   }
   const lines = text.split(/\r?\n/);
   const segments = [];
+  // Track each segment's start time via #EXTINF durations. In standard HLS,
+  // every .ts segment starts on a keyframe (encoders are required to align
+  // GOPs to segment boundaries) — so this list gives us real keyframe
+  // timestamps to snap seeks to, instead of seeking to an arbitrary
+  // currentTime that lands mid-GOP and desyncs audio/video after transmux.
+  const segmentStarts = [];
+  let pendingDuration = 0, cursor = 0;
   for (const line of lines) {
     const t = line.trim();
+    if (t.startsWith('#EXTINF:')) {
+      const m = t.match(/#EXTINF:([\d.]+)/);
+      pendingDuration = m ? parseFloat(m[1]) : 0;
+      continue;
+    }
     if (!t || t.startsWith('#')) continue;
-    try { segments.push(new URL(t, playlistUrl).href); } catch (e) {}
+    try {
+      segments.push(new URL(t, playlistUrl).href);
+      segmentStarts.push(cursor);
+      cursor += pendingDuration;
+      pendingDuration = 0;
+    } catch (e) {}
   }
   if (!segments.length) throw new Error('No segments found in playlist');
   const isFmp4Guess = /\.m4s(\?|$)/i.test(segments[0]) || /#EXT-X-MAP/.test(text);
@@ -3827,7 +3947,7 @@ async function fetchHlsPlaylistSegments(mediaPlaylistUrl, signal) {
   // callers can prepend it to the saved file.
   const mapMatch = text.match(/#EXT-X-MAP:[^\r\n]*URI="([^"]+)"/);
   const initSegmentUrl = mapMatch ? new URL(mapMatch[1], playlistUrl).href : null;
-  return { segments, isFmp4Guess, playlistUrl, text, initSegmentUrl };
+  return { segments, segmentStarts, isFmp4Guess, playlistUrl, text, initSegmentUrl };
 }
 
 // Plays a raw-TS/fMP4 HLS stream (the kind that needs the manual
@@ -3940,8 +4060,9 @@ async function playHlsProgressive(tab, url) {
   const status = document.getElementById('status');
   const setStatus = (msg) => { if (tab.id === activeTabId) { status.style.display = 'block'; status.textContent = msg; } };
   setStatus('Preparing stream…');
-  const { segments, isFmp4Guess, text, initSegmentUrl } = await fetchHlsPlaylistSegments(url, null);
+  const { segments, segmentStarts, isFmp4Guess, text, initSegmentUrl } = await fetchHlsPlaylistSegments(url, null);
   if (tab.history[tab.historyIndex] !== url) return;
+  tab._segmentBoundaries = isFmp4Guess ? null : segmentStarts;
 
   if (!('MediaSource' in window)) {
     // No MSE support at all — fall back to the old download-everything-first path.
@@ -4073,6 +4194,15 @@ async function playHlsProgressive(tab, url) {
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, Math.max(0, segments.length - 1)) }, worker));
 
   if (!isFmp4Guess && transmuxer) { transmuxer.flush(); await muxDonePromise; }
+  // Now that the whole file's fragments have been written, replace the
+  // EXTINF-based estimate set earlier with real keyframe times read back
+  // out of the muxed fragments themselves (see parseMp4KeyframeTimes) —
+  // more reliable than the estimate since mux.js can shift timestamps
+  // slightly while normalizing the two tracks.
+  if (!isFmp4Guess && initSegment && mediaChunks.length) {
+    const realTimes = parseMp4KeyframeTimes(initSegment, mediaChunks);
+    if (realTimes) tab._segmentBoundaries = realTimes;
+  }
   tab._autoDLAbort = null;
   updateAutoDlIndicator(tab);
 
@@ -4106,7 +4236,7 @@ async function playHlsProgressive(tab, url) {
 // why HLS sources previously "failed" to download or saved a useless
 // few-KB text file instead of a video.
 async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
-  const { segments, isFmp4Guess, playlistUrl, text, initSegmentUrl } = await fetchHlsPlaylistSegments(mediaPlaylistUrl, signal);
+  const { segments, segmentStarts, isFmp4Guess, playlistUrl, text, initSegmentUrl } = await fetchHlsPlaylistSegments(mediaPlaylistUrl, signal);
   // Kick off the remux library fetch now, in parallel with the segment
   // downloads below, instead of waiting until segments finish and only then
   // starting it — that sequential fetch (a few hundred KB over the network)
@@ -4190,7 +4320,12 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
     // data — without it players guess, and audio/video end up misaligned.
     let initBuf = null;
     if (initSegmentUrl) { try { initBuf = await fetchSegment(initSegmentUrl); } catch (e) {} }
-    return new Blob(initBuf ? [initBuf, ...parts] : parts, { type: 'video/mp4' });
+    const fmp4Blob = new Blob(initBuf ? [initBuf, ...parts] : parts, { type: 'video/mp4' });
+    // fMP4/CMAF segments are individually well-formed (each has its own
+    // moof/mdat with correct sample tables from the init segment), so they
+    // don't suffer the transmux-seek desync below — no boundaries needed.
+    fmp4Blob._segmentStarts = null;
+    return fmp4Blob;
   }
 
   // Download is 100% complete — now run the conversion pass, from scratch,
@@ -4238,7 +4373,15 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
     transmuxer.flush();
     await muxDonePromise;
     if (!initSegment || !mediaChunks.length) throw new Error('Remux produced no playable data');
-    return new Blob([initSegment, ...mediaChunks], { type: 'video/mp4' });
+    const muxedBlob = new Blob([initSegment, ...mediaChunks], { type: 'video/mp4' });
+    // Carry keyframe-aligned start times along with the blob so playback
+    // can snap seeks to them (see preciseSeek) instead of an arbitrary
+    // currentTime that lands mid-GOP in the transmuxed file and pulls
+    // audio/video out of sync. Read the real times out of the muxed file
+    // itself; only fall back to the EXTINF-based estimate if that parse
+    // fails for some reason (unexpected box layout, etc.).
+    muxedBlob._segmentStarts = parseMp4KeyframeTimes(initSegment, mediaChunks) || segmentStarts;
+    return muxedBlob;
   } catch (e) {
     // Remux failed (odd codec, corrupt segment, library couldn't load, etc.)
     // — still return the raw TS so the download itself doesn't fail outright;
@@ -4843,7 +4986,14 @@ function swapTabToBlob(tab, objectUrl, blob, sourceUrl) {
   tab.isLocalFile = true; // so closing this tab releases the blob URL too
   // Keep the blob + a filename around so a "Save to device" button can offer
   // it after the download finishes, without re-downloading anything.
-  if (blob) { tab._savedBlob = blob; tab._savedFilename = guessFilenameFromUrl(sourceUrl || tab.history[tab.historyIndex] || '', blob.type); }
+  if (blob) {
+    tab._savedBlob = blob;
+    tab._savedFilename = guessFilenameFromUrl(sourceUrl || tab.history[tab.historyIndex] || '', blob.type);
+    // Carried over from downloadHlsBlob when the source was a transmuxed
+    // HLS stream — lets preciseSeek snap to real keyframe boundaries
+    // instead of an arbitrary currentTime that desyncs audio/video.
+    tab._segmentBoundaries = blob._segmentStarts || null;
+  }
   const wasTime = tab.el.currentTime || 0;
   const wasMuted = tab.el.muted;
   tab.el.src = objectUrl;
