@@ -2129,12 +2129,22 @@ async function loadVideoViaBlobFallback(tab, url, skipProgressive) {
   const status = document.getElementById('status');
   // HLS/TS streams can play progressively via MediaSource as segments finish
   // converting — no need to wait for the whole stream to download first.
-  // Only genuinely single-file, unknown-format downloads (rare — most
-  // "unsupported format" cases coming through here are HLS) still need the
-  // full file in hand before anything can play.
   if (!skipProgressive && /\.m3u8(\?|$)/i.test(url)) {
     try { return await playHlsProgressive(tab, url); }
     catch (e) { /* fall through to the full-download path below */ }
+  }
+  // For a plain single-file link (not HLS), also try streaming it straight
+  // into MediaSource as bytes arrive, in case the file happens to be a
+  // "fragmented" MP4/WebM (common from modern video CDNs) — those CAN start
+  // playing well before the download finishes, same idea as the HLS case.
+  // Most older-style MP4s aren't fragmented and MediaSource will reject them
+  // immediately (their index sits at the very end of the file, so nothing
+  // can play until that final piece is in) — when that happens this just
+  // falls straight through to the full-download path below with no visible
+  // delay, since the rejection happens on the very first appended chunk.
+  if (!skipProgressive) {
+    try { return await playDirectFileProgressive(tab, url); }
+    catch (e) { /* not a streamable container, or fetch failed — fall through */ }
   }
   if (tab.id === activeTabId) {
     status.style.display = 'block';
@@ -3656,6 +3666,105 @@ async function fetchHlsPlaylistSegments(mediaPlaylistUrl, signal) {
 // appended and start playing while the rest keep downloading in the
 // background — same segments end up saved for offline use once done, no
 // re-downloading.
+// Attempts progressive playback of a plain (non-HLS) single video file by
+// streaming the fetch response straight into MediaSource as bytes arrive,
+// instead of buffering the whole file first. Only works when the file is
+// actually a fragmented MP4/WebM — the browser rejects the very first
+// appended chunk otherwise, which we treat as "not streamable" and bail out
+// immediately so the caller can fall back to full-download-then-play.
+async function playDirectFileProgressive(tab, url) {
+  if (!('MediaSource' in window)) throw new Error('no-mse');
+  const res = await fetch(url); // throws on CORS/network failure
+  if (!res.ok || !res.body) throw new Error('fetch-failed');
+  const status = document.getElementById('status');
+  const setStatus = (msg) => { if (tab.id === activeTabId) { status.style.display = 'block'; status.textContent = msg; } };
+  setStatus('Preparing stream…');
+
+  const ct = (res.headers.get('content-type') || '').toLowerCase();
+  const ext = (url.split('?')[0].split('.').pop() || '').toLowerCase();
+  const isWebm = ct.includes('webm') || ext === 'webm';
+  const mimeCandidates = isWebm
+    ? ['video/webm; codecs="vp9,opus"', 'video/webm; codecs="vp8,vorbis"', 'video/webm']
+    : ['video/mp4; codecs="avc1.64001f, mp4a.40.2"', 'video/mp4; codecs="avc1.4d401f, mp4a.40.2"', 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"'];
+  const mime = mimeCandidates.find(m => window.MediaSource.isTypeSupported(m));
+  if (!mime) throw new Error('no-mime');
+
+  const ms = new MediaSource();
+  const msUrl = URL.createObjectURL(ms);
+  let sourceBuffer = null;
+  const appendQueue = [];
+  const savedChunks = [];
+  let rejected = false, firstAppended = false;
+
+  await new Promise((resolve, reject) => {
+    ms.addEventListener('sourceopen', () => {
+      try { sourceBuffer = ms.addSourceBuffer(mime); resolve(); }
+      catch (e) { reject(e); }
+    }, { once: true });
+  });
+
+  function pump() {
+    if (!sourceBuffer || sourceBuffer.updating || !appendQueue.length || rejected) return;
+    const chunk = appendQueue.shift();
+    try { sourceBuffer.appendBuffer(chunk); }
+    catch (e) { rejected = true; }
+  }
+  sourceBuffer.addEventListener('updateend', () => {
+    if (!firstAppended) {
+      firstAppended = true;
+      if (tab.id === activeTabId) { try { tab.el.play().catch(() => {}); } catch (e) {} status.style.display = 'none'; }
+    }
+    pump();
+  });
+  sourceBuffer.addEventListener('error', () => { rejected = true; });
+
+  // Only actually switch the visible player over once we know the very
+  // first chunk was accepted — otherwise a non-fragmented file would show a
+  // black/broken frame for a moment before falling back.
+  const reader = res.body.getReader();
+  let switched = false;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (rejected) { try { reader.cancel(); } catch (e) {} throw new Error('rejected'); }
+      if (done) break;
+      savedChunks.push(value);
+      if (!switched) {
+        switched = true;
+        if (tab.el._objectUrl) { try { URL.revokeObjectURL(tab.el._objectUrl); } catch (e) {} }
+        tab.el._objectUrl = msUrl;
+        tab.el.src = msUrl;
+        ensureAudioGraphIfBoosted(tab);
+        updateVolumeGain(tab, settings.volBoost);
+        applyFiltersToTab(tab);
+      }
+      appendQueue.push(value);
+      pump();
+      tab._autoDLAbort = tab._autoDLAbort || { abort() {} };
+      tab._autoDLBytes = savedChunks.reduce((a, c) => a + c.byteLength, 0);
+      updateAutoDlIndicator(tab);
+    }
+  } catch (e) {
+    try { URL.revokeObjectURL(msUrl); } catch (e2) {}
+    throw e;
+  }
+  if (rejected) { try { URL.revokeObjectURL(msUrl); } catch (e) {} throw new Error('not-streamable'); }
+
+  const finalize = () => { if (ms.readyState === 'open') { try { ms.endOfStream(); } catch (e) {} } };
+  if (!appendQueue.length && !sourceBuffer.updating) finalize();
+  else sourceBuffer.addEventListener('updateend', function onDone() {
+    if (!appendQueue.length) { sourceBuffer.removeEventListener('updateend', onDone); finalize(); }
+  });
+
+  tab._autoDLAbort = null;
+  updateAutoDlIndicator(tab);
+  const blob = new Blob(savedChunks, { type: isWebm ? 'video/webm' : 'video/mp4' });
+  tab._savedBlob = blob;
+  tab._savedFilename = guessFilenameFromUrl(url, blob.type);
+  saveOfflineVideo({ id: 'v' + Date.now() + Math.random().toString(36).slice(2), url, title: tab._savedFilename, time: Date.now(), size: blob.size, blob })
+    .then((r) => { if (r.ok) updateAutoDlIndicator(tab); });
+}
+
 async function playHlsProgressive(tab, url) {
   const status = document.getElementById('status');
   const setStatus = (msg) => { if (tab.id === activeTabId) { status.style.display = 'block'; status.textContent = msg; } };
