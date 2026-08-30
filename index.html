@@ -47,7 +47,13 @@
   .app.player-mode .exit-player-btn { display:flex; }
 
   .player-folder-btn {
-    position:relative; z-index:2;
+    /* Fixed so it can sit right next to the Save badge, which itself moves
+       around the screen depending on how many quick-control rows are
+       showing. positionPlayerFolderBtn() in the script keeps this glued to
+       the Save badge's left edge whenever the badge is visible, and parks
+       it in this bottom-right default spot the rest of the time. */
+    position:fixed; z-index:16;
+    bottom:22px; right:16px; top:auto;
     width:42px; height:42px; border-radius:50%; border:none; background:rgba(0,0,0,0.75);
     color:#fff; font-size:17px; cursor:pointer; display:none;
     align-items:center; justify-content:center; backdrop-filter:blur(6px);
@@ -677,6 +683,10 @@
           <span>Downloaded videos</span>
           <button id="folderOverlayClose">&#10005;</button>
         </div>
+        <div class="folder-row" id="folderOpenFromPhoneRow" style="cursor:pointer;">
+          <span class="fr-icon">&#128194;</span>
+          <span class="fr-text"><div class="fr-title">Open a video from your phone</div><div class="fr-meta">Pick any video already saved on your device</div></span>
+        </div>
         <div class="folder-list" id="folderList"></div>
       </div>
     </div>
@@ -1189,11 +1199,39 @@ function playOfflineVideo(item) {
   // decoded this way. Catch it up front and say so plainly instead.
   const probe = document.createElement('video');
   if (item.blob && item.blob.type && probe.canPlayType(item.blob.type) === '') {
-    alert("This saved video can't be played back — it was downloaded from a stream format (MPEG-TS) that phone browsers can't decode directly from a saved file. It still downloaded correctly, but this particular one can't be replayed. You can remove it with the X to free up the space.");
+    offerExternalPlayback(item.blob, item.title || item.url);
     return;
   }
   const objectUrl = URL.createObjectURL(item.blob);
   createTab(null, true, { isLocalFile: true, title: item.title || item.url, objectUrl });
+}
+
+// Nova (like every phone browser) simply cannot decode a raw MPEG-TS blob
+// itself — that's a codec-support limit, not a bug that can be fixed here.
+// What we CAN do is stop dead-ending at an alert and instead hand the file
+// off to something that can actually play it: the phone's own share sheet
+// (VLC, MX Player, etc. all register for video/*), or — where sharing files
+// isn't supported — a real download to the Downloads folder so the user can
+// open it from there with an external player.
+async function offerExternalPlayback(blob, name) {
+  const filename = (name && /\.[a-z0-9]+$/i.test(name)) ? name : (name || 'video') + '.ts';
+  const file = (typeof File !== 'undefined') ? new File([blob], filename, { type: blob.type || 'video/mp2t' }) : null;
+  if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: filename });
+      return;
+    } catch (e) {
+      // User backed out of the share sheet — not an error, just stop.
+      if (e && e.name === 'AbortError') return;
+      // Any other failure falls through to the download fallback below.
+    }
+  }
+  const a = document.createElement('a');
+  const url = URL.createObjectURL(blob);
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  showMiniToast('Saved to Downloads \u2014 open it from there with VLC or another video player');
 }
 
 /* ---- Quick "video folder" access from inside the player itself ---- */
@@ -1234,6 +1272,10 @@ function openFolderOverlay() {
 function closeFolderOverlay() {
   document.getElementById('folderOverlay').classList.remove('visible');
 }
+document.getElementById('folderOpenFromPhoneRow').addEventListener('click', () => {
+  closeFolderOverlay();
+  document.getElementById('fileInput').click();
+});
 document.getElementById('playerFolderBtn').addEventListener('click', openFolderOverlay);
 document.getElementById('folderOverlayClose').addEventListener('click', closeFolderOverlay);
 document.getElementById('folderOverlay').addEventListener('click', (e) => { if (e.target.id === 'folderOverlay') closeFolderOverlay(); });
@@ -3369,6 +3411,51 @@ async function resolveBestHlsVariant(masterUrl) {
   } catch (e) { return null; }
 }
 
+// Loads the mux.js remuxing library on first use only (most page loads never
+// touch an HLS/.ts stream, so there's no reason to fetch this on every visit).
+function ensureMuxJs() {
+  if (window.muxjs) return Promise.resolve();
+  if (window._muxjsLoadPromise) return window._muxjsLoadPromise;
+  window._muxjsLoadPromise = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://unpkg.com/mux.js@6.3.0/dist/mux.min.js';
+    s.onload = () => resolve();
+    s.onerror = () => { window._muxjsLoadPromise = null; reject(new Error('Could not load remuxing library')); };
+    document.head.appendChild(s);
+  });
+  return window._muxjsLoadPromise;
+}
+
+// Raw MPEG-TS segments (what most real HLS streams actually use) decode fine
+// while a <video> element is streaming them live through MSE, but a phone
+// browser has no decoder for a raw .ts file sitting on disk or in a saved
+// Blob — that's the "can't be played back" dead end. The fix isn't to
+// re-encode the video (slow, lossy, and needs a full codec in the browser) —
+// it's to REMUX it: unpack the same H.264/AAC data already inside each TS
+// segment and repackage it in an MP4 container instead, which both this
+// player and every phone gallery/player app already understand natively.
+async function remuxTsPartsToMp4(parts, onStatus) {
+  await ensureMuxJs();
+  return new Promise((resolve, reject) => {
+    try {
+      const transmuxer = new muxjs.mp4.Transmuxer();
+      let initSegment = null;
+      const mediaChunks = [];
+      transmuxer.on('data', (segment) => {
+        if (segment.initSegment && !initSegment) initSegment = segment.initSegment;
+        if (segment.data && segment.data.length) mediaChunks.push(segment.data);
+      });
+      transmuxer.on('done', () => {
+        if (!initSegment || !mediaChunks.length) { reject(new Error('Remux produced no playable data')); return; }
+        resolve(new Blob([initSegment, ...mediaChunks], { type: 'video/mp4' }));
+      });
+      if (onStatus) onStatus('Converting for playback\u2026');
+      for (const buf of parts) transmuxer.push(new Uint8Array(buf));
+      transmuxer.flush();
+    } catch (e) { reject(e); }
+  });
+}
+
 // Downloads an HLS stream (media playlist + all its .ts/.m4s segments) and
 // concatenates them into a single playable Blob. A plain fetch of a .m3u8
 // URL only grabs the small text playlist, not the actual video — which is
@@ -3471,7 +3558,20 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
     throw new Error(failedSegments + ' of ' + segments.length + ' segments could not be downloaded after retrying — the source may have removed or expired part of this stream.');
   }
   const isFmp4 = /\.m4s(\?|$)/i.test(segments[0]) || /#EXT-X-MAP/.test(text);
-  return new Blob(parts, { type: isFmp4 ? 'video/mp4' : 'video/mp2t' });
+  if (isFmp4) return new Blob(parts, { type: 'video/mp4' });
+  // Raw MPEG-TS segments — remux them into a normal MP4 so the saved file
+  // can actually be replayed (in this app and by any player on the phone),
+  // instead of saving an unplayable raw .ts blob.
+  try {
+    if (onStatus) onStatus('Converting for playback\u2026');
+    return await remuxTsPartsToMp4(parts, onStatus);
+  } catch (e) {
+    // Remux failed (odd codec, corrupt segment, library couldn't load, etc.)
+    // — still return the raw TS so the download itself doesn't fail outright;
+    // playFolderItem/offerExternalPlayback already handle a raw-TS blob by
+    // offering to hand it to an external player instead of a dead end.
+    return new Blob(parts, { type: 'video/mp2t' });
+  }
 }
 
 async function resolveAndOpenVideo(pageUrl, statusEl) {
@@ -4128,13 +4228,46 @@ function positionAutoDlIndicator() {
   if (!el || !qc || !stage) return;
   if (qc.style.display === 'none' || getComputedStyle(qc).display === 'none') {
     el.style.top = '10px';
+    positionPlayerFolderBtn();
     return;
   }
   const qcRect = qc.getBoundingClientRect();
   const stageRect = stage.getBoundingClientRect();
   el.style.top = Math.round(qcRect.bottom - stageRect.top + 8) + 'px';
+  positionPlayerFolderBtn();
 }
-window.addEventListener('resize', () => { if (document.getElementById('autoDlIndicator').style.display !== 'none') positionAutoDlIndicator(); });
+window.addEventListener('resize', () => { if (document.getElementById('autoDlIndicator').style.display !== 'none') positionAutoDlIndicator(); positionPlayerFolderBtn(); });
+
+// Keeps the folder button parked right next to the Save badge instead of
+// off in the top-left corner by itself. When the badge is on screen (a
+// download is in progress or ready to save), the folder button sits just
+// to its left at the same height. Otherwise it rests at its default
+// bottom-right spot (set in CSS).
+function positionPlayerFolderBtn() {
+  const btn = document.getElementById('playerFolderBtn');
+  const badge = document.getElementById('autoDlIndicator');
+  if (!btn) return;
+  if (badge && badge.style.display === 'block' && getComputedStyle(badge).display !== 'none') {
+    const r = badge.getBoundingClientRect();
+    btn.style.top = Math.round(r.top) + 'px';
+    btn.style.bottom = 'auto';
+    btn.style.right = Math.round((window.innerWidth - r.left) + 8) + 'px';
+  } else {
+    btn.style.top = 'auto';
+    btn.style.bottom = '22px';
+    btn.style.right = '16px';
+  }
+}
+// The folder button's own visibility (.visible class) is toggled from
+// several different places depending on player state — rather than editing
+// every one of those call sites, just watch for the class change directly
+// and reposition whenever it happens.
+(function () {
+  const btn = document.getElementById('playerFolderBtn');
+  if (!btn) return;
+  new MutationObserver(positionPlayerFolderBtn)
+    .observe(btn, { attributes: true, attributeFilter: ['class'] });
+})();
 
 function updateAutoDlIndicator(tab) {
   const el = document.getElementById('autoDlIndicator');
@@ -4161,6 +4294,7 @@ function updateAutoDlIndicator(tab) {
     el.style.display = 'none';
   }
   if (el.style.display === 'block') positionAutoDlIndicator();
+  else positionPlayerFolderBtn();
 }
 document.getElementById('autoDlIndicator').addEventListener('click', () => {
   const tab = getTab(activeTabId);
@@ -4196,6 +4330,11 @@ async function autoDownloadInBackground(tab, url) {
     updateAutoDlIndicator(tab);
     if (!cannotPreviewInApp) {
       swapTabToBlob(tab, URL.createObjectURL(blob), blob, url);
+      // The whole point of the background auto-download is a smoother,
+      // buffer-free watch — so once it's ready, take the person straight
+      // into the fullscreen player instead of leaving the swap to happen
+      // silently underneath whatever view they're already in.
+      if (tab.id === activeTabId && !playerMode && !isLocked) enterPlayerMode();
     } else {
       tab._savedBlob = blob;
       tab._savedFilename = guessFilenameFromUrl(url, blob.type);
