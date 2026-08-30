@@ -335,20 +335,19 @@
   /* Lock overlay */
   .lock-overlay {
     position:absolute; inset:0; z-index:8; display:none;
-    align-items:center; justify-content:center;
+    align-items:flex-end; justify-content:center; padding-bottom:26px;
     background:rgba(0,0,0,0.001); /* nearly invisible, but blocks touches */
   }
   .lock-overlay.visible { display:flex; }
   .lock-card {
-    display:flex; flex-direction:column; align-items:center; gap:10px;
-    padding:22px 30px; border-radius:26px;
-    background:rgba(15,15,15,0.55); backdrop-filter:blur(14px);
+    display:flex; flex-direction:row; align-items:center; gap:10px;
+    padding:10px 18px; border-radius:26px;
+    background:rgba(15,15,15,0.65); backdrop-filter:blur(14px);
     border:1px solid rgba(255,255,255,0.08);
-    user-select:none; cursor:pointer; animation:lockFloat 3s ease-in-out infinite;
+    user-select:none; cursor:pointer;
   }
-  @keyframes lockFloat { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-6px); } }
-  .lock-ring { position:relative; width:64px; height:64px; display:flex; align-items:center; justify-content:center; }
-  .lock-ring svg { position:absolute; inset:0; width:64px; height:64px; transform:rotate(-90deg); }
+  .lock-ring { position:relative; width:36px; height:36px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .lock-ring svg { position:absolute; inset:0; width:36px; height:36px; transform:rotate(-90deg); }
   .lock-ring .ring-track { fill:none; stroke:rgba(255,255,255,0.12); stroke-width:3; }
   .lock-ring .ring-fill {
     fill:none; stroke:#d97757; stroke-width:3; stroke-linecap:round;
@@ -356,10 +355,10 @@
   }
   .lock-ring .ring-fill.charging { transition:stroke-dashoffset 1.8s linear; }
   .lock-ring .ring-fill.resetting { transition:stroke-dashoffset .25s ease; }
-  .lock-icon { font-size:24px; z-index:1; transition:transform .2s ease; }
+  .lock-icon { font-size:15px; z-index:1; transition:transform .2s ease; }
   .lock-card.pressed .lock-icon { transform:scale(0.88); }
-  .lock-label { font-size:13px; color:#eee; font-weight:500; letter-spacing:.2px; }
-  .lock-sublabel { font-size:10.5px; color:#999; margin-top:-4px; }
+  .lock-label { font-size:12px; color:#eee; font-weight:500; letter-spacing:.2px; white-space:nowrap; }
+  .lock-sublabel { font-size:10px; color:#999; white-space:nowrap; }
   .auto-dl-indicator {
     position:absolute; top:10px; right:10px; z-index:15;
     background:rgba(0,0,0,0.7); color:#fff; font-size:13px;
@@ -760,8 +759,10 @@
           </svg>
           <span class="lock-icon" id="lockIcon">&#128274;</span>
         </div>
-        <div class="lock-label" id="lockLabel">Tap to unlock</div>
-        <div class="lock-sublabel" id="lockSublabel" style="display:none;">Hold to unlock</div>
+        <div style="display:flex; flex-direction:column;">
+          <div class="lock-label" id="lockLabel">Tap to unlock</div>
+          <div class="lock-sublabel" id="lockSublabel" style="display:none;">Hold to unlock</div>
+        </div>
       </div>
     </div>
 
@@ -1503,6 +1504,11 @@ function loadUrl(tabId, rawUrl, isNewNav) {
     tab._savedBlob = null;
     tab._savedFilename = null;
     tab._blobFallbackTried = false;
+    // A previous hls.js instance from an earlier video in this same tab
+    // must be torn down before attaching a new source — otherwise it keeps
+    // fetching the old stream's segments in the background and can fight
+    // with whatever plays next.
+    if (tab._hls) { try { tab._hls.destroy(); } catch (e) {} tab._hls = null; }
     // Most browsers (everything except Safari) have no native HLS decoder,
     // so handing an .m3u8 straight to <video src> just sits there forever
     // with no picture and no error — the element never even fires 'error'
@@ -1512,7 +1518,7 @@ function loadUrl(tabId, rawUrl, isNewNav) {
     if (/\.m3u8(\?|$)/i.test(url) && !nativeCanPlayHls()) {
       tab.el.removeAttribute('src');
       tab._blobFallbackTried = true;
-      loadVideoViaBlobFallback(tab, url);
+      loadVideoViaHlsJs(tab, url);
     } else {
       tab.el.src = url;
       tab.el.play().catch(() => {});
@@ -1589,6 +1595,7 @@ function closeTab(id) {
   if (idx === -1) return;
   const tab = tabs[idx];
   if (tab._autoDLAbort) { try { tab._autoDLAbort.abort(); } catch (e) {} }
+  if (tab._hls) { try { tab._hls.destroy(); } catch (e) {} }
   if (tab.isLocalFile && tab.el.src) { try { URL.revokeObjectURL(tab.el.src); } catch (e) {} }
   // Boosted video tabs open a real AudioContext — close it too, otherwise
   // it stays alive (and audible/consuming resources) after the tab is gone.
@@ -2279,7 +2286,11 @@ document.getElementById('exitPlayerBtn').addEventListener('click', () => {
 });
 document.getElementById('hideUiBtn').addEventListener('click', (e) => {
   e.stopPropagation();
-  if (!playerMode) enterPlayerMode();
+  // This was a one-way switch before — tapping it again after the UI was
+  // already hidden did nothing (the check only ever let it turn ON), which
+  // is exactly why it looked "broken" on a second tap. Now it toggles both
+  // ways from the same button.
+  if (playerMode) exitPlayerModeFn(); else enterPlayerMode();
 });
 document.getElementById('stage').addEventListener('click', (e) => {
   const tab = getTab(activeTabId);
@@ -2763,7 +2774,12 @@ document.getElementById('navBookmarks').addEventListener('click', () => {
   }
 })();
 document.getElementById('immersiveBtn').addEventListener('click', () => {
-  document.querySelector('.app').classList.add('immersive-mode');
+  // Same one-way bug as the hideUiBtn used to have — tapping the eye icon
+  // again after the UI was already hidden did nothing, because this always
+  // added the class and never removed it. Toggling off requires finding the
+  // small up-arrow button tucked in the top-left corner, which people don't
+  // notice — so the same eye button now flips both ways itself.
+  document.querySelector('.app').classList.toggle('immersive-mode');
 });
 document.getElementById('exitImmersiveBtn').addEventListener('click', () => {
   document.querySelector('.app').classList.remove('immersive-mode');
@@ -3432,6 +3448,69 @@ function ensureMuxJs() {
     document.head.appendChild(s);
   });
   return window._muxjsLoadPromise;
+}
+
+// Loads hls.js on demand — this is what lets HLS (.m3u8) links play
+// instantly on Android/Chrome the same way direct .mp4 links do. Without it,
+// every m3u8 source had to be fully segment-downloaded + remuxed into an MP4
+// blob before a single frame could show, because plain <video src> has no
+// built-in HLS decoder outside Safari/iOS. hls.js does the adaptive
+// segment-fetching itself and feeds it into the video element live via
+// MediaSource Extensions, so playback starts as soon as the first couple of
+// segments arrive — just like a normal streaming site.
+function ensureHlsJs() {
+  if (window.Hls) return Promise.resolve();
+  if (window._hlsJsLoadPromise) return window._hlsJsLoadPromise;
+  window._hlsJsLoadPromise = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js';
+    s.onload = () => resolve();
+    s.onerror = () => { window._hlsJsLoadPromise = null; reject(new Error('Could not load HLS playback library')); };
+    document.head.appendChild(s);
+  });
+  return window._hlsJsLoadPromise;
+}
+
+// Live-plays an HLS URL through hls.js instead of downloading it first.
+// Falls back to the old full-download-then-play path (loadVideoViaBlobFallback)
+// if hls.js itself fails to load, the stream turns out to be DRM-encrypted,
+// or hls.js reports a fatal error it can't recover from — so a stream that
+// genuinely can't be live-played still ends up playable via download instead
+// of just failing outright.
+async function loadVideoViaHlsJs(tab, url) {
+  const status = document.getElementById('status');
+  try {
+    await ensureHlsJs();
+  } catch (e) {
+    return loadVideoViaBlobFallback(tab, url);
+  }
+  if (tab.history[tab.historyIndex] !== url) return; // navigated away while loading the library
+  if (!window.Hls.isSupported()) return loadVideoViaBlobFallback(tab, url);
+  if (tab._hls) { try { tab._hls.destroy(); } catch (e) {} tab._hls = null; }
+  const hls = new window.Hls({ maxBufferLength: 30 });
+  tab._hls = hls;
+  let fellBack = false;
+  hls.on(window.Hls.Events.ERROR, (event, data) => {
+    if (!data.fatal || fellBack) return;
+    fellBack = true;
+    try { hls.destroy(); } catch (e) {}
+    if (tab._hls === hls) tab._hls = null;
+    if (tab.history[tab.historyIndex] === url) loadVideoViaBlobFallback(tab, url);
+  });
+  hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+    if (tab.id === activeTabId) status.style.display = 'none';
+    tab.el.play().catch(() => {});
+    ensureAudioGraphIfBoosted(tab);
+    updateVolumeGain(tab, settings.volBoost);
+    applyFiltersToTab(tab);
+  });
+  hls.loadSource(url);
+  hls.attachMedia(tab.el);
+  // Still keep a full copy downloading quietly in the background so the
+  // Save/offline flow and "switch to buffer-free local copy" behavior work
+  // exactly as they do for direct .mp4 links.
+  updateAutoDlIndicator(tab);
+  autoDownloadInBackground(tab, url);
 }
 
 // Raw MPEG-TS segments (what most real HLS streams actually use) decode fine
