@@ -923,7 +923,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '4.0';
+const NOVA_VERSION = '4.1';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -3960,37 +3960,10 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
   let completed = 0;
   let failedSegments = 0;
 
-  // Convert-as-you-download instead of only after every segment has
-  // finished: previously the transmuxer only started once ALL segments were
-  // in hand, which is why "Converting for playback…" only ever showed up
-  // past 90% — the whole conversion step was serialized after the download
-  // instead of overlapping with it. Segments must be fed to the transmuxer
-  // in order even though they can finish downloading out of order (32 in
-  // flight at once), so track how far the muxer has consumed separately
-  // from how many have downloaded, and push whatever's next in sequence
-  // every time a new segment lands.
+  // Download-then-convert: the full download must reach 100% before any
+  // conversion starts. Nothing is pushed to a transmuxer while segments are
+  // still in flight — that only happens afterward, in one pass.
   let transmuxer = null, initSegment = null, mediaChunks = [];
-  let muxResolve, muxReject;
-  const muxDonePromise = new Promise((res, rej) => { muxResolve = res; muxReject = rej; });
-  if (!isFmp4Guess) {
-    try {
-      await ensureMuxJs();
-      transmuxer = new muxjs.mp4.Transmuxer();
-      transmuxer.on('data', (segment) => {
-        if (segment.initSegment && !initSegment) initSegment = segment.initSegment;
-        if (segment.data && segment.data.length) mediaChunks.push(segment.data);
-      });
-      transmuxer.on('done', muxResolve);
-    } catch (e) { muxReject(e); }
-  }
-  let pushIndex = 0;
-  function pushReadySegments() {
-    if (!transmuxer) return;
-    while (parts[pushIndex] !== undefined) {
-      transmuxer.push(new Uint8Array(parts[pushIndex]));
-      pushIndex++;
-    }
-  }
 
   // Worker-pool concurrency for fetching .ts/.m4s segments in parallel.
   // Segments are small (a few hundred KB - a couple MB each) so a high pool
@@ -4012,9 +3985,8 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
         continue;
       }
       completed++;
-      pushReadySegments();
       if (onProgress) onProgress((completed / segments.length) * 100, completed, segments.length);
-      if (onStatus) onStatus(transmuxer ? ('Downloading & converting ' + completed + '/' + segments.length + '…') : ('Downloading segment ' + completed + '/' + segments.length + '…'));
+      if (onStatus) onStatus('Downloading segment ' + completed + '/' + segments.length + '…');
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, segments.length) }, worker));
@@ -4025,9 +3997,25 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
     throw new Error(failedSegments + ' of ' + segments.length + ' segments could not be downloaded after retrying — the source may have removed or expired part of this stream.');
   }
   if (isFmp4Guess) return new Blob(parts, { type: 'video/mp4' });
-  // Raw MPEG-TS segments were already streamed into the transmuxer above as
-  // they arrived — just flush the tail end and collect what it produced,
-  // instead of starting the whole conversion from scratch here.
+
+  // Download is 100% complete — now run the conversion pass, from scratch,
+  // over every downloaded segment in order.
+  let muxResolve, muxReject;
+  const muxDonePromise = new Promise((res, rej) => { muxResolve = res; muxReject = rej; });
+  try {
+    await ensureMuxJs();
+    transmuxer = new muxjs.mp4.Transmuxer();
+    transmuxer.on('data', (segment) => {
+      if (segment.initSegment && !initSegment) initSegment = segment.initSegment;
+      if (segment.data && segment.data.length) mediaChunks.push(segment.data);
+    });
+    transmuxer.on('done', muxResolve);
+  } catch (e) { muxReject(e); }
+  for (let i = 0; i < parts.length; i++) {
+    transmuxer.push(new Uint8Array(parts[i]));
+    if (onStatus) onStatus('Converting ' + (i + 1) + '/' + parts.length + '…');
+  }
+  // Flush the tail end and collect what the transmuxer produced.
   try {
     if (onStatus) onStatus('Finishing conversion…');
     transmuxer.flush();
