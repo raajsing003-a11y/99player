@@ -4,6 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Nova Browser</title>
+<meta name="description" content="A private in-app browser with fast video download and offline playback.">
+<meta name="theme-color" content="#121212">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Nova">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png" sizes="192x192" type="image/png">
+<link rel="icon" href="icon-512.png" sizes="512x512" type="image/png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin:0; padding:0; height:100%; overflow:hidden; }
@@ -102,15 +112,6 @@
     padding:10px 40px 10px 16px; border-radius:22px; border:none;
     background:#454545; color:#fff; font-size:15px; outline:none;
     width:100%;
-    /* Privacy: mask the link/URL text as dots (like a password field) when
-       not actively being edited. While focused (typing/pasting), it's
-       shown in plain text so you can actually verify what you pasted —
-       otherwise a bad paste (stray space, wrong link, etc.) is invisible
-       and impossible to catch. */
-    -webkit-text-security: disc;
-  }
-  .toolbar input[type="text"]:focus, .toolbar input[type="search"]:focus {
-    -webkit-text-security: none;
   }
   .toolbar input[type="text"]::placeholder, .toolbar input[type="search"]::placeholder { color:#999; }
   .url-copy-btn {
@@ -145,8 +146,7 @@
     padding:9px 4px; border-bottom:1px solid #2a2a2a; gap:8px;
   }
   .panel-row:last-child { border-bottom:none; }
-  .panel-row span.link { color:#8ecdf7; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; filter:blur(5px); }
-  .panel-row span.link:active { filter:none; } /* tap-and-hold to peek */
+  .panel-row span.link { color:#8ecdf7; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
   .panel-row button { background:none; border:none; color:#e57373; font-size:15px; cursor:pointer; flex-shrink:0; padding:4px; }
   .panel-empty { color:#777; padding:10px 4px; font-size:12.5px; line-height:1.5; }
 
@@ -356,6 +356,27 @@
 
   #fileInput { display:none; }
 
+  /* ---------- Install-app banner ---------- */
+  .install-banner {
+    position:fixed; left:12px; right:12px; bottom:12px; z-index:50;
+    display:none; align-items:center; gap:10px;
+    background:#1e1e1e; border:1px solid #333; border-radius:16px;
+    padding:10px 10px 10px 12px; box-shadow:0 6px 20px rgba(0,0,0,0.4);
+  }
+  .install-banner.visible { display:flex; }
+  .install-banner img { border-radius:9px; flex-shrink:0; }
+  .install-banner-text { flex:1; min-width:0; }
+  .install-banner-title { font-size:13.5px; font-weight:600; color:#fff; }
+  .install-banner-sub { font-size:11px; color:#999; margin-top:2px; line-height:1.4; }
+  .install-banner-btn {
+    background:#d97757; color:#fff; border:none; border-radius:12px;
+    padding:9px 14px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0;
+  }
+  .install-banner-close {
+    background:none; border:none; color:#888; font-size:14px; cursor:pointer;
+    padding:6px; flex-shrink:0;
+  }
+
   /* ---------- Extract-video-from-link overlay ---------- */
   .extract-overlay {
     position:absolute; inset:0; z-index:9; display:none;
@@ -373,7 +394,6 @@
   .extract-card input[type="url"] {
     padding:11px 14px; border-radius:14px; border:1px solid #3a3a3a;
     background:#2a2a2a; color:#fff; font-size:14px; outline:none;
-    -webkit-text-security: disc;
   }
   .extract-card input[type="url"]:focus { border-color:#d97757; }
   .extract-status {
@@ -460,6 +480,7 @@
       <button class="icon-btn" id="historyBtn" title="History">&#8987;</button>
       <button class="icon-btn" id="bookmarksBtn" title="Bookmarks">&#128278;</button>
       <button class="icon-btn" id="downloadsBtn" title="Downloads">&#8681;</button>
+      <button class="icon-btn" id="offlineBtn" title="Offline library">&#128190;</button>
       <button class="icon-btn" id="openFileBtn" title="Open video from device">&#128194;</button>
       <button class="icon-btn" id="extractVideoBtn" title="Open video from a page link">&#127916;</button>
       <button class="icon-btn" id="enhanceBtn" title="Video enhancer" disabled><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"/></svg></button>
@@ -476,6 +497,7 @@
   <div class="panel" id="historyPanel"></div>
   <div class="panel" id="bookmarksPanel"></div>
   <div class="panel" id="downloadsPanel"></div>
+  <div class="panel" id="offlinePanel"></div>
 
   <div class="stage" id="stage">
     <div class="refresh-indicator" id="refreshIndicator">&#8635;</div>
@@ -688,6 +710,16 @@
   </div>
 </div>
 
+<div class="install-banner" id="installBanner">
+  <img src="icon-192.png" alt="" width="36" height="36">
+  <div class="install-banner-text">
+    <div class="install-banner-title">Install Nova Browser</div>
+    <div class="install-banner-sub">Add to home screen for a full-screen, app-like experience.</div>
+  </div>
+  <button class="install-banner-btn" id="installBannerBtn">Install</button>
+  <button class="install-banner-close" id="installBannerClose" title="Dismiss">&#10005;</button>
+</div>
+
 <script>
 /* ================= State ================= */
 let tabs = [];
@@ -792,6 +824,93 @@ async function restoreSession() {
 async function saveHistory() { try { await window.storage.set('novabrowser:history', JSON.stringify(globalHistory)); } catch (e) {} }
 async function saveBookmarks() { try { await window.storage.set('novabrowser:bookmarks', JSON.stringify(bookmarks)); } catch (e) {} }
 async function saveDownloads() { try { await window.storage.set('novabrowser:downloads', JSON.stringify(downloads)); } catch (e) {} }
+
+/* ================= Offline video library (IndexedDB) ================= */
+let offlineDBPromise = null;
+function openOfflineDB() {
+  if (offlineDBPromise) return offlineDBPromise;
+  offlineDBPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open('novabrowser-offline', 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('videos')) {
+        db.createObjectStore('videos', { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return offlineDBPromise;
+}
+async function saveOfflineVideo(entry) {
+  try {
+    const db = await openOfflineDB();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('videos', 'readwrite');
+      tx.objectStore('videos').put(entry);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) {}
+}
+async function listOfflineVideos() {
+  try {
+    const db = await openOfflineDB();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction('videos', 'readonly');
+      const req = tx.objectStore('videos').getAll();
+      req.onsuccess = () => resolve((req.result || []).sort((a, b) => b.time - a.time));
+      req.onerror = () => reject(req.error);
+    });
+  } catch (e) { return []; }
+}
+async function deleteOfflineVideo(id) {
+  try {
+    const db = await openOfflineDB();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('videos', 'readwrite');
+      tx.objectStore('videos').delete(id);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) {}
+}
+function formatBytes(n) {
+  if (!n) return '';
+  if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB';
+  return (n / (1024 * 1024)).toFixed(1) + ' MB';
+}
+async function renderOfflinePanel() {
+  const panel = document.getElementById('offlinePanel');
+  panel.innerHTML = '<div class="panel-empty">Loading…</div>';
+  const items = await listOfflineVideos();
+  panel.innerHTML = '';
+  if (items.length === 0) {
+    panel.innerHTML = '<div class="panel-empty">No offline videos yet. Use the lightning (fast download &amp; play) button on a video to save it here for offline playback.</div>';
+    return;
+  }
+  const note = document.createElement('div');
+  note.className = 'panel-empty'; note.style.fontSize = '11px';
+  note.textContent = 'Saved on this device — plays without internet. Tap to play, ✕ to remove.';
+  panel.appendChild(note);
+  items.forEach(item => {
+    const row = document.createElement('div');
+    row.className = 'panel-row';
+    const meta = new Date(item.time).toLocaleString() + (item.size ? ' · ' + formatBytes(item.size) : '');
+    row.innerHTML = '<span class="link">' + (item.title || item.url) + '</span><span style="color:#777;font-size:11px;white-space:nowrap;">' + meta + '</span><button title="Remove">&#10005;</button>';
+    row.querySelector('.link').addEventListener('click', () => { playOfflineVideo(item); closePanels(); });
+    row.querySelector('button').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await deleteOfflineVideo(item.id);
+      renderOfflinePanel();
+    });
+    panel.appendChild(row);
+  });
+}
+function playOfflineVideo(item) {
+  const objectUrl = URL.createObjectURL(item.blob);
+  createTab(null, true, { isLocalFile: true, title: item.title || item.url, objectUrl });
+}
 async function saveEnhanceSettings() { try { await window.storage.set('novabrowser:enhancesettings', JSON.stringify(settings)); } catch (e) {} }
 async function saveCustomPresets() { try { await window.storage.set('novabrowser:custompresets', JSON.stringify(customPresets)); } catch (e) {} }
 
@@ -904,10 +1023,8 @@ function activateTab(id) {
   updateAutoDlIndicator(tab);
   const input = document.getElementById('urlInput');
   if (tab && tab.isVideo) {
-    // Privacy: a video tab shows nothing in the address bar at all — no
-    // masked dots, no placeholder hint, completely blank.
-    input.value = '';
-    input.placeholder = '';
+    input.value = (tab.historyIndex >= 0 && tab.history[tab.historyIndex]) ? tab.history[tab.historyIndex] : '';
+    input.placeholder = 'Search or enter URL';
   } else if (tab && tab.isLocalFile) {
     input.value = '';
     input.placeholder = tab.title;
@@ -1099,6 +1216,7 @@ function closePanels() {
   document.getElementById('historyPanel').classList.remove('open');
   document.getElementById('bookmarksPanel').classList.remove('open');
   document.getElementById('downloadsPanel').classList.remove('open');
+  document.getElementById('offlinePanel').classList.remove('open');
 }
 function renderHistoryPanel() {
   const panel = document.getElementById('historyPanel');
@@ -1960,6 +2078,12 @@ document.getElementById('downloadsBtn').addEventListener('click', () => {
   closePanels();
   if (willOpen) { renderDownloadsPanel(); panel.classList.add('open'); }
 });
+document.getElementById('offlineBtn').addEventListener('click', () => {
+  const panel = document.getElementById('offlinePanel');
+  const willOpen = !panel.classList.contains('open');
+  closePanels();
+  if (willOpen) { renderOfflinePanel(); panel.classList.add('open'); }
+});
 document.getElementById('fullscreenBtn').addEventListener('click', () => {
   const container = document.getElementById('stage');
   if (!document.fullscreenElement) (container.requestFullscreen || container.webkitRequestFullscreen || function(){}).call(container);
@@ -2631,6 +2755,7 @@ async function fastDownloadAndPlay(tab) {
     const blob = await downloadVideoBlob(url, signal, updateFastLoadProgress, (t) => { title.textContent = t; });
     updateFastLoadProgress(100);
     swapTabToBlob(tab, URL.createObjectURL(blob), blob, url);
+    saveOfflineVideo({ id: 'v' + Date.now() + Math.random().toString(36).slice(2), url, title: guessFilenameFromUrl(url), time: Date.now(), size: blob.size, blob });
     overlay.classList.remove('visible');
   } catch (e) {
     if (e.name !== 'AbortError') {
@@ -2796,6 +2921,49 @@ loadPersistedData().then(async () => {
   const restored = await restoreSession();
   if (!restored) createTab();
 });
+
+/* ================= PWA install & service worker ================= */
+(function () {
+  const isStandalone = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches
+    || window.navigator.standalone === true;
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    });
+  }
+
+  const banner = document.getElementById('installBanner');
+  const installBtn = document.getElementById('installBannerBtn');
+  const closeBtn = document.getElementById('installBannerClose');
+  let deferredPrompt = null;
+  let dismissed = false;
+
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    if (!isStandalone && !dismissed) banner.classList.add('visible');
+  });
+
+  installBtn.addEventListener('click', async () => {
+    if (!deferredPrompt) return;
+    banner.classList.remove('visible');
+    deferredPrompt.prompt();
+    try { await deferredPrompt.userChoice; } catch (e) {}
+    deferredPrompt = null;
+  });
+
+  closeBtn.addEventListener('click', () => {
+    dismissed = true;
+    banner.classList.remove('visible');
+  });
+
+  window.addEventListener('appinstalled', () => {
+    banner.classList.remove('visible');
+    deferredPrompt = null;
+  });
+})();
+
 </script>
 </body>
 </html>
