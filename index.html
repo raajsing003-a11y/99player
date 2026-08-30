@@ -610,7 +610,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 9.4</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 9.5</div>
   </div>
 
   <div class="toolbar">
@@ -937,7 +937,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '9.4';
+const NOVA_VERSION = '9.5';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -1596,8 +1596,11 @@ function loadUrl(tabId, rawUrl, isNewNav) {
       updateVolumeGain(tab, settings.volBoost);
       applyFiltersToTab(tab);
       updateAutoDlIndicator(tab);
-      // Downloading only ever starts when the user taps the lightning
-      // (fast-download) button — no automatic download on link load.
+      // Auto-start the same download the lightning button triggers, in
+      // silent/badge mode — the small progress badge over the video, no
+      // full-screen overlay — so it downloads through the exact same
+      // pipeline whether it starts on its own here or from a manual tap.
+      fastDownloadAndPlay(tab, true);
     }
   } else {
     tab.el.src = url;
@@ -3768,8 +3771,10 @@ async function loadVideoViaHlsJs(tab, url) {
   });
   hls.loadSource(url);
   hls.attachMedia(tab.el);
-  // Downloading only ever starts when the user taps the lightning button.
+  // Same auto-start as the direct-link path, so HLS sources also begin
+  // downloading (badge mode) right away.
   updateAutoDlIndicator(tab);
+  fastDownloadAndPlay(tab, true);
 }
 
 // Raw MPEG-TS segments (what most real HLS streams actually use) decode fine
@@ -5335,6 +5340,18 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
     if (!result || result.size < 1000) throw new Error('Empty/invalid response');
     watchdog.cleanup();
     recordDomainPattern(streamDomain, 'streamDirect', true);
+    // Some direct .mp4 links are actually *fragmented* MP4 (moov + a series
+    // of moof/mdat fragments in one file, common from modern CDNs) rather
+    // than a classic single-sample-table file — same "seek always snaps
+    // back to the start" problem already fixed above for HLS-sourced
+    // downloads. Try the same flatten-to-progressive-MP4 rewrite here too.
+    // Safe no-op (returns null, original file kept untouched) for webm/ts
+    // sources or files that are already a normal progressive MP4.
+    try {
+      const wholeBuf = await result.arrayBuffer();
+      const flat = await remuxFragmentedToFlatMp4(wholeBuf, [wholeBuf]);
+      if (flat) return flat;
+    } catch (e) {}
     return result;
   } catch (directErr) {
     watchdog.cleanup();
