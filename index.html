@@ -3679,6 +3679,39 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
   const parts = new Array(segments.length);
   let completed = 0;
   let failedSegments = 0;
+
+  // Convert-as-you-download instead of only after every segment has
+  // finished: previously the transmuxer only started once ALL segments were
+  // in hand, which is why "Converting for playback…" only ever showed up
+  // past 90% — the whole conversion step was serialized after the download
+  // instead of overlapping with it. Segments must be fed to the transmuxer
+  // in order even though they can finish downloading out of order (32 in
+  // flight at once), so track how far the muxer has consumed separately
+  // from how many have downloaded, and push whatever's next in sequence
+  // every time a new segment lands.
+  let transmuxer = null, initSegment = null, mediaChunks = [];
+  let muxResolve, muxReject;
+  const muxDonePromise = new Promise((res, rej) => { muxResolve = res; muxReject = rej; });
+  if (!isFmp4Guess) {
+    try {
+      await ensureMuxJs();
+      transmuxer = new muxjs.mp4.Transmuxer();
+      transmuxer.on('data', (segment) => {
+        if (segment.initSegment && !initSegment) initSegment = segment.initSegment;
+        if (segment.data && segment.data.length) mediaChunks.push(segment.data);
+      });
+      transmuxer.on('done', muxResolve);
+    } catch (e) { muxReject(e); }
+  }
+  let pushIndex = 0;
+  function pushReadySegments() {
+    if (!transmuxer) return;
+    while (parts[pushIndex] !== undefined) {
+      transmuxer.push(new Uint8Array(parts[pushIndex]));
+      pushIndex++;
+    }
+  }
+
   // Worker-pool concurrency for fetching .ts/.m4s segments in parallel — 5 was
   // conservative and left bandwidth on the table on fast connections; segments
   // are small (a few hundred KB - a couple MB each) so a higher pool keeps
@@ -3698,8 +3731,9 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
         continue;
       }
       completed++;
-      if (onProgress) onProgress(Math.min(90, (completed / segments.length) * 90), completed, segments.length);
-      if (onStatus) onStatus('Downloading segment ' + completed + '/' + segments.length + '…');
+      pushReadySegments();
+      if (onProgress) onProgress((completed / segments.length) * 100, completed, segments.length);
+      if (onStatus) onStatus(transmuxer ? ('Downloading & converting ' + completed + '/' + segments.length + '…') : ('Downloading segment ' + completed + '/' + segments.length + '…'));
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, segments.length) }, worker));
@@ -3710,11 +3744,15 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
     throw new Error(failedSegments + ' of ' + segments.length + ' segments could not be downloaded after retrying — the source may have removed or expired part of this stream.');
   }
   if (isFmp4Guess) return new Blob(parts, { type: 'video/mp4' });
-  // Raw MPEG-TS segments — remux them into a normal MP4 so the saved file
-  // can actually be replayed (in this app and by any player on the phone),
-  // instead of saving an unplayable raw .ts blob.
+  // Raw MPEG-TS segments were already streamed into the transmuxer above as
+  // they arrived — just flush the tail end and collect what it produced,
+  // instead of starting the whole conversion from scratch here.
   try {
-    return await remuxTsPartsToMp4(parts, onStatus, onProgress);
+    if (onStatus) onStatus('Finishing conversion…');
+    transmuxer.flush();
+    await muxDonePromise;
+    if (!initSegment || !mediaChunks.length) throw new Error('Remux produced no playable data');
+    return new Blob([initSegment, ...mediaChunks], { type: 'video/mp4' });
   } catch (e) {
     // Remux failed (odd codec, corrupt segment, library couldn't load, etc.)
     // — still return the raw TS so the download itself doesn't fail outright;
