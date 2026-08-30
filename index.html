@@ -111,6 +111,7 @@
   .icon-btn:disabled { opacity:.3; cursor:default; }
   .icon-btn.active-toggle { background:#d97757; color:#fff; }
   #downloadsBtn, #offlineBtn { background:#3d3327; box-shadow:inset 0 0 0 1px #6b4a2a; }
+  #maskModeBtn.active-toggle { background:#7a5cd9; }
   .url-wrap { position:relative; flex:1 1 auto; min-width:0; display:flex; }
   .toolbar input[type="text"], .toolbar input[type="search"] {
     flex:1 1 auto; min-width:0;
@@ -152,6 +153,8 @@
   }
   .panel-row:last-child { border-bottom:none; }
   .panel-row span.link { color:#8ecdf7; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+  .panel-row span.link.masked { color:#888; letter-spacing:2px; user-select:none; }
+  .toolbar input#urlInput.masked { -webkit-text-security:disc; text-security:disc; }
   .panel-row button { background:none; border:none; color:#e57373; font-size:15px; cursor:pointer; flex-shrink:0; padding:4px; }
   .panel-empty { color:#777; padding:10px 4px; font-size:12.5px; line-height:1.5; }
 
@@ -532,6 +535,7 @@
       <button class="icon-btn" id="bookmarkBtn" title="Bookmark this page">&#9734;</button>
       <button class="icon-btn" id="bookmarksBtn" title="Bookmarks">&#128278;</button>
       <button class="icon-btn" id="historyBtn" title="History">&#8987;</button>
+      <button class="icon-btn" id="maskModeBtn" title="Mask URLs &amp; searches (privacy screen)">&#128373;</button>
       <button class="icon-btn" id="fullscreenBtn" title="Fullscreen">&#9974;</button>
       <button class="icon-btn" id="extractVideoBtn" title="Open video from a page link">&#127916;</button>
       <button class="icon-btn" id="immersiveBtn" title="Hide toolbar (full-page view)">&#128065;</button>
@@ -574,7 +578,7 @@
 
     <button class="exit-player-btn" id="exitPlayerBtn" title="Back to browser">&#8592;</button>
     <button class="exit-immersive-btn" id="exitImmersiveBtn" title="Show toolbar">&#8593;</button>
-    <button class="grab-video-btn" id="grabVideoBtn" title="Find video on this page">&#127916; Get video</button>
+    <button class="grab-video-btn" id="grabVideoBtn" title="Paste a video link">&#128279; Paste link</button>
     <div class="fastload-overlay" id="fastLoadOverlay">
       <div class="fastload-card">
         <div class="fastload-title" id="fastLoadTitle">Downloading for smooth playback…</div>
@@ -806,7 +810,7 @@ let globalHistory = [];
 let bookmarks = [];
 let downloads = [];
 
-const VIDEO_EXT_RE = /\.(mp4|webm|ogg|ogv|mov|m3u8)(\?.*)?$/i;
+const VIDEO_EXT_RE = /\.(mp4|webm|ogg|ogv|mov|m3u8|m4v|mpd|flv|ts|3gp|avi|mkv)(\?.*)?$/i;
 const DOWNLOAD_EXT_RE = /\.(pdf|zip|rar|7z|docx?|xlsx?|pptx?|csv|json|txt|png|jpe?g|gif|svg|apk|exe|dmg|mp3|wav)(\?.*)?$/i;
 
 let settings = { bright: 100, contrast: 100, sat: 100, sharp: 0, volBoost: 100, loop: false,
@@ -848,6 +852,8 @@ async function loadPersistedData() {
   try { const d = await window.storage.get('novabrowser:downloads'); downloads = d ? JSON.parse(d.value) : []; } catch (e) { downloads = []; }
   try { const s = await window.storage.get('novabrowser:enhancesettings'); if (s) settings = { ...settings, ...JSON.parse(s.value) }; } catch (e) {}
   try { const p = await window.storage.get('novabrowser:custompresets'); if (p) customPresets = JSON.parse(p.value); } catch (e) {}
+  try { const m = await window.storage.get('novabrowser:maskmode'); maskMode = m ? m.value === '1' : false; } catch (e) { maskMode = false; }
+  applyMaskModeUI();
 }
 
 /* ---- Session (open tabs) persistence ---- */
@@ -974,7 +980,8 @@ async function renderOfflinePanel() {
     const row = document.createElement('div');
     row.className = 'panel-row';
     const meta = new Date(item.time).toLocaleString() + (item.size ? ' · ' + formatBytes(item.size) : '');
-    row.innerHTML = '<span class="link">' + (item.title || item.url) + '</span><span style="color:#777;font-size:11px;white-space:nowrap;">' + meta + '</span><button title="Remove">&#10005;</button>';
+    const labelText = maskMode ? maskLabel() : escapeHtml(item.title || item.url);
+    row.innerHTML = '<span class="link' + (maskMode ? ' masked' : '') + '">' + labelText + '</span><span style="color:#777;font-size:11px;white-space:nowrap;">' + meta + '</span><button title="Remove">&#10005;</button>';
     row.querySelector('.link').addEventListener('click', () => { playOfflineVideo(item); closePanels(); });
     row.querySelector('button').addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -1302,7 +1309,7 @@ function renderHistoryPanel() {
   globalHistory.forEach(h => {
     const row = document.createElement('div');
     row.className = 'panel-row';
-    row.innerHTML = '<span class="link">' + h.url + '</span><span style="color:#777;font-size:11px;">' + h.time + '</span>';
+    row.innerHTML = '<span class="link' + (maskMode ? ' masked' : '') + '">' + (maskMode ? maskLabel() : escapeHtml(h.url)) + '</span><span style="color:#777;font-size:11px;">' + h.time + '</span>';
     row.querySelector('.link').addEventListener('click', () => { loadUrl(activeTabId, h.url, true); closePanels(); });
     panel.appendChild(row);
   });
@@ -1322,7 +1329,7 @@ function renderBookmarksPanel() {
   bookmarks.forEach(url => {
     const row = document.createElement('div');
     row.className = 'panel-row';
-    row.innerHTML = '<span class="link">' + url + '</span><button>&times;</button>';
+    row.innerHTML = '<span class="link' + (maskMode ? ' masked' : '') + '">' + (maskMode ? maskLabel() : escapeHtml(url)) + '</span><button>&times;</button>';
     row.querySelector('.link').addEventListener('click', () => { loadUrl(activeTabId, url, true); closePanels(); });
     row.querySelector('button').addEventListener('click', () => {
       bookmarks = bookmarks.filter(b => b !== url);
@@ -1345,7 +1352,7 @@ function renderDownloadsPanel() {
   downloads.forEach(d => {
     const row = document.createElement('div');
     row.className = 'panel-row';
-    row.innerHTML = '<span class="link">' + d.url + '</span><span style="color:#777;font-size:11px;">' + d.time + '</span>';
+    row.innerHTML = '<span class="link' + (maskMode ? ' masked' : '') + '">' + (maskMode ? maskLabel() : escapeHtml(d.url)) + '</span><span style="color:#777;font-size:11px;">' + d.time + '</span>';
     row.querySelector('.link').addEventListener('click', () => { createTab(d.url); closePanels(); });
     panel.appendChild(row);
   });
@@ -2292,9 +2299,14 @@ const CORS_PROXIES = [
   url => 'https://corsproxy.io/?url=' + encodeURIComponent(url),
   url => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url),
   url => 'https://thingproxy.freeboard.io/fetch/' + url,
-  url => 'https://proxy.cors.sh/' + url
+  url => 'https://proxy.cors.sh/' + url,
+  url => 'https://yacdn.org/proxy/' + url,
+  url => 'https://cors.eu.org/' + url,
+  url => 'https://api.allorigins.win/get?url=' + encodeURIComponent(url),
+  url => 'https://test.cors.workers.dev/?' + url,
+  url => url.replace(/^https:/, 'http:') // some blocked-by-HTTPS-mixed-content pages resolve over plain http
 ];
-const PROXY_TIMEOUT_MS = 7000;
+const PROXY_TIMEOUT_MS = 12000;
 let lastExtractFailReason = '';
 
 // fetch with a hard timeout, so one dead/slow proxy doesn't stall the whole chain
@@ -2345,17 +2357,75 @@ function isSearchResultsPage(url) {
   return SEARCH_ENGINE_PATTERNS.some(re => re.test(url));
 }
 
+// Many free/self-hosted video-embed pages hide their real player config inside
+// "p.a.c.k.e.r"-style obfuscated JavaScript: eval(function(p,a,c,k,e,d){...}(...)).
+// This decodes that back to plain JS text WITHOUT ever executing the fetched
+// script (pure string substitution, replicating the packer's own un-substitution
+// loop) — so hidden video URLs inside it become visible to the regex scan below.
+function packerDecode(p, a, c, kArr) {
+  const toBase = (num, base) => num.toString(base);
+  let out = p;
+  let cc = c;
+  while (cc--) {
+    if (kArr[cc]) {
+      const token = toBase(cc, a);
+      out = out.split(new RegExp('\\b' + token + '\\b', 'g')).join(kArr[cc]);
+    }
+  }
+  return out;
+}
+function unpackObfuscatedScripts(html) {
+  const decodedChunks = [];
+  const re = /eval\(function\(p,a,c,k,e,[rd]\)\{[\s\S]*?\}\('([\s\S]*?)',\s*(\d+),\s*(\d+),\s*'([\s\S]*?)'\.split\('\|'\)/g;
+  let m;
+  while ((m = re.exec(html))) {
+    try {
+      const p = m[1], a = parseInt(m[2], 10), c = parseInt(m[3], 10), k = m[4].split('|');
+      if (a <= 36) decodedChunks.push(packerDecode(p, a, c, k));
+    } catch (e) { /* malformed/unsupported variant — skip it */ }
+  }
+  return decodedChunks.join('\n');
+}
+
 function findVideoUrlsInHtml(html, baseUrl) {
   const abs = (u) => { try { return new URL(u, baseUrl).href; } catch (e) { return null; } };
   const candidates = [];
+  const iframeCandidates = [];
 
-  // Un-escape JSON-style escaped slashes (common inside inline <script> config blobs)
-  const unescaped = html.replace(/\\\//g, '/');
+  // Un-escape JSON-style escaped slashes AND unicode escapes (\u002F, \u0026, etc. —
+  // very common when a video URL is embedded inside a JSON blob inside a <script> tag),
+  // then append any decoded obfuscated-player scripts so they get scanned too.
+  const unescapeAll = (s) => s
+    .replace(/\\u002[Ff]/g, '/')
+    .replace(/\\u0026/g, '&')
+    .replace(/\\u003[Dd]/g, '=')
+    .replace(/\\u003[Aa]/g, ':')
+    .replace(/\\\//g, '/')
+    .replace(/&amp;/g, '&');
+  let unescaped = unescapeAll(html);
+  const decoded = unpackObfuscatedScripts(html);
+  if (decoded) unescaped += '\n' + unescapeAll(decoded);
 
-  // 1) <video src="...">, <source src="...">
+  // Also try decoding percent-encoded fragments that themselves wrap a video URL
+  // (e.g. a proxied/redirect link wrapping the real file), appended as extra scan surface.
+  try {
+    const pctMatches = unescaped.match(/https?%3A%2F%2F[^"'\s&]+/gi) || [];
+    if (pctMatches.length) {
+      unescaped += '\n' + pctMatches.map(u => { try { return decodeURIComponent(u); } catch (e) { return ''; } }).join('\n');
+    }
+  } catch (e) {}
+
+  // 1) <video src="...">, <source src="...">, plus <embed>/<object> players and
+  // srcset variants some CMS templates use.
   const tagRe = /<(?:video|source)[^>]+src=["']([^"']+)["']/gi;
   let m;
   while ((m = tagRe.exec(unescaped))) candidates.push(m[1]);
+  const srcsetRe = /<(?:video|source)[^>]+srcset=["']([^"']+)["']/gi;
+  while ((m = srcsetRe.exec(unescaped))) {
+    m[1].split(',').forEach(part => { const u = part.trim().split(/\s+/)[0]; if (u) candidates.push(u); });
+  }
+  const embedRe = /<(?:embed|object)[^>]+(?:src|data)=["']([^"']+?\.(?:mp4|webm|m3u8|mov|m4v|flv)[^"']*)["']/gi;
+  while ((m = embedRe.exec(unescaped))) candidates.push(m[1]);
 
   // 2) og:video / og:video:url / og:video:secure_url meta tags
   const metaRe = /<meta[^>]+(?:property|name)=["']og:video(?::secure_url|:url)?["'][^>]+content=["']([^"']+)["']/gi;
@@ -2367,101 +2437,215 @@ function findVideoUrlsInHtml(html, baseUrl) {
   const twRe = /<meta[^>]+name=["']twitter:player:stream["'][^>]+content=["']([^"']+)["']/gi;
   while ((m = twRe.exec(unescaped))) candidates.push(m[1]);
 
-  // 4) JSON-LD contentUrl (schema.org VideoObject, used by many news/blog sites)
-  const jsonLdRe = /"contentUrl"\s*:\s*"([^"]+)"/gi;
+  // 4) JSON-LD contentUrl / embedUrl (schema.org VideoObject, used by many news/blog sites)
+  const jsonLdRe = /"(?:contentUrl|embedUrl)"\s*:\s*"([^"]+)"/gi;
   while ((m = jsonLdRe.exec(unescaped))) candidates.push(m[1]);
 
-  // 5) Common JS player config keys: "file":"...", "src":"...", "url":"...", "videoUrl":"..."
-  const cfgRe = /"(?:file|src|url|videoUrl|video_url|streamUrl|playbackUrl|hls|mp4)"\s*:\s*"(https?:\/\/[^"]+?\.(?:mp4|webm|m3u8|mov|m4v)[^"]*)"/gi;
+  // 5) Common JS player config keys — broadened to catch more player libraries
+  // (jwplayer, video.js, plyr, custom in-house players, DASH/HLS manifests, etc.)
+  const cfgRe = /"(?:file|src|url|videoUrl|video_url|videoSrc|video_src|streamUrl|stream_url|playbackUrl|playback_url|manifestUrl|manifest_url|hlsUrl|hls_url|dashUrl|dash_url|source|sources|contentUrl|mp4|hls)"\s*:\s*"(https?:\/\/[^"]+?\.(?:mp4|webm|m3u8|mov|m4v|mpd|ts)[^"]*)"/gi;
   while ((m = cfgRe.exec(unescaped))) candidates.push(m[1]);
 
-  // 6) Raw .mp4 / .webm / .m3u8 / .mov links anywhere in the HTML/JS, incl. protocol-relative //host/...
-  const rawRe = /["'](https?:)?(\/\/[^"'\s]+?\.(?:mp4|webm|m3u8|mov|m4v)(?:\?[^"'\s]*)?)["']/gi;
+  // 6) Raw video-file links anywhere in the HTML/JS, incl. protocol-relative //host/...
+  const rawRe = /["'](https?:)?(\/\/[^"'\s]+?\.(?:mp4|webm|m3u8|mov|m4v|mpd)(?:\?[^"'\s]*)?)["']/gi;
   while ((m = rawRe.exec(unescaped))) candidates.push((m[1] || 'https:') + m[2]);
-  const rawRe2 = /["'](https?:\/\/[^"'\s]+?\.(?:mp4|webm|m3u8|mov|m4v)(?:\?[^"'\s]*)?)["']/gi;
+  const rawRe2 = /["'](https?:\/\/[^"'\s]+?\.(?:mp4|webm|m3u8|mov|m4v|mpd)(?:\?[^"'\s]*)?)["']/gi;
   while ((m = rawRe2.exec(unescaped))) candidates.push(m[1]);
 
-  const seen = new Set();
+  // 6b) Same, but backtick-quoted (template literals) or with no quotes at all
+  // (bare assignment inside inline scripts, e.g. src = https://.../video.mp4)
+  const backtickRe = /`(https?:\/\/[^`\s]+?\.(?:mp4|webm|m3u8|mov|m4v|mpd)(?:\?[^`\s]*)?)`/gi;
+  while ((m = backtickRe.exec(unescaped))) candidates.push(m[1]);
+  const bareRe = /[=(\s](https?:\/\/[^\s"'`<>)]+?\.(?:mp4|webm|m3u8|mov|m4v|mpd)(?:\?[^\s"'`<>)]*)?)/gi;
+  while ((m = bareRe.exec(unescaped))) candidates.push(m[1]);
+
+  // 6c) <link rel="preload" as="video" href="..."> and <a href="...video-file">
+  const preloadRe = /<link[^>]+href=["']([^"']+?\.(?:mp4|webm|m3u8|mov|m4v)[^"']*)["']/gi;
+  while ((m = preloadRe.exec(unescaped))) candidates.push(m[1]);
+
+  // 7) Data attributes commonly used by lazy-loading players — widened list.
+  const dataAttrRe = /data-(?:src|video|file|mp4|hls|stream|url|video-url|video-src|mp4-url|hls-url|source|source-url|player-src|wistia-id|setup)=["'](https?:\/\/[^"']+?\.(?:mp4|webm|m3u8|mov|m4v)[^"']*)["']/gi;
+  while ((m = dataAttrRe.exec(unescaped))) candidates.push(m[1]);
+
+  // 7b) JSON arrays of sources: "sources":["url1","url2"] or [{"src":"url"},...]
+  const sourcesArrRe = /"sources"\s*:\s*\[([^\]]+)\]/gi;
+  while ((m = sourcesArrRe.exec(unescaped))) {
+    const inner = m[1];
+    const strRe = /"(https?:\/\/[^"]+?\.(?:mp4|webm|m3u8|mov|m4v|mpd)[^"]*)"/gi;
+    let m2;
+    while ((m2 = strRe.exec(inner))) candidates.push(m2[1]);
+  }
+
+  // 7c) CDN-specific known video hosting patterns (self-hosted-style CDNs commonly
+  // used by blogs/news sites rather than fully DRM-protected platforms):
+  // Cloudflare Stream, Bunny CDN, Wistia, JW Platform, Vimeo progressive files.
+  const cdnPatterns = [
+    /https?:\/\/[^"'\s]*cloudflarestream\.com\/[^"'\s]+?\/manifest\/video\.m3u8[^"'\s]*/gi,
+    /https?:\/\/[^"'\s]*\.b-cdn\.net\/[^"'\s]+?\.(?:mp4|m3u8)[^"'\s]*/gi,
+    /https?:\/\/[^"'\s]*wistia\.[^"'\s]+?\.(?:mp4|m3u8|bin)[^"'\s]*/gi,
+    /https?:\/\/[^"'\s]*cdn\.jwplayer\.com\/(?:manifests|videos)\/[^"'\s]+?\.(?:m3u8|mp4)[^"'\s]*/gi,
+    /https?:\/\/player\.vimeo\.com\/[^"'\s]*progressive_redirect\/[^"'\s]+/gi
+  ];
+  cdnPatterns.forEach(re => { while ((m = re.exec(unescaped))) candidates.push(m[0]); });
+
+  // 7d) <amp-video>/<amp-iframe> (AMP news pages), <link rel="video_src"> (legacy FB tag),
+  // and "manifest"/"playlist" JSON keys used by some in-house players.
+  const ampRe = /<amp-video[^>]+src=["']([^"']+)["']/gi;
+  while ((m = ampRe.exec(unescaped))) candidates.push(m[1]);
+  const ampIframeRe = /<amp-iframe[^>]+src=["']([^"']+)["']/gi;
+  while ((m = ampIframeRe.exec(unescaped))) { const a2 = abs(m[1]); if (a2) iframeCandidates.push(a2); }
+  const linkVideoSrcRe = /<link[^>]+rel=["']video_src["'][^>]+href=["']([^"']+)["']/gi;
+  while ((m = linkVideoSrcRe.exec(unescaped))) candidates.push(m[1]);
+  const manifestRe = /"(?:manifest|playlist|hlsManifestUrl|dashManifestUrl)"\s*:\s*"(https?:\/\/[^"]+?\.(?:m3u8|mpd)[^"]*)"/gi;
+  while ((m = manifestRe.exec(unescaped))) candidates.push(m[1]);
+
+  // 7e) Base64-obfuscated URLs: atob("...") / Base64.decode("...") calls whose decoded
+  // payload contains a direct video link — common lightweight obfuscation on blogs.
+  const atobRe = /(?:atob|Base64\.decode)\(\s*["']([A-Za-z0-9+/=]{16,})["']\s*\)/gi;
+  while ((m = atobRe.exec(unescaped))) {
+    try {
+      const dec = atob(m[1]);
+      if (/\.(mp4|webm|m3u8|mov|m4v|mpd)/i.test(dec)) unescaped += '\n' + dec;
+    } catch (e) { /* not valid base64 — skip */ }
+  }
+
+  // 8) One level of embedded <iframe> players (common on blogs/news sites that
+  // embed a third-party or self-hosted video player) — collected separately so
+  // the caller can follow them if the direct scan above finds nothing.
+  const iframeRe = /<iframe[^>]+src=["']([^"']+)["']/gi;
+  while ((m = iframeRe.exec(unescaped))) {
+    const abs2 = abs(m[1]);
+    if (abs2 && /^https?:\/\//i.test(abs2)) iframeCandidates.push(abs2);
+  }
+
+  // 7g) <meta http-equiv="refresh" content="0;url=..."> interstitial/redirect pages —
+  // common on shortlinks and "click to continue" gate pages that sit in front of the
+  // actual video page. Followed the same way as an iframe candidate.
+  const metaRefreshRe = /<meta[^>]+http-equiv=["']refresh["'][^>]+content=["']\s*\d+\s*;\s*url=([^"']+)["']/gi;
+  while ((m = metaRefreshRe.exec(unescaped))) { const a4 = abs(m[1].trim()); if (a4) iframeCandidates.push(a4); }
+  // Many self-hosted video/CMS platforms expose this even when the raw page HTML
+  // has no direct <video> tag — the oEmbed JSON often contains the real player
+  // iframe or, on some platforms, a direct file URL. Collected as an iframe-style
+  // follow-up candidate (its href is fetched and scanned the same way).
+  const oembedRe = /<link[^>]+type=["']application\/json\+oembed["'][^>]+href=["']([^"']+)["']/gi;
+  while ((m = oembedRe.exec(unescaped))) { const a3 = abs(m[1]); if (a3) iframeCandidates.push(a3); }
   const resolved = candidates
     .map(c => abs(c))
     .filter(Boolean)
-    .filter(u => /\.(mp4|webm|m3u8|mov|m4v)/i.test(u))
+    // also accept known CDN manifest/progressive-redirect URLs that don't end in a
+    // plain file extension (e.g. cloudflarestream.com/.../manifest/video.m3u8?query,
+    // vimeo progressive_redirect paths) alongside the standard extensions.
+    .filter(u => /\.(mp4|webm|m3u8|mov|m4v|mpd|flv|ogv|ts)(?:[?#]|$)/i.test(u) || /manifest\/video\.m3u8|progressive_redirect/i.test(u))
     .filter(u => { if (seen.has(u)) return false; seen.add(u); return true; });
 
-  // Prefer mp4/webm over m3u8 (m3u8 needs HLS support the plain <video> tag may lack)
+  // Prefer mp4/webm over m3u8/mpd (m3u8/mpd need HLS/DASH support the plain <video> tag may lack)
   resolved.sort((a, b) => {
     const score = (u) => /\.(mp4|webm|mov|m4v)/i.test(u) ? 0 : 1;
     return score(a) - score(b);
   });
 
   // Attach a human-friendly quality label when the URL hints at a resolution (e.g. 1080p, 720, _hd)
-  return resolved.map(u => {
+  const found = resolved.map(u => {
     const resMatch = u.match(/(2160|1440|1080|720|480|360|240)p?/i);
-    const label = resMatch ? resMatch[1] + 'p' : (/\.m3u8/i.test(u) ? 'Stream (HLS)' : 'Video file');
+    const label = resMatch ? resMatch[1] + 'p' : (/\.(m3u8|mpd)/i.test(u) ? 'Stream' : 'Video file');
     return { url: u, label };
   });
+  found._iframeCandidates = iframeCandidates.slice(0, 8); // cap follow-up attempts
+  return found;
 }
 
-async function extractVideoCandidatesFromPage(pageUrl) {
-  const statusEl = document.getElementById('extractStatus');
-  statusEl.textContent = 'Loading page…';
-  statusEl.className = 'extract-status';
-
-  // Fire all proxy routes in parallel instead of waiting for each one to
-  // fail before trying the next — whichever responds first with a usable
-  // result wins, so this is as fast as the single fastest available route
-  // instead of the sum of all the slow/dead ones.
+async function scanUrlForVideoCandidates(pageUrl, statusEl) {
   let anyFetchSucceeded = false;
   let lastHttpStatus = null;
   let settledCount = 0;
+  let collectedIframes = [];
 
-  const attempt = (proxyFn, i) => new Promise((resolve) => {
+  const attempt = (proxyFn) => new Promise((resolve) => {
     (async () => {
       try {
         const fetchUrl = proxyFn(pageUrl);
         const res = await fetchWithTimeout(fetchUrl, { method: 'GET', mode: 'cors' }, PROXY_TIMEOUT_MS);
         lastHttpStatus = res.status;
         if (!res.ok) { resolve(null); return; }
-        const html = await res.text();
+        let html = await res.text();
+        // allorigins' /get endpoint wraps the page in {"contents":"...","status":{...}} JSON
+        // instead of returning raw HTML — unwrap it so the regex scan still works.
+        if (fetchUrl.indexOf('allorigins.win/get') !== -1) {
+          try { const parsed = JSON.parse(html); if (parsed && typeof parsed.contents === 'string') html = parsed.contents; } catch (e) {}
+        }
         if (!html || html.length < 50) { resolve(null); return; }
         anyFetchSucceeded = true;
         const found = findVideoUrlsInHtml(html, pageUrl);
+        if (found._iframeCandidates && found._iframeCandidates.length) collectedIframes = collectedIframes.concat(found._iframeCandidates);
         resolve(found.length ? found : null);
       } catch (e) {
         resolve(null);
       } finally {
         settledCount++;
-        if (settledCount < CORS_PROXIES.length) {
+        if (statusEl && settledCount < CORS_PROXIES.length) {
           statusEl.textContent = 'Checking ' + (CORS_PROXIES.length - settledCount) + ' more route(s)…';
         }
       }
     })();
   });
 
-  const promises = CORS_PROXIES.map((fn, i) => attempt(fn, i));
+  const promises = CORS_PROXIES.map(fn => attempt(fn));
 
-  // Resolve as soon as ANY route returns actual video candidates, without
-  // waiting for the slower ones still in flight.
-  return new Promise((resolveAll) => {
+  const result = await new Promise((resolveAll) => {
     let pending = promises.length;
     let doneAlready = false;
     promises.forEach(p => {
-      p.then(result => {
+      p.then(found => {
         pending--;
         if (doneAlready) return;
-        if (result && result.length) {
+        if (found && found.length) {
           doneAlready = true;
-          resolveAll(result);
+          resolveAll(found);
         } else if (pending === 0) {
           doneAlready = true;
-          lastExtractFailReason = anyFetchSucceeded
-            ? "This page's video is loaded by JavaScript after the page opens, so it isn't in the raw page source — that's why it can't be found this way."
-            : "Couldn't reach this page from here through any of the available routes" + (lastHttpStatus ? ' (last response: ' + lastHttpStatus + ')' : '') + ". The site, your network, or the proxy services may be blocking the request. Try again in a moment.";
           resolveAll([]);
         }
       });
     });
   });
+
+  return { found: result, iframeCandidates: [...new Set(collectedIframes)], anyFetchSucceeded, lastHttpStatus };
+}
+
+async function extractVideoCandidatesFromPage(pageUrl) {
+  const first = await extractVideoCandidatesFromPageOnce(pageUrl);
+  if (first.length) return first;
+  // Transient failures (a proxy timing out mid-request, a momentary network blip)
+  // can make a page that WOULD have worked come back empty. One quick silent retry
+  // catches these without meaningfully slowing down the genuine not-found case.
+  return extractVideoCandidatesFromPageOnce(pageUrl);
+}
+
+async function extractVideoCandidatesFromPageOnce(pageUrl) {
+  const statusEl = document.getElementById('extractStatus');
+  statusEl.textContent = 'Loading page…';
+  statusEl.className = 'extract-status';
+
+  const primary = await scanUrlForVideoCandidates(pageUrl, statusEl);
+  if (primary.found.length) return primary.found;
+
+  // Nothing directly on the page — many sites embed the actual player in an
+  // <iframe> (third-party or self-hosted). Follow up to several of those,
+  // two levels deep (iframe-within-iframe happens too), running each level
+  // in parallel so this stays fast even when checking multiple candidates.
+  let toCheck = primary.iframeCandidates;
+  for (let depth = 0; depth < 3 && toCheck.length; depth++) {
+    statusEl.textContent = 'Checking embedded player' + (depth ? ' (nested)' : '') + '…';
+    const subResults = await Promise.all(toCheck.map(u => scanUrlForVideoCandidates(u, null)));
+    const hit = subResults.find(r => r.found.length);
+    if (hit) return hit.found;
+    toCheck = [...new Set(subResults.flatMap(r => r.iframeCandidates))].slice(0, 6);
+  }
+
+  lastExtractFailReason = primary.anyFetchSucceeded
+    ? "This page's video is loaded by JavaScript after the page opens, so it isn't in the raw page source — that's why it can't be found this way."
+    : "Couldn't reach this page from here through any of the available routes" + (primary.lastHttpStatus ? ' (last response: ' + primary.lastHttpStatus + ')' : '') + ". The site, your network, or the proxy services may be blocking the request. Try again in a moment.";
+  return [];
 }
 
 async function extractVideoFromPage(pageUrl) {
@@ -2512,7 +2696,49 @@ function pickBestQuality(candidates) {
     const m = c.label.match(/(\d+)p/);
     return m ? Number(m[1]) : -1; // unknown resolution ranks lowest, but still usable
   };
-  return candidates.slice().sort((a, b) => score(b) - score(a))[0];
+  return candidates.slice().sort((a, b) => score(b) - score(a));
+}
+
+// Verify a candidate actually resolves before committing to it — a regex match in the
+// page source doesn't guarantee the link is still live (expired signed URLs, stale
+// CDN paths, etc.). Checks all ranked candidates IN PARALLEL (not one-by-one, so this
+// doesn't add latency for the common case) and opens the highest-ranked one that came
+// back live. Falls back to a ranged GET when a server rejects HEAD (405/501 — common
+// on some CDNs), and if every check is CORS-blocked/fails, still opens the top-ranked
+// guess rather than giving up, since HEAD/GET being blocked doesn't mean the link is
+// actually dead — plenty of video CDNs block cross-origin HEAD but serve <video> fine.
+async function verifyCandidate(url) {
+  try {
+    const head = await fetchWithTimeout(url, { method: 'HEAD' }, 5000);
+    if (head.ok || (head.status >= 200 && head.status < 400)) return true;
+    if (head.status !== 405 && head.status !== 501) return false;
+  } catch (e) { /* fall through to ranged GET below */ }
+  try {
+    const get = await fetchWithTimeout(url, { method: 'GET', headers: { 'Range': 'bytes=0-1' } }, 5000);
+    return get.ok || get.status === 206 || (get.status >= 200 && get.status < 400);
+  } catch (e) { return false; }
+}
+async function pickWorkingQuality(candidates) {
+  const ranked = pickBestQuality(candidates);
+  // Dedupe near-identical URLs that only differ by a cache-busting/tracking query
+  // param (e.g. ?t=169234, ?_=random) — verifying the same underlying file twice
+  // wastes a parallel request slot and slightly delays the real answer.
+  const seenBase = new Set();
+  const deduped = ranked.filter(c => {
+    const base = c.url.split('?')[0];
+    if (seenBase.has(base)) return false;
+    seenBase.add(base);
+    return true;
+  });
+  // Cap how many we verify in parallel — beyond the top ~8 ranked candidates the
+  // extra checks mostly just add proxy load without changing the outcome, since
+  // the real answer is almost always within the top few by quality ranking.
+  const toVerify = deduped.slice(0, 8);
+  const results = await Promise.allSettled(toVerify.map(c => verifyCandidate(c.url)));
+  for (let i = 0; i < toVerify.length; i++) {
+    if (results[i].status === 'fulfilled' && results[i].value) return toVerify[i];
+  }
+  return ranked[0];
 }
 
 async function resolveAndOpenVideo(pageUrl, statusEl) {
@@ -2523,61 +2749,56 @@ async function resolveAndOpenVideo(pageUrl, statusEl) {
   if (isSearchResultsPage(pageUrl)) {
     return { outcome: 'search-results', hostname: new URL(pageUrl).hostname };
   }
+  // No recognizable video extension in the URL itself — plenty of CDN/stream
+  // links have no extension at all. Check the actual Content-Type before
+  // falling back to full page-scraping, since that's a much faster and more
+  // reliable signal when it's available.
+  if (statusEl) { statusEl.textContent = 'Checking link…'; statusEl.className = 'extract-status'; }
+  try {
+    const head = await fetchWithTimeout(pageUrl, { method: 'HEAD' }, 6000);
+    const ctype = (head.headers.get('content-type') || '').toLowerCase();
+    if (ctype.startsWith('video/') || ctype.includes('mpegurl') || ctype.includes('dash+xml')) {
+      createTab(pageUrl, true, {});
+      return { outcome: 'opened' };
+    }
+  } catch (e) { /* HEAD blocked/failed — fall through to page scraping below */ }
   if (statusEl) { statusEl.textContent = 'Looking for a video on that page…'; statusEl.className = 'extract-status'; }
   const candidates = await extractVideoCandidatesFromPage(pageUrl);
   if (!candidates.length) return { outcome: 'not-found' };
-  // Always open the highest-quality version found — no manual picking.
-  const best = pickBestQuality(candidates);
+  // Verify candidates in ranked order and open the first one that's actually live.
+  const best = await pickWorkingQuality(candidates);
   createTab(best.url, true, {});
   return { outcome: 'opened', quality: best.label };
 }
 
-document.getElementById('grabVideoBtn').addEventListener('click', async () => {
-  const tab = getTab(activeTabId);
-  if (!tab || tab.isVideo || tab.historyIndex < 0) return;
-  const pageUrl = tab.history[tab.historyIndex];
-  const btn = document.getElementById('grabVideoBtn');
-  const originalLabel = btn.innerHTML;
-
-  btn.classList.add('working');
-  btn.innerHTML = '&#8987; Searching…';
-  try {
-    const result = await resolveAndOpenVideo(pageUrl, document.getElementById('extractStatus'));
-    if (result.outcome === 'search-results') {
-      document.getElementById('extractOverlay').classList.add('visible');
-      document.getElementById('qualityList').innerHTML = '';
-      document.getElementById('extractUrlInput').style.display = '';
-      document.getElementById('extractUrlInput').value = '';
-      document.getElementById('extractStatus').textContent = "This is still a search results page (" + result.hostname + "), not the actual video page. Open the site you tapped on first, then use Get video from there — or long-press the link on the search results and choose Copy Link, then paste it below.\n\nPage tried: " + pageUrl;
-      document.getElementById('extractStatus').className = 'extract-status error';
-    } else if (result.outcome === 'not-found') {
-      btn.innerHTML = '&#10060; Not found';
-      document.getElementById('extractOverlay').classList.add('visible');
-      document.getElementById('extractUrlInput').style.display = 'none';
-      document.getElementById('extractStatus').textContent = (lastExtractFailReason || "Couldn't find a playable video on this page.") + "\n\nPage tried: " + pageUrl;
-      document.getElementById('extractStatus').className = 'extract-status error';
-    } else if (result.outcome === 'multiple') {
-      document.getElementById('extractOverlay').classList.add('visible');
-      document.getElementById('extractUrlInput').style.display = 'none';
-      document.getElementById('extractStatus').textContent = 'Found ' + result.candidates.length + ' versions — pick one:';
-      document.getElementById('extractStatus').className = 'extract-status success';
-      renderQualityList(result.candidates, (url) => { closeExtractOverlay(); createTab(url, true, {}); });
-    }
-    // 'opened' needs no extra UI — the new video tab is already showing.
-  } catch (e) {
-    btn.innerHTML = '&#10060; Failed';
-    document.getElementById('extractOverlay').classList.add('visible');
-    document.getElementById('extractUrlInput').style.display = 'none';
-    document.getElementById('extractStatus').textContent = "Something went wrong reading this page (" + (e && e.message ? e.message : 'unknown error') + ").\n\nPage tried: " + pageUrl;
-    document.getElementById('extractStatus').className = 'extract-status error';
-  } finally {
-    // Always restore the button, no matter which branch ran above — this is
-    // the fix: previously the direct-video-link path returned early and
-    // skipped this, leaving the button stuck on "Searching…" and unclickable
-    // for the rest of the session.
-    setTimeout(() => { btn.innerHTML = originalLabel; btn.classList.remove('working'); }, btn.innerHTML === originalLabel ? 0 : 1200);
-  }
+/* ================= Privacy mask ================= */
+// Hides URLs/searches from view (address bar + history/bookmarks/downloads/
+// offline lists) so anyone glancing at the screen can't read them. Purely
+// visual — clicking a masked row still opens the real, unmasked URL.
+let maskMode = false;
+function maskLabel() { return '&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226; (tap to open)'; }
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+function applyMaskModeUI() {
+  const btn = document.getElementById('maskModeBtn');
+  btn.classList.toggle('active-toggle', maskMode);
+  btn.innerHTML = maskMode ? '&#128584;' : '&#128373;';
+  const urlInput = document.getElementById('urlInput');
+  urlInput.classList.toggle('masked', maskMode);
+  renderHistoryPanel();
+  renderBookmarksPanel();
+  renderDownloadsPanel();
+  renderOfflinePanel();
+}
+async function saveMaskMode() { try { await window.storage.set('novabrowser:maskmode', maskMode ? '1' : '0'); } catch (e) {} }
+document.getElementById('maskModeBtn').addEventListener('click', () => {
+  maskMode = !maskMode;
+  applyMaskModeUI();
+  saveMaskMode();
 });
+
+document.getElementById('grabVideoBtn').addEventListener('click', openExtractOverlay);
 
 async function runExtraction() {
   const raw = document.getElementById('extractUrlInput').value.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim();
@@ -2801,12 +3022,22 @@ function createStallWatchdog(externalSignal, stallMs) {
 }
 
 async function downloadVideoBlob(url, signal, onProgress, onStatus) {
-  const watchdog = createStallWatchdog(signal, 15000);
+  const watchdog = createStallWatchdog(signal, 25000);
   try {
-    const head = await fetchWithTimeout(url, { method: 'HEAD', signal: watchdog.signal }, 8000);
-    const len = Number(head.headers.get('content-length') || 0);
-    const acceptsRanges = (head.headers.get('accept-ranges') || '').toLowerCase().includes('bytes');
-    watchdog.poke();
+    // HEAD is blocked by CORS on plenty of video hosts even when GET works
+    // fine — don't let a failed HEAD knock us straight to the (unreliable)
+    // public proxies. Treat it as "no size info" and fall through to a
+    // normal direct GET instead.
+    let len = 0, acceptsRanges = false;
+    try {
+      const head = await fetchWithTimeout(url, { method: 'HEAD', signal: watchdog.signal }, 8000);
+      len = Number(head.headers.get('content-length') || 0);
+      acceptsRanges = (head.headers.get('accept-ranges') || '').toLowerCase().includes('bytes');
+      watchdog.poke();
+    } catch (headErr) {
+      if (signal && signal.aborted) throw headErr;
+      // no size/range info — proceed with a plain single-stream GET below
+    }
 
     let result;
     if (len > 0 && acceptsRanges) {
@@ -2827,6 +3058,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       };
       const parts = await Promise.all(ranges.map(async ([start, end], idx) => {
         const res = await fetch(url, { headers: { Range: 'bytes=' + start + '-' + end }, signal: watchdog.signal });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
         if (!res.body) { const buf = await res.arrayBuffer(); loaded[idx] = buf.byteLength; watchdog.poke(); reportProgress(); return new Blob([buf]); }
         const reader = res.body.getReader();
         const bytes = [];
@@ -2844,6 +3076,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
     } else {
       if (onStatus) onStatus('Downloading (server does not support parallel chunks)…');
       const res = await fetch(url, { signal: watchdog.signal });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
       // Cross-origin responses often don't expose content-length even when
       // the HEAD request above got one — fall back to that so the progress
       // indicator isn't stuck showing nothing while data is really flowing.
@@ -2861,6 +3094,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       }
       result = new Blob(bytes);
     }
+    if (!result || result.size < 1000) throw new Error('Empty/invalid response');
     watchdog.cleanup();
     return result;
   } catch (directErr) {
@@ -2960,7 +3194,11 @@ function updateAutoDlIndicator(tab) {
   const el = document.getElementById('autoDlIndicator');
   const pctEl = document.getElementById('autoDlPct');
   if (!tab || tab.id !== activeTabId) { el.style.display = 'none'; return; }
-  if (tab._autoDLAbort) {
+  if (tab._autoDLFailed) {
+    el.style.display = 'block';
+    el.classList.remove('ready');
+    pctEl.innerHTML = '&#9888; Download failed';
+  } else if (tab._autoDLAbort) {
     el.style.display = 'block';
     el.classList.remove('ready');
     const doneStr = formatBytes(tab._autoDLBytes || 0);
@@ -3005,7 +3243,14 @@ async function autoDownloadInBackground(tab, url) {
     swapTabToBlob(tab, URL.createObjectURL(blob), blob, url);
     saveOfflineVideo({ id: 'v' + Date.now() + Math.random().toString(36).slice(2), url, title: guessFilenameFromUrl(url), time: Date.now(), size: blob.size, blob });
   } catch (e) {
-    // Silent by design — streaming playback continues untouched.
+    // Silent by design for a user cancel — but a real failure (bad network,
+    // every relay down, etc.) should say so briefly instead of the
+    // indicator just vanishing with no explanation.
+    if (!ctrl.signal.aborted && tab.history[tab.historyIndex] === url) {
+      tab._autoDLFailed = true;
+      updateAutoDlIndicator(tab);
+      setTimeout(() => { if (tab._autoDLFailed) { tab._autoDLFailed = false; updateAutoDlIndicator(tab); } }, 4000);
+    }
   } finally {
     if (tab._autoDLAbort === ctrl) { tab._autoDLAbort = null; updateAutoDlIndicator(tab); }
   }
