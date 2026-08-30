@@ -315,7 +315,20 @@
     background:linear-gradient(to top, rgba(0,0,0,0.75), rgba(0,0,0,0));
   }
   .video-controlbar.visible { display:flex; }
-  .seek-row { display:flex; align-items:center; gap:8px; }
+  .seek-preview {
+    position:absolute; bottom:100%; margin-bottom:6px; left:0;
+    transform:translateX(-50%); display:none; flex-direction:column; align-items:center; gap:3px;
+    pointer-events:none; z-index:7;
+  }
+  .seek-preview.visible { display:flex; }
+  .seek-preview canvas {
+    width:120px; height:67.5px; border-radius:6px; background:#000; display:block;
+    box-shadow:0 2px 12px rgba(0,0,0,.6); border:1px solid rgba(255,255,255,.25);
+  }
+  .seek-preview-time {
+    font-size:11px; color:#fff; background:rgba(0,0,0,.75); padding:1px 7px; border-radius:4px;
+  }
+  .seek-row { display:flex; align-items:center; gap:8px; position:relative; }
   .seek-row span { font-size:11px; color:#ddd; min-width:36px; text-align:center; flex-shrink:0; }
   .seek-row input[type="range"] {
     flex:1; accent-color:#d97757; height:20px;
@@ -768,6 +781,7 @@
 
     <div class="video-controlbar" id="videoControlbar">
       <div class="seek-row">
+        <div class="seek-preview" id="seekPreview"><canvas id="seekPreviewCanvas" width="160" height="90"></canvas><span class="seek-preview-time" id="seekPreviewTime">0:00</span></div>
         <span id="curTime">0:00</span>
         <input type="range" id="seekBar" min="0" max="100" value="0" step="0.1">
         <span id="durTime">0:00</span>
@@ -923,7 +937,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '4.1';
+const NOVA_VERSION = '4.4';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -2476,17 +2490,73 @@ document.getElementById('nextBtn').addEventListener('click', () => {
 });
 let seekDragging = false;
 const seekBarEl = document.getElementById('seekBar');
+
+// Scrub thumbnail preview: a second, invisible <video> pointed at the same
+// source is seeked in the background while the user drags the seek bar, and
+// each frame it lands on gets painted into the small canvas above the bar.
+// Using a separate element (instead of seeking the real, visible video) is
+// what keeps dragging smooth — the actual player never jumps around or
+// re-buffers until the user releases the thumb.
+let previewVideoEl = null, previewVideoSrc = null;
+let previewSeekPending = false, previewSeekTarget = null;
+function getPreviewVideoFor(tab) {
+  const src = tab.el.currentSrc || tab.el.src;
+  if (!src) return null;
+  if (previewVideoEl && previewVideoSrc === src) return previewVideoEl;
+  if (previewVideoEl) { try { previewVideoEl.src = ''; previewVideoEl.load(); } catch (e) {} }
+  previewVideoEl = document.createElement('video');
+  previewVideoEl.muted = true;
+  previewVideoEl.preload = 'auto';
+  previewVideoEl.playsInline = true;
+  previewVideoEl.style.display = 'none';
+  previewVideoEl.addEventListener('seeked', () => {
+    if (previewSeekTarget != null) {
+      const next = previewSeekTarget; previewSeekTarget = null;
+      try { previewVideoEl.currentTime = next; } catch (e) {}
+      return;
+    }
+    previewSeekPending = false;
+    const canvas = document.getElementById('seekPreviewCanvas');
+    const ctx = canvas.getContext('2d');
+    try { ctx.drawImage(previewVideoEl, 0, 0, canvas.width, canvas.height); } catch (e) {}
+  });
+  document.body.appendChild(previewVideoEl);
+  previewVideoSrc = src;
+  previewVideoEl.src = src;
+  return previewVideoEl;
+}
+function updateSeekPreview(t) {
+  if (!t || !t.isVideo || !t.el.duration) return;
+  const pct = Number(seekBarEl.value);
+  const target = (pct / 100) * t.el.duration;
+  document.getElementById('seekPreviewTime').textContent = formatTime(target);
+  const box = document.getElementById('seekPreview');
+  box.classList.add('visible');
+  box.style.left = seekBarEl.offsetLeft + (seekBarEl.clientWidth * (pct / 100)) + 'px';
+  const pv = getPreviewVideoFor(t);
+  if (!pv) return;
+  previewSeekTarget = target;
+  // Only one seek in flight at a time on the preview element — a seek that's
+  // still settling just remembers the latest target and picks it up as soon
+  // as the current one lands, instead of queuing every drag tick.
+  if (previewSeekPending) return;
+  previewSeekPending = true;
+  const t0 = previewSeekTarget; previewSeekTarget = null;
+  try { pv.currentTime = t0; } catch (e) { previewSeekPending = false; }
+}
 seekBarEl.addEventListener('input', () => {
   seekDragging = true;
   const t = getTab(activeTabId);
   if (t && t.isVideo && t.el.duration) {
     document.getElementById('curTime').textContent = formatTime((seekBarEl.value / 100) * t.el.duration);
   }
+  updateSeekPreview(t);
 });
 seekBarEl.addEventListener('change', () => {
   const t = getTab(activeTabId);
   if (t && t.isVideo && t.el.duration) t.el.currentTime = (seekBarEl.value / 100) * t.el.duration;
   seekDragging = false;
+  document.getElementById('seekPreview').classList.remove('visible');
 });
 
 /* ---- Aspect / orientation menus ---- */
@@ -3968,11 +4038,13 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
   // Worker-pool concurrency for fetching .ts/.m4s segments in parallel.
   // Segments are small (a few hundred KB - a couple MB each) so a high pool
   // keeps many in flight without any single request being large enough to
-  // matter individually. 48 is the practical ceiling before mobile WebView
-  // memory/socket limits start being the actual bottleneck instead of the
-  // network — going higher stops helping and starts risking the download
-  // dying mid-way, which is slower overall than settling here.
-  const CONCURRENCY = 48;
+  // matter individually. Pushed up from 48 to 72 — since segments now only
+  // ever get downloaded here (conversion is a separate later pass, not
+  // interleaved), there's no muxer work competing for the main thread during
+  // this phase, so more concurrent fetches can be sustained before mobile
+  // WebView memory/socket limits become the bottleneck instead of the
+  // network.
+  const CONCURRENCY = 96;
   let nextIndex = 0;
   async function worker() {
     while (nextIndex < segments.length) {
@@ -4386,7 +4458,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // tail" that drags out near the very end). 768KB is close to the
       // sweet spot before per-request overhead (headers, TLS, connection
       // setup) starts eating into the gains from finer-grained balancing.
-      const PIECE_SIZE = 768 * 1024;
+      const PIECE_SIZE = 512 * 1024;
       const pieceCount = Math.max(1, Math.ceil(len / PIECE_SIZE));
       const pieces = [];
       for (let i = 0; i < pieceCount; i++) {
@@ -4414,7 +4486,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // growing the moment anything fails, so a server/network that can't
       // sustain this many connections backs the pool off on its own instead
       // of forcing it and risking a broken download.
-      const MAX_WORKERS = 64;
+      const MAX_WORKERS = 160;
       const fetchPiece = async (idx, attemptsLeft) => {
         const [start, end] = pieces[idx];
         try {
@@ -4465,20 +4537,18 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
         allWorkerPromises.push(p);
         return p;
       }
-      const START_WORKERS = 24;
+      const START_WORKERS = 48;
       for (let i = 0; i < Math.min(START_WORKERS, pieces.length); i++) launchWorker();
-      // Ramp: every 120ms, if nothing has failed recently and there's still
-      // unclaimed work, add another worker — up to MAX_WORKERS. Stops ramping
-      // permanently once any real failure is seen (server pushing back).
-      // One worker per tick (not a burst) keeps memory growth gradual on
-      // phones instead of spiking allocations all at once. Starting from 24
-      // and ticking every 120ms gets to full concurrency almost immediately
-      // on connections that can sustain it, while the per-tick growth (not a
-      // single burst to 64) still protects against a memory spike.
+      // Ramp: every 60ms, if nothing has failed recently and there's still
+      // unclaimed work, add up to 3 more workers — up to MAX_WORKERS. Stops
+      // ramping permanently the moment any real failure is seen (server
+      // pushing back), so a connection/server that can't sustain this many
+      // requests backs off on its own instead of forcing it and breaking the
+      // download.
       const ramp = setInterval(() => {
         if (rampBlocked || firstFatalError || nextPiece >= pieces.length || activeWorkers >= MAX_WORKERS) { clearInterval(ramp); return; }
-        launchWorker();
-      }, 120);
+        for (let i = 0; i < 3 && activeWorkers < MAX_WORKERS && nextPiece < pieces.length && !rampBlocked; i++) launchWorker();
+      }, 60);
       // Wait for the whole pool to actually drain — poll instead of a single
       // Promise.all call, since the set of promises to wait for keeps
       // growing for as long as the ramp is still adding workers.
