@@ -937,7 +937,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '5.1';
+const NOVA_VERSION = '5.4';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -4104,9 +4104,20 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
     });
     transmuxer.on('done', muxResolve);
   } catch (e) { muxReject(e); }
+  // Pushing every segment into the transmuxer in one uninterrupted
+  // synchronous loop blocks the main thread solid for the whole
+  // conversion — the browser can't even repaint the "Converting X/Y…"
+  // text during that time, so the UI just looked frozen/hung for however
+  // long conversion took, which is most of why this step felt so much
+  // slower than it actually was. Yielding back to the browser every few
+  // segments lets the status text (and the rest of the UI) actually
+  // update as it goes, without meaningfully slowing the conversion itself
+  // — the yields are near-zero cost compared to the muxing work.
+  const YIELD_EVERY = 6;
   for (let i = 0; i < parts.length; i++) {
     transmuxer.push(new Uint8Array(parts[i]));
     if (onStatus) onStatus('Converting ' + (i + 1) + '/' + parts.length + '…');
+    if (i % YIELD_EVERY === YIELD_EVERY - 1) await new Promise(r => setTimeout(r, 0));
   }
   // Flush the tail end and collect what the transmuxer produced.
   try {
@@ -4508,7 +4519,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // tail" that drags out near the very end). 768KB is close to the
       // sweet spot before per-request overhead (headers, TLS, connection
       // setup) starts eating into the gains from finer-grained balancing.
-      const PIECE_SIZE = 512 * 1024;
+      const PIECE_SIZE = 256 * 1024;
       const pieceCount = Math.max(1, Math.ceil(len / PIECE_SIZE));
       const pieces = [];
       for (let i = 0; i < pieceCount; i++) {
@@ -4552,11 +4563,19 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // growing the moment anything fails, so a server/network that can't
       // sustain this many connections backs the pool off on its own instead
       // of forcing it and risking a broken download.
-      const MAX_WORKERS = 256;
+      const MAX_WORKERS = 384;
       const fetchPiece = async (idx, attemptsLeft) => {
         const [start, end] = pieces[idx];
         try {
-          const res = await fetch(url, { headers: { Range: 'bytes=' + start + '-' + end }, signal: watchdog.signal });
+          // fetchPriority: 'high' tells the browser to favor these requests
+          // over other in-flight traffic on the page (e.g. the native
+          // <video> element streaming the same URL for live playback) —
+          // without this, the background downloader and the visible player
+          // silently split the same connection budget, which is exactly why
+          // the background auto-download used to feel slower than pressing
+          // the lightning button (where nothing else was competing for
+          // bandwidth at that moment). This puts both on equal footing.
+          const res = await fetch(url, { headers: { Range: 'bytes=' + start + '-' + end }, signal: watchdog.signal, priority: 'high' });
           if (!res.ok) throw new Error('HTTP ' + res.status);
           if (!res.body) { const buf = await res.arrayBuffer(); loaded[idx] = buf.byteLength; watchdog.poke(); reportProgress(); return new Blob([buf]); }
           const reader = res.body.getReader();
@@ -4604,7 +4623,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
         allWorkerPromises.push(p);
         return p;
       }
-      const START_WORKERS = 80;
+      const START_WORKERS = 128;
       for (let i = 0; i < Math.min(START_WORKERS, pieces.length); i++) launchWorker();
       // Ramp: every 50ms, if nothing has failed recently and there's still
       // unclaimed work, add up to 4 more workers — up to MAX_WORKERS. Stops
@@ -4614,8 +4633,8 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // download.
       const ramp = setInterval(() => {
         if (rampBlocked || firstFatalError || nextPiece >= pieces.length || activeWorkers >= MAX_WORKERS) { clearInterval(ramp); return; }
-        for (let i = 0; i < 4 && activeWorkers < MAX_WORKERS && nextPiece < pieces.length && !rampBlocked; i++) launchWorker();
-      }, 50);
+        for (let i = 0; i < 16 && activeWorkers < MAX_WORKERS && nextPiece < pieces.length && !rampBlocked; i++) launchWorker();
+      }, 20);
       // Wait for the whole pool to actually drain — poll instead of a single
       // Promise.all call, since the set of promises to wait for keeps
       // growing for as long as the ramp is still adding workers.
@@ -4637,7 +4656,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       result = new Blob(partBlobs);
     } else {
       if (onStatus) onStatus('Downloading (server does not support parallel chunks)…');
-      const res = await fetch(url, { signal: watchdog.signal });
+      const res = await fetch(url, { signal: watchdog.signal, priority: 'high' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       // Cross-origin responses often don't expose content-length even when
       // the HEAD request above got one — fall back to that so the progress
@@ -4754,6 +4773,13 @@ function saveTabBlobToDevice(tab) {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
+function formatElapsed(ms) {
+  const s = ms / 1000;
+  if (s < 60) return s.toFixed(1) + 's';
+  const m = Math.floor(s / 60);
+  const rem = Math.round(s - m * 60);
+  return m + 'm ' + rem + 's';
+}
 async function fastDownloadAndPlay(tab) {
   const url = tab.el.currentSrc || tab.el.src;
   if (!url || /^blob:/i.test(url)) return; // already local/fast
@@ -4764,6 +4790,7 @@ async function fastDownloadAndPlay(tab) {
   updateFastLoadProgress(0);
   fastLoadAbort = new AbortController();
   const signal = fastLoadAbort.signal;
+  const startedAt = Date.now();
   // The video (tab.el) keeps streaming/playing normally the whole time this
   // runs — downloadVideoBlob pulls the file into memory separately and only
   // touches tab.el right at the end (swapTabToBlob). So there was never a
@@ -4817,17 +4844,18 @@ async function fastDownloadAndPlay(tab) {
     const saveResult = await saveOfflineVideo({ id: 'v' + Date.now() + Math.random().toString(36).slice(2), url, title: guessFilenameFromUrl(url, blob.type), time: Date.now(), size: blob.size, blob });
     overlay.classList.remove('visible');
     if (tab._autoDLAbort === fastLoadAbort) tab._autoDLAbort = null;
+    const took = formatElapsed(Date.now() - startedAt);
     if (!saveResult.ok) {
       const msg = saveResult.error === 'storage-full'
         ? "There wasn't enough free storage on this device to save a copy for offline playback — even after clearing older downloads. Try removing a few videos from Downloads and use the lightning button again."
         : "It couldn't be saved for offline playback this time. You can try the lightning button again.";
       if (minimized) showMiniToast(msg); else alert(msg);
     } else if (cannotPreviewInApp) {
-      showMiniToast('Saved to Downloads \u2014 this stream needs an external player (e.g. VLC) to watch, playback here keeps streaming normally');
+      showMiniToast('Saved to Downloads in ' + took + ' \u2014 this stream needs an external player (e.g. VLC) to watch, playback here keeps streaming normally');
     } else if (saveResult.freedSpace) {
-      showMiniToast('Saved (freed space from older downloads)');
-    } else if (minimized) {
-      showMiniToast('Download finished \u2014 now playing the fast local copy');
+      showMiniToast('Saved in ' + took + ' (freed space from older downloads)');
+    } else {
+      showMiniToast('Done in ' + took + ' \u2014 downloaded, converted, and playing');
     }
     updateAutoDlIndicator(tab);
   } catch (e) {
@@ -4978,6 +5006,7 @@ async function autoDownloadInBackground(tab, url) {
   tab._autoDLPct = 0;
   tab._autoDLBytes = 0;
   updateAutoDlIndicator(tab);
+  const startedAt = Date.now();
   try {
     const blob = await downloadVideoBlob(url, ctrl.signal, (pct, received, total) => {
       tab._autoDLPct = pct;
@@ -5018,6 +5047,7 @@ async function autoDownloadInBackground(tab, url) {
     // and a real failure that survives the retry shows a brief, unobtrusive
     // toast instead of just vanishing silently.
     const saveResult = await saveOfflineVideo({ id: 'v' + Date.now() + Math.random().toString(36).slice(2), url, title: guessFilenameFromUrl(url, blob.type), time: Date.now(), size: blob.size, blob });
+    const took = formatElapsed(Date.now() - startedAt);
     if (tab.id === activeTabId) {
       if (!saveResult.ok) {
         showMiniToast(saveResult.error === 'storage-full'
@@ -5025,7 +5055,8 @@ async function autoDownloadInBackground(tab, url) {
           : "Playing, but couldn't save offline copy");
       } else {
         updateAutoDlIndicator(tab);
-        if (cannotPreviewInApp) showMiniToast('Saved to Downloads \u2014 needs an external player (e.g. VLC) to watch offline');
+        if (cannotPreviewInApp) showMiniToast('Saved to Downloads in ' + took + ' \u2014 needs an external player (e.g. VLC) to watch offline');
+        else showMiniToast('Done in ' + took + ' \u2014 downloaded, converted, and playing');
       }
     }
   } catch (e) {
