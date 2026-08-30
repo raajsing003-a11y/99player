@@ -335,19 +335,19 @@
   /* Lock overlay */
   .lock-overlay {
     position:absolute; inset:0; z-index:8; display:none;
-    align-items:flex-end; justify-content:center; padding-bottom:26px;
+    align-items:flex-end; justify-content:flex-start; padding-bottom:26px; padding-left:10px;
     background:rgba(0,0,0,0.001); /* nearly invisible, but blocks touches */
   }
   .lock-overlay.visible { display:flex; }
   .lock-card {
-    display:flex; flex-direction:row; align-items:center; gap:10px;
-    padding:10px 18px; border-radius:26px;
+    display:flex; flex-direction:row; align-items:center; gap:7px;
+    padding:7px 12px; border-radius:20px;
     background:rgba(15,15,15,0.65); backdrop-filter:blur(14px);
     border:1px solid rgba(255,255,255,0.08);
     user-select:none; cursor:pointer;
   }
-  .lock-ring { position:relative; width:36px; height:36px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
-  .lock-ring svg { position:absolute; inset:0; width:36px; height:36px; transform:rotate(-90deg); }
+  .lock-ring { position:relative; width:26px; height:26px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .lock-ring svg { position:absolute; inset:0; width:26px; height:26px; transform:rotate(-90deg); }
   .lock-ring .ring-track { fill:none; stroke:rgba(255,255,255,0.12); stroke-width:3; }
   .lock-ring .ring-fill {
     fill:none; stroke:#d97757; stroke-width:3; stroke-linecap:round;
@@ -355,10 +355,10 @@
   }
   .lock-ring .ring-fill.charging { transition:stroke-dashoffset 1.8s linear; }
   .lock-ring .ring-fill.resetting { transition:stroke-dashoffset .25s ease; }
-  .lock-icon { font-size:15px; z-index:1; transition:transform .2s ease; }
+  .lock-icon { font-size:11px; z-index:1; transition:transform .2s ease; }
   .lock-card.pressed .lock-icon { transform:scale(0.88); }
-  .lock-label { font-size:12px; color:#eee; font-weight:500; letter-spacing:.2px; white-space:nowrap; }
-  .lock-sublabel { font-size:10px; color:#999; white-space:nowrap; }
+  .lock-label { font-size:10px; color:#eee; font-weight:500; letter-spacing:.2px; white-space:nowrap; }
+  .lock-sublabel { font-size:8.5px; color:#999; white-space:nowrap; }
   .auto-dl-indicator {
     position:absolute; top:10px; right:10px; z-index:15;
     background:rgba(0,0,0,0.7); color:#fff; font-size:13px;
@@ -779,7 +779,7 @@
         <button class="play-pause" id="playPauseBtn" title="Play/Pause">&#9654;</button>
         <button class="small" id="forwardBtn" title="Forward 10s">&#8631;</button>
         <button class="tiny" id="nextBtn" title="Next video">&#9197;</button>
-        <button class="tiny" id="hideUiBtn" title="Hide everything (clean full-screen view)">&#128065;</button>
+        <button class="tiny" id="hideUiBtn" title="Lock screen (hold for Kids Lock)">&#128274;</button>
       </div>
     </div>
   <div class="enhance-sheet" id="enhanceSheet">
@@ -1459,6 +1459,45 @@ function updateGrabVideoBtn() {
   btn.classList.toggle('visible', onBrowsedPage);
 }
 
+// Hold playback off until at least MIN_BUFFER_PCT of the video is buffered.
+// Only used for videos that can't be opened directly and go through a
+// conversion/extraction path first (HLS via hls.js, or the blob-download
+// fallback) — plain direct video links keep playing immediately via normal
+// browser streaming, untouched. Falls back to just playing (after a short
+// grace period) if the browser never reports a usable duration/buffered
+// range, so a single video can't get stuck forever.
+const MIN_BUFFER_PCT = 20;
+function playWhenBuffered(tab) {
+  const el = tab.el;
+  const status = document.getElementById('status');
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    el.removeEventListener('progress', check);
+    el.removeEventListener('canplaythrough', finish);
+    clearTimeout(fallbackTimer);
+    if (tab.id === activeTabId) status.style.display = 'none';
+    el.play().catch(() => {});
+  };
+  const check = () => {
+    if (done || !el.duration || !isFinite(el.duration) || !el.buffered.length) return;
+    const bufferedEnd = el.buffered.end(el.buffered.length - 1);
+    const pct = (bufferedEnd / el.duration) * 100;
+    if (tab.id === activeTabId) {
+      status.style.display = 'block';
+      status.textContent = 'Buffering ' + Math.min(100, Math.round(pct)) + '%\u2026';
+    }
+    if (pct >= MIN_BUFFER_PCT) finish();
+  };
+  // Safety net: don't block playback indefinitely if duration/buffered info
+  // never becomes usable (e.g. some streams never expose it reliably).
+  const fallbackTimer = setTimeout(finish, 8000);
+  el.addEventListener('progress', check);
+  el.addEventListener('canplaythrough', finish);
+  check();
+}
+
 function loadUrl(tabId, rawUrl, isNewNav) {
   const tab = getTab(tabId);
   if (!tab) return;
@@ -2122,7 +2161,7 @@ async function loadVideoViaBlobFallback(tab, url) {
     const objUrl = URL.createObjectURL(blob);
     tab.el._objectUrl = objUrl;
     tab.el.src = objUrl;
-    tab.el.play().catch(() => {});
+    playWhenBuffered(tab);
     ensureAudioGraphIfBoosted(tab);
     updateVolumeGain(tab, settings.volBoost);
     applyFiltersToTab(tab);
@@ -2284,14 +2323,17 @@ document.getElementById('exitPlayerBtn').addEventListener('click', () => {
     closeTab(tab.id);
   }
 });
-document.getElementById('hideUiBtn').addEventListener('click', (e) => {
-  e.stopPropagation();
-  // This was a one-way switch before — tapping it again after the UI was
-  // already hidden did nothing (the check only ever let it turn ON), which
-  // is exactly why it looked "broken" on a second tap. Now it toggles both
-  // ways from the same button.
-  if (playerMode) exitPlayerModeFn(); else enterPlayerMode();
-});
+// hideUiBtn now doubles as a lock button (same tap / hold-for-Kids-Lock
+// behavior as lockBtn) instead of the old eye icon that hid the whole UI.
+const hideUiBtnEl = document.getElementById('hideUiBtn');
+let hideUiHoldTimer = null, hideUiHeldLong = false;
+function hideUiPressStart(e) { if (e) e.stopPropagation(); hideUiHeldLong = false; hideUiHoldTimer = setTimeout(() => { hideUiHeldLong = true; engageLock(true); }, 550); }
+function hideUiPressEnd(e) { if (e) e.stopPropagation(); clearTimeout(hideUiHoldTimer); if (!hideUiHeldLong) engageLock(false); }
+hideUiBtnEl.addEventListener('touchstart', hideUiPressStart, { passive: true });
+hideUiBtnEl.addEventListener('touchend', hideUiPressEnd);
+hideUiBtnEl.addEventListener('mousedown', hideUiPressStart);
+hideUiBtnEl.addEventListener('mouseup', hideUiPressEnd);
+hideUiBtnEl.addEventListener('mouseleave', () => clearTimeout(hideUiHoldTimer));
 document.getElementById('stage').addEventListener('click', (e) => {
   const tab = getTab(activeTabId);
   if (!tab || !tab.isVideo || playerMode || isLocked) return;
@@ -3498,8 +3540,8 @@ async function loadVideoViaHlsJs(tab, url) {
     if (tab.history[tab.historyIndex] === url) loadVideoViaBlobFallback(tab, url);
   });
   hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
-    if (tab.id === activeTabId) status.style.display = 'none';
-    tab.el.play().catch(() => {});
+    tab.el.pause();
+    playWhenBuffered(tab);
     ensureAudioGraphIfBoosted(tab);
     updateVolumeGain(tab, settings.volBoost);
     applyFiltersToTab(tab);
