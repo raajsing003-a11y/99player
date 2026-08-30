@@ -610,7 +610,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 8.0</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 9.0</div>
   </div>
 
   <div class="toolbar">
@@ -937,7 +937,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '8.0';
+const NOVA_VERSION = '9.0';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -3911,6 +3911,325 @@ function parseMp4KeyframeTimes(initSegment, mediaChunks) {
     return times.length ? times : null;
   } catch (e) { return null; }
 }
+// ================= Fragmented -> flat MP4 remux (fixes "seek always
+// snaps back to 0" on downloaded videos) =================
+// The blob assembled from HLS downloads (whether raw fMP4/CMAF .m4s
+// segments or mux.js's transmuxed output) is a *fragmented* MP4: a moov
+// with no sample table, followed by a series of independent moof/mdat
+// fragments. That format is exactly what MSE streaming wants, but for a
+// fully-downloaded file opened via <video src="blob:..."> it's a problem
+// on Android WebView specifically: WebView's media pipeline can't build a
+// random-access sample index for fragmented content from a blob at seek
+// time, so any seek — dragging the bar, tapping a timeline point, even the
+// 10s skip buttons — just resets playback to 0 instead of landing on the
+// target time. Desktop Chrome tolerates this fine, which is why it can be
+// easy to miss during testing.
+// The fix is to rewrite the file as a classic *flat/progressive* MP4:
+// one moov box holding a complete sample table (stts/stsc/stsz/stco, plus
+// stss and ctts where needed) up front, with every sample's exact byte
+// offset baked in. That's the same layout as an ordinary downloaded .mp4,
+// which WebView has always been able to seek natively — no fragments,
+// nothing to index on the fly.
+function mp4bReadBoxes(view, start, end) {
+  const boxes = [];
+  let offset = start;
+  while (offset + 8 <= end) {
+    const size = view.getUint32(offset);
+    const type = String.fromCharCode(
+      view.getUint8(offset + 4), view.getUint8(offset + 5),
+      view.getUint8(offset + 6), view.getUint8(offset + 7));
+    let boxSize = size, headerSize = 8;
+    if (size === 1) {
+      if (offset + 16 > end) break;
+      boxSize = view.getUint32(offset + 8) * 4294967296 + view.getUint32(offset + 12);
+      headerSize = 16;
+    } else if (size === 0) {
+      boxSize = end - offset;
+    }
+    if (boxSize < headerSize || offset + boxSize > end) break;
+    boxes.push({ type, start: offset, headerSize, size: boxSize });
+    offset += boxSize;
+  }
+  return boxes;
+}
+function mp4bFind(view, start, end, type) { return mp4bReadBoxes(view, start, end).find(b => b.type === type) || null; }
+function mp4bU32(n) { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, n >>> 0); return b; }
+function mp4bU16(n) { const b = new Uint8Array(2); new DataView(b.buffer).setUint16(0, n & 0xffff); return b; }
+function mp4bBox(type, ...bodyParts) {
+  const body = bodyParts.length ? concatUint8(bodyParts) : new Uint8Array(0);
+  return concatUint8([mp4bU32(body.length + 8), new TextEncoder().encode(type), body]);
+}
+function concatUint8(parts) {
+  let len = 0;
+  const norm = parts.map(p => (p instanceof Uint8Array ? p : new Uint8Array(p)));
+  norm.forEach(p => len += p.length);
+  const out = new Uint8Array(len);
+  let off = 0;
+  norm.forEach(p => { out.set(p, off); off += p.length; });
+  return out;
+}
+// Run-length-encodes a list of per-sample values into MP4's [count, value]
+// table pairs (used by stts for durations and ctts for composition offsets).
+function mp4bRunLength(values) {
+  const entries = [];
+  for (const v of values) {
+    if (entries.length && entries[entries.length - 1].value === v) entries[entries.length - 1].count++;
+    else entries.push({ count: 1, value: v });
+  }
+  return entries;
+}
+// Parses one track's samples out of every moof/mdat fragment in
+// mediaChunks that belongs to trackId, resolving each sample's absolute
+// byte offset within that chunk buffer. Handles both the common layouts:
+// base-data-offset given explicitly in tfhd, or (mux.js/most encoders'
+// default) "default-base-is-moof", where offsets are relative to the
+// moof's own start.
+function mp4bExtractTrackSamples(mediaChunks, trackId, defaults) {
+  const samples = []; // { size, duration, sync, ctsOffset, chunkIndex, byteOffset }
+  mediaChunks.forEach((chunkBuf, chunkIndex) => {
+    const buf = chunkBuf.buffer ? chunkBuf.buffer.slice(chunkBuf.byteOffset, chunkBuf.byteOffset + chunkBuf.byteLength) : chunkBuf;
+    const view = new DataView(buf);
+    const moofs = mp4bReadBoxes(view, 0, buf.byteLength).filter(b => b.type === 'moof');
+    for (const moof of moofs) {
+      const trafs = mp4bReadBoxes(view, moof.start + moof.headerSize, moof.start + moof.size).filter(b => b.type === 'traf');
+      for (const traf of trafs) {
+        const kids = mp4bReadBoxes(view, traf.start + traf.headerSize, traf.start + traf.size);
+        const tfhd = kids.find(b => b.type === 'tfhd');
+        if (!tfhd) continue;
+        const tfhdFlags = view.getUint32(tfhd.start + tfhd.headerSize) & 0xffffff;
+        let p = tfhd.start + tfhd.headerSize + 4;
+        const tid = view.getUint32(p); p += 4;
+        if (tid !== trackId) continue;
+        let baseDataOffset = null, sampleDescIndex = defaults.sampleDescIndex;
+        let defaultDuration = defaults.duration, defaultSize = defaults.size, defaultFlags = defaults.flags;
+        if (tfhdFlags & 0x000001) { baseDataOffset = view.getUint32(p) * 4294967296 + view.getUint32(p + 4); p += 8; }
+        if (tfhdFlags & 0x000002) { sampleDescIndex = view.getUint32(p); p += 4; }
+        if (tfhdFlags & 0x000008) { defaultDuration = view.getUint32(p); p += 4; }
+        if (tfhdFlags & 0x000010) { defaultSize = view.getUint32(p); p += 4; }
+        if (tfhdFlags & 0x000020) { defaultFlags = view.getUint32(p); p += 4; }
+        const defaultBaseIsMoof = !!(tfhdFlags & 0x020000);
+        const truns = kids.filter(b => b.type === 'trun');
+        let runBase = baseDataOffset != null ? baseDataOffset : (defaultBaseIsMoof || baseDataOffset == null ? moof.start : 0);
+        for (const trun of truns) {
+          const flags = view.getUint32(trun.start + trun.headerSize) & 0xffffff;
+          let q = trun.start + trun.headerSize + 4;
+          const sampleCount = view.getUint32(q); q += 4;
+          let dataOffset = 0;
+          if (flags & 0x000001) { dataOffset = view.getInt32(q); q += 4; }
+          let cursor = runBase + dataOffset;
+          for (let i = 0; i < sampleCount; i++) {
+            let dur = defaultDuration, size = defaultSize, sf = defaultFlags, cts = 0;
+            if (flags & 0x000100) { dur = view.getUint32(q); q += 4; }
+            if (flags & 0x000200) { size = view.getUint32(q); q += 4; }
+            if (flags & 0x000400) { sf = view.getUint32(q); q += 4; }
+            if (flags & 0x000800) { cts = view.getInt32(q); q += 4; }
+            const isSync = !((sf >>> 16) & 0x1); // sample_depends_on/is-non-sync bit
+            samples.push({ size, duration: dur, sync: isSync, ctsOffset: cts, chunkIndex, byteOffset: cursor });
+            cursor += size;
+          }
+          runBase = cursor; // next trun in same traf (rare) continues where this one left off
+        }
+      }
+    }
+  });
+  return samples;
+}
+// Reads a track's default sample-flags/size/duration from the init
+// segment's mvex>trex box (the tfhd/trun boxes only carry values when they
+// differ from these movie-wide defaults).
+function mp4bReadTrex(view, moov, trackId) {
+  const mvex = mp4bFind(view, moov.start + moov.headerSize, moov.start + moov.size, 'mvex');
+  if (!mvex) return { duration: 0, size: 0, flags: 0, sampleDescIndex: 1 };
+  const trexes = mp4bReadBoxes(view, mvex.start + mvex.headerSize, mvex.start + mvex.size).filter(b => b.type === 'trex');
+  for (const trex of trexes) {
+    const tid = view.getUint32(trex.start + trex.headerSize + 4);
+    if (tid !== trackId) continue;
+    return {
+      sampleDescIndex: view.getUint32(trex.start + trex.headerSize + 8),
+      duration: view.getUint32(trex.start + trex.headerSize + 12),
+      size: view.getUint32(trex.start + trex.headerSize + 16),
+      flags: view.getUint32(trex.start + trex.headerSize + 20)
+    };
+  }
+  return { duration: 0, size: 0, flags: 0, sampleDescIndex: 1 };
+}
+// Builds a flat stbl (sample table) box from an extracted sample list plus
+// the original stsd (codec config) copied verbatim from the init segment.
+function mp4bBuildStbl(stsdBytes, samples, mdatSampleOffsets) {
+  const durations = samples.map(s => s.duration || 1);
+  const stts = mp4bBox('stts',
+    new Uint8Array(4), mp4bU32(mp4bRunLength(durations).length),
+    concatUint8(mp4bRunLength(durations).flatMap(e => [mp4bU32(e.count), mp4bU32(e.value)])));
+  const anyCts = samples.some(s => s.ctsOffset);
+  let ctts = new Uint8Array(0);
+  if (anyCts) {
+    const ctsRuns = mp4bRunLength(samples.map(s => s.ctsOffset));
+    ctts = mp4bBox('ctts', new Uint8Array(4), mp4bU32(ctsRuns.length),
+      concatUint8(ctsRuns.flatMap(e => [mp4bU32(e.count), mp4bU32(e.value)])));
+  }
+  // One chunk per sample keeps stsc/stco trivial and correct; it costs a
+  // slightly larger stco table than grouping samples into bigger chunks,
+  // which is a non-issue at typical sample counts (a feature-length video
+  // is at most a few hundred thousand samples => a few hundred KB of table).
+  const stsc = mp4bBox('stsc', new Uint8Array(4), mp4bU32(1),
+    concatUint8([mp4bU32(1), mp4bU32(1), mp4bU32(1)]));
+  const stsz = mp4bBox('stsz', new Uint8Array(4), mp4bU32(0), mp4bU32(samples.length),
+    concatUint8(samples.map(s => mp4bU32(s.size))));
+  const stco = mp4bBox('stco', new Uint8Array(4), mp4bU32(mdatSampleOffsets.length),
+    concatUint8(mdatSampleOffsets.map(o => mp4bU32(o))));
+  const syncIdxs = [];
+  samples.forEach((s, i) => { if (s.sync) syncIdxs.push(i + 1); });
+  let stss = new Uint8Array(0);
+  if (syncIdxs.length && syncIdxs.length < samples.length) {
+    stss = mp4bBox('stss', new Uint8Array(4), mp4bU32(syncIdxs.length), concatUint8(syncIdxs.map(mp4bU32)));
+  }
+  return mp4bBox('stbl', stsdBytes, stts, ctts, stsc, stsz, stco, stss);
+}
+// Top-level entry point: takes the init segment (moov) + ordered
+// moof/mdat media chunks exactly as already collected for saving/playback,
+// and returns a flat progressive MP4 Blob. Returns null (caller keeps the
+// original fragmented blob) if anything about the input doesn't match
+// what's expected — a video that still plays from the start is strictly
+// better than a remux that silently produces a broken file.
+async function remuxFragmentedToFlatMp4(initSegment, mediaChunks) {
+  try {
+    const initBuf = initSegment.buffer ? initSegment.buffer.slice(initSegment.byteOffset, initSegment.byteOffset + initSegment.byteLength) : initSegment;
+    const initView = new DataView(initBuf);
+    const moov = mp4bFind(initView, 0, initBuf.byteLength, 'moov');
+    if (!moov) return null;
+    const traks = mp4bReadBoxes(initView, moov.start + moov.headerSize, moov.start + moov.size).filter(b => b.type === 'trak');
+    if (!traks.length) return null;
+
+    const trackDefs = []; // { trackId, timescale, trakHeaderBytes(tkhd), stsdBytes, samples, isVideo }
+    for (const trak of traks) {
+      const kids = mp4bReadBoxes(initView, trak.start + trak.headerSize, trak.start + trak.size);
+      const tkhd = kids.find(b => b.type === 'tkhd');
+      const mdia = kids.find(b => b.type === 'mdia');
+      if (!tkhd || !mdia) continue;
+      const tkhdVer = initView.getUint8(tkhd.start + tkhd.headerSize);
+      const trackId = initView.getUint32(tkhd.start + tkhd.headerSize + (tkhdVer === 1 ? 20 : 12));
+      const mdiaKids = mp4bReadBoxes(initView, mdia.start + mdia.headerSize, mdia.start + mdia.size);
+      const mdhd = mdiaKids.find(b => b.type === 'mdhd');
+      const hdlr = mdiaKids.find(b => b.type === 'hdlr');
+      const minf = mdiaKids.find(b => b.type === 'minf');
+      if (!mdhd || !hdlr || !minf) continue;
+      const mdhdVer = initView.getUint8(mdhd.start + mdhd.headerSize);
+      const timescale = initView.getUint32(mdhd.start + mdhd.headerSize + (mdhdVer === 1 ? 20 : 12));
+      const handlerType = String.fromCharCode(
+        initView.getUint8(hdlr.start + hdlr.headerSize + 8), initView.getUint8(hdlr.start + hdlr.headerSize + 9),
+        initView.getUint8(hdlr.start + hdlr.headerSize + 10), initView.getUint8(hdlr.start + hdlr.headerSize + 11));
+      const minfKids = mp4bReadBoxes(initView, minf.start + minf.headerSize, minf.start + minf.size);
+      const stbl = minfKids.find(b => b.type === 'stbl');
+      if (!stbl) continue;
+      const stblKids = mp4bReadBoxes(initView, stbl.start + stbl.headerSize, stbl.start + stbl.size);
+      const stsd = stblKids.find(b => b.type === 'stsd');
+      if (!stsd) continue;
+      const stsdBytes = new Uint8Array(initBuf, stsd.start, stsd.size);
+      const trex = mp4bReadTrex(initView, moov, trackId);
+      const samples = mp4bExtractTrackSamples(mediaChunks, trackId, trex);
+      if (!samples.length) continue;
+      trackDefs.push({
+        trackId, timescale, isVideo: handlerType === 'vide',
+        tkhdBytes: new Uint8Array(initBuf, tkhd.start, tkhd.size),
+        hdlrBytes: new Uint8Array(initBuf, hdlr.start, hdlr.size),
+        stsdBytes, samples
+      });
+    }
+    if (!trackDefs.length) return null;
+
+    // Lay out one mdat containing every track's samples back-to-back
+    // (track order = trak order), and record each sample's absolute file
+    // offset for that track's stco — computed once the exact size of
+    // everything before mdat (ftyp + moov) is known below.
+    const ftyp = mp4bFind(initView, 0, initBuf.byteLength, 'ftyp');
+    const ftypBytes = ftyp ? new Uint8Array(initBuf, ftyp.start, ftyp.size) : mp4bBox('ftyp', new TextEncoder().encode('isom'), mp4bU32(512), new TextEncoder().encode('isomiso2avc1mp41'));
+
+    let mdatCursor = 0;
+    const trackSampleData = [];
+    for (const t of trackDefs) {
+      const relOffsets = [];
+      const chunks = [];
+      for (const s of t.samples) {
+        relOffsets.push(mdatCursor);
+        mdatCursor += s.size;
+        const chunkBuf = mediaChunks[s.chunkIndex];
+        const src = chunkBuf.buffer ? chunkBuf.buffer.slice(chunkBuf.byteOffset, chunkBuf.byteOffset + chunkBuf.byteLength) : chunkBuf;
+        chunks.push(new Uint8Array(src, s.byteOffset, s.size));
+      }
+      trackSampleData.push({ relOffsets, bytes: concatUint8(chunks) });
+    }
+
+    // mvhd: minimal, movie-wide header — timescale of 1000 (ms) with the
+    // longest track's duration expressed in it; players use each track's
+    // own mdhd/stts for actual playback timing, so this mainly needs to be
+    // present and non-zero, not frame-accurate.
+    const overallDurationMs = Math.round(Math.max(...trackDefs.map(t =>
+      t.samples.reduce((a, s) => a + s.duration, 0) / t.timescale * 1000)));
+    const mvhd = mp4bBox('mvhd', concatUint8([
+      new Uint8Array(4), // version+flags
+      mp4bU32(0), mp4bU32(0), // creation/modification time
+      mp4bU32(1000), mp4bU32(overallDurationMs || 1),
+      mp4bU32(0x00010000), mp4bU16(0x0100), new Uint8Array(2 + 8), // rate, volume, reserved
+      concatUint8([0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000].map(mp4bU32)), // unity matrix
+      new Uint8Array(24), // pre_defined
+      mp4bU32(trackDefs.length + 1) // next_track_ID
+    ]));
+
+    const trakBoxes = trackDefs.map((t, idx) => {
+      const stbl = mp4bBuildStbl(t.stsdBytes, t.samples, trackSampleData[idx].relOffsets);
+      // dinf/url ("self-contained" data reference) — required inside minf
+      // for players to know sample data lives in this same file.
+      const selfContainedUrlBox = mp4bBox('url ', mp4bU32(0x00000001)); // flags=1: media data is in this same file
+      const dinf = mp4bBox('dinf', mp4bBox('dref', new Uint8Array(4), mp4bU32(1), selfContainedUrlBox));
+      const mediaHeaderBox = t.isVideo
+        ? mp4bBox('vmhd', mp4bU32(0x00000001), new Uint8Array(8)) // flags=1 required by spec; graphicsmode+opcolor=0
+        : mp4bBox('smhd', new Uint8Array(8));
+      const minf = mp4bBox('minf', mediaHeaderBox, dinf, stbl);
+      const mdhd = mp4bBox('mdhd', concatUint8([
+        new Uint8Array(4), mp4bU32(0), mp4bU32(0),
+        mp4bU32(t.timescale), mp4bU32(t.samples.reduce((a, s) => a + s.duration, 0)),
+        mp4bU16(0x55c4), new Uint8Array(2) // language="und", pre_defined
+      ]));
+      const mdia = mp4bBox('mdia', mdhd, t.hdlrBytes, minf);
+      return mp4bBox('trak', t.tkhdBytes, mdia);
+    });
+    const moovOut = mp4bBox('moov', mvhd, ...trakBoxes);
+
+    // Now that ftyp+moov's exact size is known, convert every track's
+    // relative-to-mdat-start offsets into absolute file offsets and patch
+    // the stco boxes we already built — cheaper than rebuilding trakBoxes
+    // a second time with the final numbers baked in from the start.
+    const mdatHeaderSize = 8;
+    const preMdatSize = ftypBytes.length + moovOut.length + mdatHeaderSize;
+    // patch: find each stco box within moovOut and add preMdatSize to every entry
+    const moovView = new DataView(moovOut.buffer, moovOut.byteOffset, moovOut.byteLength);
+    // Only walk into boxes that are plain box containers with no
+    // extra fields before their children (moov/trak/mdia/minf/stbl) —
+    // other box types (stsd, dref, mvhd, stts, ...) either aren't
+    // containers or are "full box" containers with a version/flags/count
+    // prefix that would throw off naive child-box scanning.
+    const PURE_CONTAINERS = new Set(['moov', 'trak', 'mdia', 'minf', 'stbl']);
+    (function patchStco(start, end) {
+      for (const b of mp4bReadBoxes(moovView, start, end)) {
+        if (b.type === 'stco') {
+          const count = moovView.getUint32(b.start + b.headerSize + 4);
+          for (let i = 0; i < count; i++) {
+            const off = b.start + b.headerSize + 8 + i * 4;
+            moovView.setUint32(off, moovView.getUint32(off) + preMdatSize);
+          }
+        } else if (PURE_CONTAINERS.has(b.type)) {
+          patchStco(b.start + b.headerSize, b.start + b.size);
+        }
+      }
+    })(0, moovOut.byteLength);
+
+    const mdatBody = concatUint8(trackSampleData.map(t => t.bytes));
+    const mdat = mp4bBox('mdat', mdatBody);
+    return new Blob([ftypBytes, moovOut, mdat], { type: 'video/mp4' });
+  } catch (e) {
+    return null;
+  }
+}
 async function fetchHlsPlaylistSegments(mediaPlaylistUrl, signal) {
   const fetchText = async (u) => {
     try {
@@ -4247,8 +4566,19 @@ async function playHlsProgressive(tab, url) {
   // Build the same completed file for offline saving, reusing what was
   // already downloaded/converted instead of fetching everything again.
   if (failedSegments === 0) {
-    const blob = isFmp4Guess ? new Blob(initFmp4Buf ? [initFmp4Buf, ...parts] : parts, { type: 'video/mp4' })
+    const fragInit = isFmp4Guess ? initFmp4Buf : initSegment;
+    const fragChunks = isFmp4Guess ? parts : mediaChunks;
+    let blob = isFmp4Guess ? new Blob(initFmp4Buf ? [initFmp4Buf, ...parts] : parts, { type: 'video/mp4' })
       : (initSegment && mediaChunks.length ? new Blob([initSegment, ...mediaChunks], { type: 'video/mp4' }) : null);
+    // Fragmented MP4 (what's built above) can't be seeked from a blob: URL
+    // on Android WebView — every seek just snaps back to 0. Rewrite it as
+    // a flat/progressive MP4 (single sample table) before saving, so the
+    // offline copy is actually seekable. Falls back to the fragmented blob
+    // untouched if the remux can't be done for any reason.
+    if (blob && fragInit && fragChunks && fragChunks.length) {
+      const flat = await remuxFragmentedToFlatMp4(fragInit, fragChunks);
+      if (flat) blob = flat;
+    }
     if (blob) {
       tab._savedBlob = blob;
       tab._savedFilename = guessFilenameFromUrl(url, 'video/mp4');
@@ -4348,6 +4678,13 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
     // data — without it players guess, and audio/video end up misaligned.
     let initBuf = null;
     if (initSegmentUrl) { try { initBuf = await fetchSegment(initSegmentUrl); } catch (e) {} }
+    // Raw fMP4/CMAF segments are fragmented MP4 just like mux.js's output
+    // below — same "seek snaps back to 0 on Android WebView" problem, same
+    // fix: rewrite as a flat/progressive MP4 before returning it to be saved.
+    if (initBuf) {
+      const flat = await remuxFragmentedToFlatMp4(initBuf, parts);
+      if (flat) return flat;
+    }
     const fmp4Blob = new Blob(initBuf ? [initBuf, ...parts] : parts, { type: 'video/mp4' });
     // fMP4/CMAF segments are individually well-formed (each has its own
     // moof/mdat with correct sample tables from the init segment), so they
@@ -4401,6 +4738,13 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
     transmuxer.flush();
     await muxDonePromise;
     if (!initSegment || !mediaChunks.length) throw new Error('Remux produced no playable data');
+    // Flat MP4 first — a flat file has a real sample table, so it needs no
+    // keyframe-snap workaround for seeking at all (that hack was only ever
+    // there to work around fragmented playback, see preciseSeek). Only
+    // fall back to the fragmented blob + boundary-snapping if the flat
+    // rewrite fails for some reason.
+    const flat = await remuxFragmentedToFlatMp4(initSegment, mediaChunks);
+    if (flat) return flat;
     const muxedBlob = new Blob([initSegment, ...mediaChunks], { type: 'video/mp4' });
     // Carry keyframe-aligned start times along with the blob so playback
     // can snap seeks to them (see preciseSeek) instead of an arbitrary
