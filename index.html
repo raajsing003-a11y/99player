@@ -38,22 +38,42 @@
   .app.immersive-mode .stage { flex:1 1 100%; }
 
   .exit-player-btn {
-    position:absolute; top:10px; left:10px; z-index:10;
-    width:44px; height:44px; border-radius:50%; border:none; background:rgba(0,0,0,0.75);
-    color:#fff; font-size:19px; cursor:pointer; display:none;
+    position:relative; z-index:2;
+    width:42px; height:42px; border-radius:50%; border:none; background:rgba(0,0,0,0.75);
+    color:#fff; font-size:18px; cursor:pointer; display:none;
     align-items:center; justify-content:center; backdrop-filter:blur(6px);
-    box-shadow:0 2px 8px rgba(0,0,0,0.4);
+    box-shadow:0 2px 8px rgba(0,0,0,0.4); flex-shrink:0;
   }
   .app.player-mode .exit-player-btn { display:flex; }
 
   .player-folder-btn {
-    position:absolute; top:10px; left:62px; z-index:10;
-    width:44px; height:44px; border-radius:50%; border:none; background:rgba(0,0,0,0.75);
-    color:#fff; font-size:18px; cursor:pointer; display:none;
+    position:relative; z-index:2;
+    width:42px; height:42px; border-radius:50%; border:none; background:rgba(0,0,0,0.75);
+    color:#fff; font-size:17px; cursor:pointer; display:none;
     align-items:center; justify-content:center; backdrop-filter:blur(6px);
-    box-shadow:0 2px 8px rgba(0,0,0,0.4);
+    box-shadow:0 2px 8px rgba(0,0,0,0.4); flex-shrink:0;
   }
   .player-folder-btn.visible { display:flex; }
+
+  /* Single row that owns the whole top-left corner — exit / folder / kids-lock
+     badge all live here as normal flex children instead of each guessing its
+     own absolute left offset. That was the cause of the overlap: several
+     buttons independently claimed overlapping pixel coordinates (10px,
+     50px, 62px...) that only worked for one particular combination of which
+     buttons happened to be visible at once. A flex row lays out whichever
+     children are actually visible, in order, with a fixed gap — so nothing
+     can land on top of anything else no matter which combination shows. */
+  .player-top-left {
+    position:absolute; top:10px; left:10px; z-index:10;
+    display:flex; align-items:center; gap:8px;
+  }
+  .kids-badge {
+    position:relative; z-index:2;
+    background:rgba(217,119,87,0.85); color:#fff; font-size:10.5px;
+    padding:0 10px; height:42px; border-radius:21px; display:none;
+    align-items:center; flex-shrink:0; white-space:nowrap;
+  }
+  .kids-badge.visible { display:flex; }
 
   .folder-overlay {
     position:fixed; inset:0; z-index:60; background:rgba(0,0,0,0.72);
@@ -90,10 +110,10 @@
   .folder-row .fr-del { background:none; border:none; color:#e57373; font-size:16px; padding:6px; flex-shrink:0; }
 
   .exit-immersive-btn {
-    position:absolute; top:10px; left:10px; z-index:6;
-    width:32px; height:32px; border-radius:50%; border:none; background:rgba(0,0,0,0.55);
-    color:#fff; font-size:15px; cursor:pointer; display:none;
-    align-items:center; justify-content:center; backdrop-filter:blur(6px);
+    position:relative; z-index:2;
+    width:36px; height:36px; border-radius:50%; border:none; background:rgba(0,0,0,0.55);
+    color:#fff; font-size:14px; cursor:pointer; display:none;
+    align-items:center; justify-content:center; backdrop-filter:blur(6px); flex-shrink:0;
   }
   .app.immersive-mode .exit-immersive-btn { display:flex; }
 
@@ -334,12 +354,6 @@
   .lock-card.pressed .lock-icon { transform:scale(0.88); }
   .lock-label { font-size:13px; color:#eee; font-weight:500; letter-spacing:.2px; }
   .lock-sublabel { font-size:10.5px; color:#999; margin-top:-4px; }
-  .kids-badge {
-    position:absolute; top:10px; left:50px; z-index:8;
-    background:rgba(217,119,87,0.85); color:#fff; font-size:10.5px;
-    padding:4px 9px; border-radius:10px; display:none;
-  }
-  .kids-badge.visible { display:block; }
   .auto-dl-indicator {
     position:absolute; top:58px; right:10px; z-index:15;
     background:rgba(0,0,0,0.7); color:#fff; font-size:13px;
@@ -650,9 +664,12 @@
       <div class="home-hint-text">Search the web, paste a link, or open a video from your device.</div>
     </div>
 
-    <button class="exit-player-btn" id="exitPlayerBtn" title="Back to browser">&#8592;</button>
-    <button class="player-folder-btn" id="playerFolderBtn" title="Downloaded videos">&#128193;</button>
-    <button class="exit-immersive-btn" id="exitImmersiveBtn" title="Show toolbar">&#8593;</button>
+    <div class="player-top-left" id="playerTopLeft">
+      <button class="exit-player-btn" id="exitPlayerBtn" title="Back to browser">&#8592;</button>
+      <button class="player-folder-btn" id="playerFolderBtn" title="Downloaded videos">&#128193;</button>
+      <button class="exit-immersive-btn" id="exitImmersiveBtn" title="Show toolbar">&#8593;</button>
+      <div class="kids-badge" id="kidsBadge">Kids Lock &#128274;</div>
+    </div>
     <button class="grab-video-btn" id="grabVideoBtn" title="Paste a video link">&#128279; Paste link</button>
     <div class="folder-overlay" id="folderOverlay">
       <div class="folder-card">
@@ -686,7 +703,6 @@
         <div class="extract-note">Works best on blogs, news sites and pages that host their own video file. Sites like YouTube, Instagram, Facebook or Netflix protect their video streams and can't be opened this way &mdash; paste a direct video link instead.</div>
       </div>
     </div>
-    <div class="kids-badge" id="kidsBadge">Kids Lock &#128274;</div>
     <div class="auto-dl-indicator" id="autoDlIndicator" style="display:none;">&#8681; <span id="autoDlPct">0%</span></div>
 
     <div class="quick-controls" id="quickControls" style="display:none;">
@@ -1051,6 +1067,22 @@ function openOfflineDB() {
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
+    // Another tab/instance of this page has the same DB open on an older
+    // version and hasn't closed it — indexedDB.open() then just sits there
+    // forever with neither onsuccess NOR onerror ever firing. Previously
+    // that meant a save would silently hang mid-download with no error and
+    // no timeout: exactly "reaches 100% and then nothing happens." A blocked
+    // open now fails loudly after a few seconds instead of hanging forever.
+    req.onblocked = () => {
+      setTimeout(() => { if (offlineDBPromise) reject(new Error('Offline storage is open in another tab — close it and try again')); }, 4000);
+    };
+  }).catch(err => {
+    // Don't memoize a failed open — a transient failure (blocked DB, one-off
+    // browser hiccup) used to permanently poison every save for the rest of
+    // the session, because the SAME rejected promise was returned forever
+    // after. Clearing it here means the next attempt gets a fresh try.
+    offlineDBPromise = null;
+    throw err;
   });
   return offlineDBPromise;
 }
@@ -3244,21 +3276,35 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
   if (!segments.length) throw new Error('No segments found in playlist');
 
   const fetchSegment = async (u) => {
-    try {
-      const r = await fetchWithTimeout(u, { signal }, 15000);
-      if (r.ok) return await r.arrayBuffer();
-    } catch (e) {}
-    for (const proxyFn of FAST_CORS_PROXIES.slice(1)) {
+    // Each segment gets a real retry budget instead of one shot. Previously a
+    // single segment failing anywhere in the list (a brief network blip, one
+    // proxy hiccup) threw immediately and killed the ENTIRE download — even
+    // if 99% of segments had already downloaded successfully. That's exactly
+    // why downloads could reach the finish line and then just vanish with
+    // nothing saved: one bad segment near the end took the whole thing down.
+    // Now each segment gets 2 full passes (direct + every proxy) before
+    // giving up, with a short pause between passes so a transient blip has
+    // time to clear.
+    for (let pass = 0; pass < 2; pass++) {
       try {
-        const r = await fetchWithTimeout(proxyFn(u), { signal }, 15000);
+        const r = await fetchWithTimeout(u, { signal }, 15000);
         if (r.ok) return await r.arrayBuffer();
       } catch (e) {}
+      for (const proxyFn of FAST_CORS_PROXIES.slice(1)) {
+        try {
+          const r = await fetchWithTimeout(proxyFn(u), { signal }, 15000);
+          if (r.ok) return await r.arrayBuffer();
+        } catch (e) {}
+      }
+      if (signal && signal.aborted) break;
+      if (pass === 0) await new Promise(r => setTimeout(r, 1200));
     }
     throw new Error('Segment failed: ' + u);
   };
 
   const parts = new Array(segments.length);
   let completed = 0;
+  let failedSegments = 0;
   // Worker-pool concurrency for fetching .ts/.m4s segments in parallel — 5 was
   // conservative and left bandwidth on the table on fast connections; segments
   // are small (a few hundred KB - a couple MB each) so a much higher pool keeps
@@ -3269,13 +3315,25 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
   async function worker() {
     while (nextIndex < segments.length) {
       const idx = nextIndex++;
-      parts[idx] = await fetchSegment(segments[idx]);
+      try {
+        parts[idx] = await fetchSegment(segments[idx]);
+      } catch (e) {
+        if (signal && signal.aborted) throw e; // real cancel — stop the whole pool
+        failedSegments++; // keep going; we'll decide what to do once every segment has been tried
+        continue;
+      }
       completed++;
       if (onProgress) onProgress(Math.min(99, (completed / segments.length) * 100), completed, segments.length);
       if (onStatus) onStatus('Downloading segment ' + completed + '/' + segments.length + '…');
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, segments.length) }, worker));
+  if (failedSegments > 0) {
+    // A handful of unrecoverable segments (dead CDN edge, expired signed URL
+    // on just that piece, etc.) is still a broken file — say so clearly
+    // instead of silently saving a video that will stutter or fail to play.
+    throw new Error(failedSegments + ' of ' + segments.length + ' segments could not be downloaded after retrying — the source may have removed or expired part of this stream.');
+  }
   const isFmp4 = /\.m4s(\?|$)/i.test(segments[0]) || /#EXT-X-MAP/.test(text);
   return new Blob(parts, { type: isFmp4 ? 'video/mp4' : 'video/mp2t' });
 }
@@ -3928,7 +3986,20 @@ async function autoDownloadInBackground(tab, url) {
     tab._autoDLPct = 100;
     updateAutoDlIndicator(tab);
     swapTabToBlob(tab, URL.createObjectURL(blob), blob, url);
-    saveOfflineVideo({ id: 'v' + Date.now() + Math.random().toString(36).slice(2), url, title: guessFilenameFromUrl(url), time: Date.now(), size: blob.size, blob });
+    // Previously this call wasn't awaited or checked at all — if the
+    // IndexedDB write failed (storage full, blob too large, DB error), the
+    // video would keep playing fine from the in-memory blob (so nothing
+    // LOOKED wrong) but it would never actually show up in Downloads/Offline
+    // later, with zero indication anything had gone wrong. Now it's awaited,
+    // retried on a storage-full error (same as the manual download button),
+    // and a real failure that survives the retry shows a brief, unobtrusive
+    // toast instead of just vanishing silently.
+    const saveResult = await saveOfflineVideo({ id: 'v' + Date.now() + Math.random().toString(36).slice(2), url, title: guessFilenameFromUrl(url), time: Date.now(), size: blob.size, blob });
+    if (!saveResult.ok && tab.id === activeTabId) {
+      showMiniToast(saveResult.error === 'storage-full'
+        ? "Playing, but couldn't save offline — storage full"
+        : "Playing, but couldn't save offline copy");
+    }
   } catch (e) {
     // Silent by design for a user cancel — but a real failure (bad network,
     // every relay down, etc.) should say so briefly instead of the
