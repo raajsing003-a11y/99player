@@ -937,7 +937,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '4.6';
+const NOVA_VERSION = '4.8';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -3667,7 +3667,7 @@ async function remuxTsPartsToMp4(parts, onStatus, onProgress) {
   await ensureMuxJs();
   return new Promise((resolve, reject) => {
     try {
-      const transmuxer = new muxjs.mp4.Transmuxer();
+      const transmuxer = new muxjs.mp4.Transmuxer({ keepOriginalTimestamps: true });
       let initSegment = null;
       const mediaChunks = [];
       transmuxer.on('data', (segment) => {
@@ -3903,7 +3903,7 @@ async function playHlsProgressive(tab, url) {
   const muxDonePromise = new Promise((res) => { muxResolve = res; });
   if (!isFmp4Guess) {
     await ensureMuxJs();
-    transmuxer = new muxjs.mp4.Transmuxer();
+    transmuxer = new muxjs.mp4.Transmuxer({ keepOriginalTimestamps: true });
     transmuxer.on('data', (segment) => {
       if (segment.initSegment && !initSegment) { initSegment = segment.initSegment; enqueue(initSegment.buffer.slice(0)); }
       if (segment.data && segment.data.length) {
@@ -4083,11 +4083,17 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
 
   // Download is 100% complete — now run the conversion pass, from scratch,
   // over every downloaded segment in order.
+  // keepOriginalTimestamps: true keeps every frame's real source timestamp
+  // instead of letting mux.js recompute a running timeline as it mixes
+  // audio and video — without it, small per-segment rounding differences
+  // between the audio and video timestamps mux.js derives on its own
+  // compound over a long video, which is what caused audio to drift further
+  // out of sync the longer offline-saved playback ran.
   let muxResolve, muxReject;
   const muxDonePromise = new Promise((res, rej) => { muxResolve = res; muxReject = rej; });
   try {
     await ensureMuxJs();
-    transmuxer = new muxjs.mp4.Transmuxer();
+    transmuxer = new muxjs.mp4.Transmuxer({ keepOriginalTimestamps: true });
     transmuxer.on('data', (segment) => {
       if (segment.initSegment && !initSegment) initSegment = segment.initSegment;
       if (segment.data && segment.data.length) mediaChunks.push(segment.data);
@@ -4479,10 +4485,26 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       }
       const partBlobs = new Array(pieces.length);
       const loaded = new Array(pieces.length).fill(0);
+      let piecesDone = 0;
+      const dlStartTime = Date.now();
+      let lastStatusTime = 0;
       const reportProgress = () => {
         if (!onProgress) return;
         const total = loaded.reduce((a, b) => a + b, 0);
         onProgress(Math.min(99, (total / len) * 100), total, len);
+        // Throttled so this doesn't touch the DOM on every single network
+        // read (which fires constantly across 100+ parallel pieces) — a
+        // few updates a second is plenty for a human to read, and keeps the
+        // status text from itself becoming a source of jank on a phone.
+        const now = Date.now();
+        if (onStatus && now - lastStatusTime > 300) {
+          lastStatusTime = now;
+          const elapsed = (now - dlStartTime) / 1000;
+          const speed = elapsed > 0.3 ? total / elapsed : 0;
+          onStatus('Downloading ' + formatBytes(total) + ' / ' + formatBytes(len)
+            + ' \u2014 ' + formatBytes(speed) + '/s \u2014 ' + activeWorkers + ' connections'
+            + ' (' + piecesDone + '/' + pieces.length + ' parts)');
+        }
       };
       let nextPiece = 0;
       let activeWorkers = 0;
@@ -4497,7 +4519,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // growing the moment anything fails, so a server/network that can't
       // sustain this many connections backs the pool off on its own instead
       // of forcing it and risking a broken download.
-      const MAX_WORKERS = 160;
+      const MAX_WORKERS = 200;
       const fetchPiece = async (idx, attemptsLeft) => {
         const [start, end] = pieces[idx];
         try {
@@ -4538,6 +4560,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
             while (nextPiece < pieces.length && !firstFatalError) {
               const idx = nextPiece++;
               partBlobs[idx] = await fetchPiece(idx, 2);
+              piecesDone++;
             }
           } catch (e) {
             if (!firstFatalError) firstFatalError = e;
@@ -4548,7 +4571,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
         allWorkerPromises.push(p);
         return p;
       }
-      const START_WORKERS = 48;
+      const START_WORKERS = 64;
       for (let i = 0; i < Math.min(START_WORKERS, pieces.length); i++) launchWorker();
       // Ramp: every 60ms, if nothing has failed recently and there's still
       // unclaimed work, add up to 3 more workers — up to MAX_WORKERS. Stops
