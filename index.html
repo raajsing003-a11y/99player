@@ -3462,7 +3462,7 @@ async function remuxTsPartsToMp4(parts, onStatus, onProgress) {
         transmuxer.push(new Uint8Array(parts[i]));
         i++;
         if (onStatus) onStatus('Converting for playback\u2026 (' + i + '/' + parts.length + ')');
-        if (onProgress) onProgress(99 + Math.round((i / parts.length) * 1));
+        if (onProgress) onProgress(90 + Math.round((i / parts.length) * 10));
         setTimeout(pushNext, 0);
       }
       pushNext();
@@ -3555,7 +3555,7 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
   // are small (a few hundred KB - a couple MB each) so a much higher pool keeps
   // many in flight at once without any single request being large enough to
   // matter individually.
-  const CONCURRENCY = 24;
+  const CONCURRENCY = 28;
   let nextIndex = 0;
   async function worker() {
     while (nextIndex < segments.length) {
@@ -3568,7 +3568,7 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
         continue;
       }
       completed++;
-      if (onProgress) onProgress(Math.min(99, (completed / segments.length) * 100), completed, segments.length);
+      if (onProgress) onProgress(Math.min(90, (completed / segments.length) * 90), completed, segments.length);
       if (onStatus) onStatus('Downloading segment ' + completed + '/' + segments.length + '…');
     }
   }
@@ -3943,7 +3943,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // THIS server on THIS connection, rather than a number picked in
       // advance that might be too conservative on a fast line or too
       // aggressive against a strict server.
-      const PIECE_SIZE = 1 * 1024 * 1024;
+      const PIECE_SIZE = 1.5 * 1024 * 1024;
       const pieceCount = Math.max(1, Math.ceil(len / PIECE_SIZE));
       const pieces = [];
       for (let i = 0; i < pieceCount; i++) {
@@ -3967,9 +3967,13 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // that many parallel pieces at once was a plausible cause of downloads
       // silently dying partway through (the whole page/WebView getting
       // killed under memory pressure looks identical to "it just stopped").
-      // A gentler ceiling still saturates a normal connection but leaves
-      // headroom instead of maxing the device out.
-      const MAX_WORKERS = 16;
+      // 24 gives real headroom above the previous 16 while staying well
+      // clear of that failure zone — the ramp below only ever ADDS workers
+      // when every recent piece has succeeded cleanly, and permanently stops
+      // growing the moment anything fails, so a server/network that can't
+      // sustain this many connections backs the pool off on its own instead
+      // of forcing it and risking a broken download.
+      const MAX_WORKERS = 24;
       const fetchPiece = async (idx, attemptsLeft) => {
         const [start, end] = pieces[idx];
         try {
@@ -4020,15 +4024,18 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
         allWorkerPromises.push(p);
         return p;
       }
-      const START_WORKERS = 6;
+      const START_WORKERS = 8;
       for (let i = 0; i < Math.min(START_WORKERS, pieces.length); i++) launchWorker();
-      // Ramp: every 800ms, if nothing has failed recently and there's still
+      // Ramp: every 500ms, if nothing has failed recently and there's still
       // unclaimed work, add another worker — up to MAX_WORKERS. Stops ramping
       // permanently once any real failure is seen (server pushing back).
+      // 500ms (down from 800ms) gets the pool up to its useful concurrency
+      // sooner — noticeable on shorter videos that used to finish before the
+      // slower ramp ever got there.
       const ramp = setInterval(() => {
         if (rampBlocked || firstFatalError || nextPiece >= pieces.length || activeWorkers >= MAX_WORKERS) { clearInterval(ramp); return; }
         launchWorker();
-      }, 800);
+      }, 500);
       // Wait for the whole pool to actually drain — poll instead of a single
       // Promise.all call, since the set of promises to wait for keeps
       // growing for as long as the ramp is still adding workers.
