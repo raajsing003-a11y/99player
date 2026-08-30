@@ -73,6 +73,17 @@
     scrollbar-width:none;
   }
   .tabbar::-webkit-scrollbar { display:none; }
+  .tabbar-brand {
+    flex-shrink:0; display:flex; align-items:center; gap:5px;
+    padding:0 8px 8px 2px; color:#eee; font-size:12.5px; font-weight:700;
+    white-space:nowrap; border-right:1px solid #2a2a2a; margin-right:2px;
+  }
+  .tabbar-brand .logo-dot {
+    width:7px; height:7px; border-radius:50%;
+    background:conic-gradient(from 200deg,#d97757,#e8c07d,#7ab8d9,#8e7ad9,#d97757);
+    flex-shrink:0;
+  }
+  .app.player-mode .tabbar-brand, .app.immersive-mode .tabbar-brand { display:none; }
   .tab {
     display:flex; align-items:center; gap:6px;
     max-width:150px; padding:9px 10px; border-radius:12px 12px 0 0;
@@ -451,13 +462,30 @@
   .extract-note { font-size:10.5px; color:#767676; line-height:1.5; margin-top:2px; }
 
   .quality-list { display:flex; flex-direction:column; gap:6px; max-height:180px; overflow-y:auto; }
-  .quality-list button {
-    display:flex; justify-content:space-between; align-items:center;
+  .quality-list .quality-row { display:flex; align-items:center; gap:6px; }
+  .quality-list .quality-row button.quality-pick {
+    flex:1; display:flex; justify-content:space-between; align-items:center;
     padding:11px 14px; border-radius:12px; border:1px solid #333; background:#262626;
     color:#eee; font-size:13px; cursor:pointer;
   }
-  .quality-list button:active { background:#333; }
-  .quality-list button .badge { font-size:11px; color:#d97757; font-weight:600; }
+  .quality-list .quality-row button.quality-pick:active { background:#333; }
+  .quality-list .quality-row button.quality-pick .badge { font-size:11px; color:#d97757; font-weight:600; }
+  .quality-list .quality-row button.quality-copy {
+    width:40px; height:40px; flex-shrink:0; border-radius:12px; border:1px solid #333;
+    background:#262626; color:#ccc; font-size:15px; cursor:pointer;
+  }
+  .quality-list .quality-row button.quality-copy:active,
+  .quality-list .quality-row button.quality-copy.copied { background:#333; color:#d97757; }
+
+  /* ---------- Small transient toast (e.g. "Link copied") ---------- */
+  .mini-toast {
+    position:absolute; left:50%; bottom:90px; transform:translateX(-50%) translateY(8px);
+    z-index:20; background:rgba(20,20,20,0.92); color:#eee; font-size:13px; font-weight:600;
+    padding:9px 16px; border-radius:20px; backdrop-filter:blur(6px);
+    box-shadow:0 4px 14px rgba(0,0,0,0.4); opacity:0; pointer-events:none;
+    transition:opacity .18s ease, transform .18s ease; white-space:nowrap;
+  }
+  .mini-toast.visible { opacity:1; transform:translateX(-50%) translateY(0); }
 
   /* ---------- Fast download & play overlay ---------- */
   .fastload-overlay {
@@ -506,7 +534,9 @@
 </svg>
 
 <div class="app">
-  <div class="tabbar" id="tabbar"></div>
+  <div class="tabbar" id="tabbar">
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 1.0</div>
+  </div>
 
   <div class="toolbar">
     <div class="nav-buttons">
@@ -580,6 +610,7 @@
     <button class="exit-player-btn" id="exitPlayerBtn" title="Back to browser">&#8592;</button>
     <button class="exit-immersive-btn" id="exitImmersiveBtn" title="Show toolbar">&#8593;</button>
     <button class="grab-video-btn" id="grabVideoBtn" title="Paste a video link">&#128279; Paste link</button>
+    <div class="mini-toast" id="miniToast"></div>
     <div class="fastload-overlay" id="fastLoadOverlay">
       <div class="fastload-card">
         <div class="fastload-title" id="fastLoadTitle">Downloading for smooth playback…</div>
@@ -1251,7 +1282,7 @@ function updateNavButtons() {
 
 function renderTabbar() {
   const bar = document.getElementById('tabbar');
-  bar.innerHTML = '';
+  bar.innerHTML = '<div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 1.0</div>';
   tabs.forEach(t => {
     const elTab = document.createElement('div');
     elTab.className = 'tab' + (t.id === activeTabId ? ' active' : '') + (t.isVideo ? ' video-tab' : '');
@@ -1752,18 +1783,21 @@ function enterPlayerMode() {
     (el.requestFullscreen || el.webkitRequestFullscreen || function(){}).call(el);
   } catch (e) {}
 }
+let suppressNextPopstate = false;
 function exitPlayerModeFn(fromPopstate) {
   playerMode = false;
   document.querySelector('.app').classList.remove('player-mode');
   document.getElementById('exitPlayerBtn').style.display = 'none';
   if (!fromPopstate && history.state && history.state.novaPlayerMode) {
-    try { history.back(); } catch (e) {}
+    suppressNextPopstate = true;
+    try { history.back(); } catch (e) { suppressNextPopstate = false; }
   }
   try {
     if (document.fullscreenElement) (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
   } catch (e) {}
 }
 window.addEventListener('popstate', () => {
+  if (suppressNextPopstate) { suppressNextPopstate = false; return; }
   if (playerMode) { exitPlayerModeFn(true); return; }
   // The device/browser "back" gesture used to exit the site entirely,
   // because the app never told the browser it had somewhere to go back
@@ -1801,6 +1835,7 @@ document.getElementById('exitPlayerBtn').addEventListener('click', () => exitPla
 document.getElementById('stage').addEventListener('click', (e) => {
   const tab = getTab(activeTabId);
   if (!tab || !tab.isVideo || playerMode || isLocked) return;
+  if (window.__novaSuppressNextStageClick) { window.__novaSuppressNextStageClick = false; return; }
   if (e.target.closest('button, input, select, .video-controlbar, .float-menu')) return;
   enterPlayerMode();
 });
@@ -1961,6 +1996,22 @@ document.querySelectorAll('#orientMenu button').forEach(b => {
   let pinchStartDist = 0, pinchStartScale = 1;
   const THRESHOLD = 14;
   let lastTapTime = 0, lastTapSide = null, tapResetTimer = null, indicatorHideTimer = null;
+  let longPressTimer = null, longPressFired = false;
+  const LONG_PRESS_MS = 550;
+
+  // Long-press anywhere on a directly-loaded video (player mode) copies its
+  // real source link. Only works for tab.isVideo — a video sitting inside a
+  // cross-origin iframe (regular browsing) can't be read from here at all,
+  // so there's nothing to copy in that case.
+  async function copyActiveVideoLink() {
+    const tab = getTab(activeTabId);
+    if (!tab || !tab.isVideo) return;
+    const url = tab.historyIndex >= 0 ? tab.history[tab.historyIndex] : (tab.el && tab.el.currentSrc);
+    if (!url) return;
+    try { if (navigator.vibrate) navigator.vibrate(25); } catch (e) {}
+    const ok = await copyTextToClipboard(url);
+    showMiniToast(ok ? 'Link copied' : "Couldn't copy — try again");
+  }
 
   function dist(t0, t1) {
     return Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
@@ -2027,6 +2078,15 @@ document.querySelectorAll('#orientMenu button').forEach(b => {
     startVolume = tab.el.volume;
     startBrightness = tab.gestureBrightness || 1;
     mode = 'pending';
+    longPressFired = false;
+    clearTimeout(longPressTimer);
+    longPressTimer = setTimeout(() => {
+      if (mode === 'pending') {
+        longPressFired = true;
+        window.__novaSuppressNextStageClick = true;
+        copyActiveVideoLink();
+      }
+    }, LONG_PRESS_MS);
   }, { passive: true });
 
   stage.addEventListener('touchmove', (e) => {
@@ -2050,6 +2110,7 @@ document.querySelectorAll('#orientMenu button').forEach(b => {
       else if (Math.abs(dy) > THRESHOLD && Math.abs(dy) > Math.abs(dx)) {
         mode = (startX > window.innerWidth / 2) ? 'volume' : 'brightness';
       } else return;
+      clearTimeout(longPressTimer);
     }
 
     if (mode === 'seek' && tab.el.duration) {
@@ -2073,14 +2134,16 @@ document.querySelectorAll('#orientMenu button').forEach(b => {
 
   stage.addEventListener('touchend', (e) => {
     const tab = getTab(activeTabId);
+    clearTimeout(longPressTimer);
     let didDoubleTap = false;
-    if (mode === 'pending' && tab && tab.isVideo && !isLocked && e.changedTouches && e.changedTouches.length === 1 && !isInteractiveTarget(e.target)) {
+    if (!longPressFired && mode === 'pending' && tab && tab.isVideo && !isLocked && e.changedTouches && e.changedTouches.length === 1 && !isInteractiveTarget(e.target)) {
       didDoubleTap = handleDoubleTapCheck(e.changedTouches[0].clientX);
     }
     mode = null;
+    longPressFired = false;
     if (!didDoubleTap) hideIndicator();
   });
-  stage.addEventListener('touchcancel', () => { mode = null; hideIndicator(); });
+  stage.addEventListener('touchcancel', () => { clearTimeout(longPressTimer); mode = null; longPressFired = false; hideIndicator(); });
 })();
 
 /* ================= Wire up: navigation ================= */
@@ -2743,15 +2806,67 @@ document.getElementById('extractVideoBtn').addEventListener('click', openExtract
 document.getElementById('extractCancelBtn').addEventListener('click', closeExtractOverlay);
 document.getElementById('extractOverlay').addEventListener('click', (e) => { if (e.target.id === 'extractOverlay') closeExtractOverlay(); });
 
+// Shared clipboard helper — Clipboard API first, falls back to a temp
+// input + execCommand for contexts where it's blocked (older WebViews etc).
+async function copyTextToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (e) {
+    try {
+      const tmp = document.createElement('input');
+      tmp.value = text;
+      document.body.appendChild(tmp);
+      tmp.select();
+      document.execCommand('copy');
+      document.body.removeChild(tmp);
+      return true;
+    } catch (e2) { return false; }
+  }
+}
+let miniToastTimer = null;
+function showMiniToast(msg) {
+  const el = document.getElementById('miniToast');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.add('visible');
+  clearTimeout(miniToastTimer);
+  miniToastTimer = setTimeout(() => el.classList.remove('visible'), 1400);
+}
+
 function renderQualityList(candidates, onPick) {
   const list = document.getElementById('qualityList');
   list.innerHTML = '';
   if (candidates.length < 2) return false;
   candidates.forEach(c => {
-    const btn = document.createElement('button');
-    btn.innerHTML = '<span>' + c.label + '</span><span class="badge">Open ▸</span>';
-    btn.addEventListener('click', () => onPick(c.url));
-    list.appendChild(btn);
+    const row = document.createElement('div');
+    row.className = 'quality-row';
+
+    const pickBtn = document.createElement('button');
+    pickBtn.className = 'quality-pick';
+    pickBtn.innerHTML = '<span>' + c.label + '</span><span class="badge">Open ▸</span>';
+    pickBtn.addEventListener('click', () => onPick(c.url));
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'quality-copy';
+    copyBtn.title = 'Copy this link';
+    copyBtn.innerHTML = '&#128203;';
+    copyBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const ok = await copyTextToClipboard(c.url);
+      if (ok) {
+        copyBtn.innerHTML = '&#10003;';
+        copyBtn.classList.add('copied');
+        showMiniToast('Link copied');
+        setTimeout(() => { copyBtn.innerHTML = '&#128203;'; copyBtn.classList.remove('copied'); }, 1200);
+      } else {
+        showMiniToast("Couldn't copy — try again");
+      }
+    });
+
+    row.appendChild(pickBtn);
+    row.appendChild(copyBtn);
+    list.appendChild(row);
   });
   return true;
 }
@@ -2791,27 +2906,119 @@ async function verifyCandidate(url) {
     return get.ok || get.status === 206 || (get.status >= 200 && get.status < 400);
   } catch (e) { return false; }
 }
-async function pickWorkingQuality(candidates) {
-  const ranked = pickBestQuality(candidates);
-  // Dedupe near-identical URLs that only differ by a cache-busting/tracking query
-  // param (e.g. ?t=169234, ?_=random) — verifying the same underlying file twice
-  // wastes a parallel request slot and slightly delays the real answer.
-  const seenBase = new Set();
-  const deduped = ranked.filter(c => {
-    const base = c.url.split('?')[0];
-    if (seenBase.has(base)) return false;
-    seenBase.add(base);
-    return true;
-  });
-  // Cap how many we verify in parallel — beyond the top ~8 ranked candidates the
-  // extra checks mostly just add proxy load without changing the outcome, since
-  // the real answer is almost always within the top few by quality ranking.
-  const toVerify = deduped.slice(0, 8);
-  const results = await Promise.allSettled(toVerify.map(c => verifyCandidate(c.url)));
-  for (let i = 0; i < toVerify.length; i++) {
-    if (results[i].status === 'fulfilled' && results[i].value) return toVerify[i];
+// HLS master playlists (.m3u8) list several quality "variants" (different
+// resolutions/bitrates) but the file found on the page is often just the
+// master, not any specific quality. Opening the master directly leaves the
+// choice up to the browser's adaptive-bitrate logic, which usually starts
+// LOW and ramps up over time — explaining why playback looks lower quality
+// than the site even though a full-HD variant exists. This fetches the
+// master and picks the true highest-resolution variant explicitly instead
+// of guessing quality from text in the URL (which a master playlist's URL
+// rarely contains at all).
+async function resolveBestHlsVariant(masterUrl) {
+  try {
+    const res = await fetchWithTimeout(masterUrl, {}, 8000);
+    if (!res.ok) return null;
+    const text = await res.text();
+    if (!/#EXTM3U/.test(text)) return null;
+    const lines = text.split(/\r?\n/);
+    const variants = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (!lines[i].startsWith('#EXT-X-STREAM-INF')) continue;
+      const resMatch = lines[i].match(/RESOLUTION=(\d+)x(\d+)/i);
+      const bwMatch = lines[i].match(/BANDWIDTH=(\d+)/i);
+      let uriLine = '';
+      for (let j = i + 1; j < lines.length; j++) {
+        if (lines[j].trim() && !lines[j].startsWith('#')) { uriLine = lines[j].trim(); break; }
+      }
+      if (!uriLine) continue;
+      try {
+        variants.push({
+          url: new URL(uriLine, masterUrl).href,
+          height: resMatch ? Number(resMatch[2]) : 0,
+          bandwidth: bwMatch ? Number(bwMatch[1]) : 0
+        });
+      } catch (e) {}
+    }
+    if (!variants.length) return null; // this was already a media (leaf) playlist, not a master
+    variants.sort((a, b) => (b.height - a.height) || (b.bandwidth - a.bandwidth));
+    const best = variants[0];
+    return { url: best.url, label: best.height ? best.height + 'p' : 'Stream (HLS)' };
+  } catch (e) { return null; }
+}
+
+// Downloads an HLS stream (media playlist + all its .ts/.m4s segments) and
+// concatenates them into a single playable Blob. A plain fetch of a .m3u8
+// URL only grabs the small text playlist, not the actual video — which is
+// why HLS sources previously "failed" to download or saved a useless
+// few-KB text file instead of a video.
+async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
+  const fetchText = async (u) => {
+    try {
+      const r = await fetchWithTimeout(u, { signal }, 10000);
+      if (r.ok) return await r.text();
+    } catch (e) {}
+    // Fall back through the same CORS relays used elsewhere if direct fetch is blocked
+    for (const proxyFn of FAST_CORS_PROXIES.slice(1)) {
+      try {
+        const r = await fetchWithTimeout(proxyFn(u), { signal }, 10000);
+        if (r.ok) return await r.text();
+      } catch (e) {}
+    }
+    throw new Error('Could not load playlist');
+  };
+  let playlistUrl = mediaPlaylistUrl;
+  let text = await fetchText(playlistUrl);
+  // If we were handed a master playlist instead of a media playlist, resolve
+  // to its best variant first.
+  if (/#EXT-X-STREAM-INF/.test(text)) {
+    const variant = await resolveBestHlsVariant(playlistUrl);
+    if (!variant) throw new Error('No playable variant found in HLS playlist');
+    playlistUrl = variant.url;
+    text = await fetchText(playlistUrl);
   }
-  return ranked[0];
+  if (/#EXT-X-KEY:METHOD=(?!NONE)/.test(text)) {
+    throw new Error('This stream is encrypted (DRM) and can\'t be downloaded');
+  }
+  const lines = text.split(/\r?\n/);
+  const segments = [];
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    try { segments.push(new URL(t, playlistUrl).href); } catch (e) {}
+  }
+  if (!segments.length) throw new Error('No segments found in playlist');
+
+  const fetchSegment = async (u) => {
+    try {
+      const r = await fetchWithTimeout(u, { signal }, 15000);
+      if (r.ok) return await r.arrayBuffer();
+    } catch (e) {}
+    for (const proxyFn of FAST_CORS_PROXIES.slice(1)) {
+      try {
+        const r = await fetchWithTimeout(proxyFn(u), { signal }, 15000);
+        if (r.ok) return await r.arrayBuffer();
+      } catch (e) {}
+    }
+    throw new Error('Segment failed: ' + u);
+  };
+
+  const parts = new Array(segments.length);
+  let completed = 0;
+  const CONCURRENCY = 5;
+  let nextIndex = 0;
+  async function worker() {
+    while (nextIndex < segments.length) {
+      const idx = nextIndex++;
+      parts[idx] = await fetchSegment(segments[idx]);
+      completed++;
+      if (onProgress) onProgress(Math.min(99, (completed / segments.length) * 100), completed, segments.length);
+      if (onStatus) onStatus('Downloading segment ' + completed + '/' + segments.length + '…');
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, segments.length) }, worker));
+  const isFmp4 = /\.m4s(\?|$)/i.test(segments[0]) || /#EXT-X-MAP/.test(text);
+  return new Blob(parts, { type: isFmp4 ? 'video/mp4' : 'video/mp2t' });
 }
 
 async function resolveAndOpenVideo(pageUrl, statusEl) {
@@ -2839,7 +3046,14 @@ async function resolveAndOpenVideo(pageUrl, statusEl) {
   const candidates = await extractVideoCandidatesFromPage(pageUrl);
   if (!candidates.length) return { outcome: 'not-found' };
   // Verify candidates in ranked order and open the first one that's actually live.
-  const best = await pickWorkingQuality(candidates);
+  let best = await pickWorkingQuality(candidates);
+  // If the winning candidate is an HLS master playlist, resolve it to its
+  // actual highest-resolution variant instead of opening the master as-is.
+  if (/\.m3u8(\?|$)/i.test(best.url)) {
+    if (statusEl) { statusEl.textContent = 'Finding best HLS quality…'; statusEl.className = 'extract-status'; }
+    const variant = await resolveBestHlsVariant(best.url);
+    if (variant) best = variant;
+  }
   createTab(best.url, true, {});
   return { outcome: 'opened', quality: best.label };
 }
@@ -3097,6 +3311,13 @@ function createStallWatchdog(externalSignal, stallMs) {
 }
 
 async function downloadVideoBlob(url, signal, onProgress, onStatus) {
+  // HLS playlists aren't a single file — a plain range/GET fetch here would
+  // just grab the small text playlist, not the actual video. Route these
+  // through the dedicated segment-by-segment HLS downloader instead.
+  if (/\.m3u8(\?|$)/i.test(url)) {
+    if (onStatus) onStatus('Preparing HLS download…');
+    return await downloadHlsBlob(url, onProgress, onStatus, signal);
+  }
   const watchdog = createStallWatchdog(signal, 25000);
   try {
     // HEAD is blocked by CORS on plenty of video hosts even when GET works
@@ -3188,6 +3409,10 @@ function guessFilenameFromUrl(url) {
   try {
     const path = new URL(url).pathname;
     const name = path.split('/').filter(Boolean).pop();
+    // An HLS playlist URL isn't the real saved file — the actual saved data
+    // is either concatenated .ts (mpeg-ts) or fmp4 segments, so give it a
+    // sensible playable extension instead of literally naming it .m3u8.
+    if (name && /\.m3u8$/i.test(name)) return name.replace(/\.m3u8$/i, '.ts');
     if (name && /\.[a-z0-9]{2,4}$/i.test(name)) return decodeURIComponent(name);
   } catch (e) {}
   return 'video.mp4';
