@@ -610,7 +610,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 7.0</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 8.0</div>
   </div>
 
   <div class="toolbar">
@@ -937,7 +937,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '7.0';
+const NOVA_VERSION = '8.0';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -1222,7 +1222,23 @@ function playOfflineVideo(item) {
     return;
   }
   const objectUrl = URL.createObjectURL(item.blob);
-  createTab(null, true, { isLocalFile: true, title: item.title || item.url, objectUrl });
+  const tab = createTab(null, true, { isLocalFile: true, title: item.title || item.url, objectUrl });
+  // The keyframe-boundary metadata used by preciseSeek (see parseMp4KeyframeTimes)
+  // lives only on the in-memory Blob object from the download that just
+  // finished — it's a JS property on that object, not something IndexedDB
+  // persists with the raw file bytes. So a video reopened later from the
+  // offline folder gets a brand-new Blob with no such property, and used to
+  // silently fall back to plain (non-keyframe-aligned) seeking every time,
+  // even though the saved file itself is just as fragmented/parseable as it
+  // was right after downloading. Re-derive it here from the actual saved
+  // bytes so seeking stays keyframe-accurate after reopening too, not just
+  // in the same session the video was downloaded in.
+  if (item.blob && item.blob.type === 'video/mp4') {
+    item.blob.arrayBuffer().then((buf) => {
+      const times = parseMp4KeyframeTimes(buf, [buf]);
+      if (times) tab._segmentBoundaries = times;
+    }).catch(() => {});
+  }
 }
 
 // Nova (like every phone browser) simply cannot decode a raw MPEG-TS blob
@@ -1803,13 +1819,24 @@ function preciseSeek(tab, targetTime) {
   // start of the HLS segment at/just-before t keeps both tracks starting
   // from the same keyframe-aligned point, since HLS segments always begin
   // on a keyframe.
+  //
+  // This only kicks in when the boundary data actually checks out against
+  // the real video duration — bad/mis-scaled boundary values (corrupt
+  // parse, wrong units, etc.) used to silently force every seek back to 0
+  // because the loop's fallback value was 0, making the whole player look
+  // like it couldn't skip at all. Now: if the first boundary is already
+  // past the video's own duration, or nothing in the list is actually
+  // ≤ the target, the snap is skipped entirely and the plain seek below
+  // runs instead — same as before this feature existed, so skipping can
+  // never end up worse than it was, only better when the data is trustworthy.
   const bounds = tab._segmentBoundaries;
-  if (bounds && bounds.length) {
-    let snapped = 0;
+  if (bounds && bounds.length && dur && bounds[0] <= dur) {
+    let snapped = -1;
     for (let i = 0; i < bounds.length; i++) {
+      if (!Number.isFinite(bounds[i]) || bounds[i] > dur) break;
       if (bounds[i] <= t) snapped = bounds[i]; else break;
     }
-    t = snapped;
+    if (snapped >= 0) t = snapped;
   }
   try { el.currentTime = t; } catch (e) {}
 }
@@ -4153,14 +4180,15 @@ async function playHlsProgressive(tab, url) {
       for (const proxyFn of FAST_CORS_PROXIES.slice(1)) {
         try { const r = await fetchWithTimeout(proxyFn(u), {}, 15000); if (r.ok) return await r.arrayBuffer(); } catch (e) {}
       }
-      if (pass === 0) await new Promise(r => setTimeout(r, 700));
+      if (pass === 0) await new Promise(r => setTimeout(r, 350));
     }
     throw new Error('Segment failed: ' + u);
   };
-  const CONCURRENCY = 12; // higher than before — segments must still be fed
-  // to the transmuxer/SourceBuffer strictly in order, but downloading a
-  // bit further ahead than what's been appended just costs a little memory
-  // (segments are small), not correctness, so it's worth it for speed.
+  const CONCURRENCY = 64; // segments must still be fed to the
+  // transmuxer/SourceBuffer strictly in order, but downloading well ahead
+  // of what's been appended just costs a little memory (segments are
+  // small), not correctness — raised well past the old conservative value
+  // so a fast connection isn't left waiting on a narrow pipe.
   let nextIndex = 0;
   async function handleSegmentDone(idx) {
     completed++;
@@ -4267,7 +4295,7 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
         } catch (e) {}
       }
       if (signal && signal.aborted) break;
-      if (pass === 0) await new Promise(r => setTimeout(r, 700));
+      if (pass === 0) await new Promise(r => setTimeout(r, 350));
     }
     throw new Error('Segment failed: ' + u);
   };
@@ -4290,7 +4318,7 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
   // this phase, so more concurrent fetches can be sustained before mobile
   // WebView memory/socket limits become the bottleneck instead of the
   // network.
-  const CONCURRENCY = 128;
+  const CONCURRENCY = 256;
   let nextIndex = 0;
   async function worker() {
     while (nextIndex < segments.length) {
@@ -4813,13 +4841,14 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // Mobile WebViews have tighter memory/socket limits than desktop, and
       // pushing too many parallel pieces at once risks downloads silently
       // dying partway through (the whole page/WebView getting killed under
-      // memory pressure looks identical to "it just stopped"). 64 is the
-      // practical ceiling for that — the ramp below only ever ADDS workers
-      // when every recent piece has succeeded cleanly, and permanently stops
-      // growing the moment anything fails, so a server/network that can't
-      // sustain this many connections backs the pool off on its own instead
-      // of forcing it and risking a broken download.
-      const MAX_WORKERS = 128;
+      // memory pressure looks identical to "it just stopped"). The ramp
+      // below only ever ADDS workers when every recent piece has succeeded
+      // cleanly, and permanently stops growing the moment anything fails —
+      // so a server/network that can't sustain a high worker count backs
+      // the pool off on its own instead of forcing it and risking a broken
+      // download. That self-limiting behavior is what makes it safe to set
+      // the ceiling itself higher than before.
+      const MAX_WORKERS = 256;
       const fetchPiece = async (idx, attemptsLeft) => {
         const [start, end] = pieces[idx];
         try {
@@ -4886,18 +4915,21 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
         allWorkerPromises.push(p);
         return p;
       }
-      const START_WORKERS = 48;
+      const START_WORKERS = 96;
       for (let i = 0; i < Math.min(START_WORKERS, pieces.length); i++) launchWorker();
-      // Ramp: every 50ms, if nothing has failed recently and there's still
-      // unclaimed work, add up to 4 more workers — up to MAX_WORKERS. Stops
+      // Ramp: every 40ms, if nothing has failed recently and there's still
+      // unclaimed work, add up to 8 more workers — up to MAX_WORKERS. Stops
       // ramping permanently the moment any real failure is seen (server
       // pushing back), so a connection/server that can't sustain this many
       // requests backs off on its own instead of forcing it and breaking the
-      // download.
+      // download. Pushed as high/fast as is still safe — the self-limiting
+      // rampBlocked check is what keeps this from actually overloading a
+      // slower server or network; it only ever grows while every recent
+      // request is succeeding cleanly.
       const ramp = setInterval(() => {
         if (rampBlocked || firstFatalError || nextPiece >= pieces.length || activeWorkers >= MAX_WORKERS) { clearInterval(ramp); return; }
-        for (let i = 0; i < 4 && activeWorkers < MAX_WORKERS && nextPiece < pieces.length && !rampBlocked; i++) launchWorker();
-      }, 80);
+        for (let i = 0; i < 8 && activeWorkers < MAX_WORKERS && nextPiece < pieces.length && !rampBlocked; i++) launchWorker();
+      }, 40);
       // Wait for the whole pool to actually drain — poll instead of a single
       // Promise.all call, since the set of promises to wait for keeps
       // growing for as long as the ramp is still adding workers.
@@ -4908,7 +4940,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
             clearInterval(ramp);
             resolve();
           }
-        }, 120);
+        }, 60);
       });
       // Now every promise that was ever launched is guaranteed settled (the
       // poll above only resolves once activeWorkers hits 0), so this just
