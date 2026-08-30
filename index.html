@@ -696,7 +696,10 @@
         <div class="fastload-title" id="fastLoadTitle">Downloading for smooth playback…</div>
         <div class="fastload-bar-track"><div class="fastload-bar-fill" id="fastLoadBarFill"></div></div>
         <div class="fastload-pct" id="fastLoadPct">0%</div>
-        <button id="fastLoadCancelBtn" class="secondary">Cancel</button>
+        <div class="fastload-buttons" style="display:flex; gap:8px;">
+          <button id="fastLoadCancelBtn" class="secondary">Cancel</button>
+          <button id="fastLoadBgBtn" class="secondary">Watch now &#8681;</button>
+        </div>
       </div>
     </div>
     <div class="extract-overlay" id="extractOverlay">
@@ -4183,9 +4186,33 @@ async function fastDownloadAndPlay(tab) {
   updateFastLoadProgress(0);
   fastLoadAbort = new AbortController();
   const signal = fastLoadAbort.signal;
+  // The video (tab.el) keeps streaming/playing normally the whole time this
+  // runs — downloadVideoBlob pulls the file into memory separately and only
+  // touches tab.el right at the end (swapTabToBlob). So there was never a
+  // technical reason the overlay had to sit on screen for the whole 0-100%;
+  // "Watch now" just stops covering the video with it. The download itself
+  // (and its progress) is mirrored onto the same small badge/fields the
+  // silent auto-download uses, so tapping the badge later still offers Save
+  // once it's actually done.
+  tab._autoDLAbort = fastLoadAbort;
+  tab._autoDLPct = 0;
+  tab._autoDLBytes = 0;
+  tab._autoDLTotal = 0;
+  let minimized = false;
+  document.getElementById('fastLoadBgBtn').onclick = () => {
+    minimized = true;
+    overlay.classList.remove('visible');
+    updateAutoDlIndicator(tab);
+  };
 
   try {
-    const blob = await downloadVideoBlob(url, signal, updateFastLoadProgress, (t) => { title.textContent = t; });
+    const blob = await downloadVideoBlob(url, signal, (pct, received, total) => {
+      updateFastLoadProgress(pct, received, total);
+      tab._autoDLPct = pct;
+      tab._autoDLBytes = received || 0;
+      tab._autoDLTotal = total || 0;
+      if (minimized) updateAutoDlIndicator(tab);
+    }, (t) => { title.textContent = t; });
     updateFastLoadProgress(100);
     // Raw MPEG-TS (most HLS streams use .ts segments, not fMP4) can be
     // downloaded fine but phones' <video> element can't decode that
@@ -4211,20 +4238,28 @@ async function fastDownloadAndPlay(tab) {
     }
     const saveResult = await saveOfflineVideo({ id: 'v' + Date.now() + Math.random().toString(36).slice(2), url, title: guessFilenameFromUrl(url, blob.type), time: Date.now(), size: blob.size, blob });
     overlay.classList.remove('visible');
+    if (tab._autoDLAbort === fastLoadAbort) tab._autoDLAbort = null;
     if (!saveResult.ok) {
-      alert(saveResult.error === 'storage-full'
+      const msg = saveResult.error === 'storage-full'
         ? "There wasn't enough free storage on this device to save a copy for offline playback — even after clearing older downloads. Try removing a few videos from Downloads and use the lightning button again."
-        : "It couldn't be saved for offline playback this time. You can try the lightning button again.");
+        : "It couldn't be saved for offline playback this time. You can try the lightning button again.";
+      if (minimized) showMiniToast(msg); else alert(msg);
     } else if (cannotPreviewInApp) {
       showMiniToast('Saved to Downloads \u2014 this stream needs an external player (e.g. VLC) to watch, playback here keeps streaming normally');
     } else if (saveResult.freedSpace) {
       showMiniToast('Saved (freed space from older downloads)');
+    } else if (minimized) {
+      showMiniToast('Download finished \u2014 now playing the fast local copy');
     }
+    updateAutoDlIndicator(tab);
   } catch (e) {
     if (e.name !== 'AbortError') {
-      alert("Couldn't download this video for fast playback. It may block downloads, or your network dropped the connection.");
+      const msg = "Couldn't download this video for fast playback. It may block downloads, or your network dropped the connection.";
+      if (minimized) showMiniToast(msg); else alert(msg);
     }
     overlay.classList.remove('visible');
+    if (tab._autoDLAbort === fastLoadAbort) tab._autoDLAbort = null;
+    updateAutoDlIndicator(tab);
   }
   fastLoadAbort = null;
 }
