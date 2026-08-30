@@ -1769,8 +1769,13 @@ window.addEventListener('popstate', () => {
     document.getElementById('urlInput').value = tab.isVideo ? '' : url;
     updateNavButtons(); updateBookmarkStar();
     try { history.pushState({ novaAppNav: true }, ''); } catch (e) {} // re-arm for the next back press
+  } else if (tryInPageBack(tab)) {
+    // Let the embedded site step back through its own internal pages
+    // instead of exiting — and stay armed so the next back press is
+    // caught here too, rather than immediately exiting.
+    try { history.pushState({ novaAppNav: true }, ''); } catch (e) {}
   }
-  // else: nothing left to go back to — let the back gesture actually exit.
+  // else: nothing left to go back to at any level — let the back gesture actually exit.
 });
 try { history.pushState({ novaAppNav: true }, ''); } catch (e) {} // arm the very first back press
 // Browsers auto-suspend a tab's AudioContext when the app/tab goes to the
@@ -2078,6 +2083,24 @@ document.getElementById('urlInput').addEventListener('search', () => {
   loadUrl(activeTabId, document.getElementById('urlInput').value, true);
   document.getElementById('urlInput').blur();
 });
+// Cross-origin iframes can't be read from the parent, so the app's own
+// per-tab history array only knows about pages it explicitly loaded
+// (typed URLs, link taps it saw) — it has no idea when the user clicks
+// links *inside* the embedded site itself. That's why "Back" used to jump
+// straight out of the whole site: once the app ran out of its own history,
+// it just exited, even though the website itself still had pages to go
+// back through. history.back()/forward() on the iframe's own window is
+// one of the few things still allowed across origins by the spec, so try
+// that first — it lets the site navigate its own internal back stack
+// before the app gives up and steps back (or exits) at its own level.
+function tryInPageBack(tab) {
+  if (!tab || tab.isVideo || !tab.el || tab.el.tagName !== 'IFRAME') return false;
+  try { tab.el.contentWindow.history.back(); return true; } catch (e) { return false; }
+}
+function tryInPageForward(tab) {
+  if (!tab || tab.isVideo || !tab.el || tab.el.tagName !== 'IFRAME') return false;
+  try { tab.el.contentWindow.history.forward(); return true; } catch (e) { return false; }
+}
 document.getElementById('backBtn').addEventListener('click', () => {
   const tab = getTab(activeTabId);
   if (tab && tab.historyIndex > 0) {
@@ -2086,6 +2109,8 @@ document.getElementById('backBtn').addEventListener('click', () => {
     tab.el.src = url;
     document.getElementById('urlInput').value = tab.isVideo ? '' : url;
     updateNavButtons(); updateBookmarkStar();
+  } else {
+    tryInPageBack(tab);
   }
 });
 document.getElementById('fwdBtn').addEventListener('click', () => {
@@ -2096,6 +2121,8 @@ document.getElementById('fwdBtn').addEventListener('click', () => {
     tab.el.src = url;
     document.getElementById('urlInput').value = tab.isVideo ? '' : url;
     updateNavButtons(); updateBookmarkStar();
+  } else {
+    tryInPageForward(tab);
   }
 });
 document.getElementById('reloadBtn').addEventListener('click', () => {
@@ -2695,16 +2722,23 @@ document.getElementById('pipBtn').addEventListener('click', async () => {
 
 /* ================= Fast download & play (parallel-chunk downloader) ================= */
 let fastLoadAbort = null;
-function updateFastLoadProgress(pct) {
-  document.getElementById('fastLoadBarFill').style.width = pct + '%';
-  document.getElementById('fastLoadPct').textContent = Math.round(pct) + '%';
+function updateFastLoadProgress(pct, received, total) {
+  if (pct == null) {
+    document.getElementById('fastLoadBarFill').style.width = '100%';
+    document.getElementById('fastLoadBarFill').style.opacity = '0.35';
+    document.getElementById('fastLoadPct').textContent = formatBytes(received || 0) + ' downloaded';
+  } else {
+    document.getElementById('fastLoadBarFill').style.opacity = '1';
+    document.getElementById('fastLoadBarFill').style.width = pct + '%';
+    document.getElementById('fastLoadPct').textContent = Math.round(pct) + '%';
+  }
 }
 // Plain single-stream download through a CORS proxy — used when the video
 // host itself has no CORS headers, so direct fetch/HEAD/Range requests get
 // blocked by the browser before they even leave the page. Proxies generally
 // don't pass Range requests through reliably, so this is one sequential
 // stream rather than parallel chunks.
-async function proxyDownload(url, signal, title) {
+async function proxyDownload(url, signal, title, onProgress) {
   const proxies = [
     u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
     u => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u),
@@ -2726,7 +2760,7 @@ async function proxyDownload(url, signal, title) {
         if (done) break;
         bytes.push(value);
         received += value.length;
-        if (total) updateFastLoadProgress(Math.min(99, (received / total) * 100));
+        if (onProgress) onProgress(total ? Math.min(99, (received / total) * 100) : null, received, total);
       }
       const blob = new Blob(bytes);
       if (blob.size < 1000) { lastErr = new Error('Empty/invalid response'); continue; } // relay likely returned an error page, not the video
@@ -2788,7 +2822,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       const reportProgress = () => {
         if (!onProgress) return;
         const total = loaded.reduce((a, b) => a + b, 0);
-        onProgress(Math.min(99, (total / len) * 100));
+        onProgress(Math.min(99, (total / len) * 100), total, len);
       };
       const parts = await Promise.all(ranges.map(async ([start, end], idx) => {
         const res = await fetch(url, { headers: { Range: 'bytes=' + start + '-' + end }, signal: watchdog.signal });
@@ -2809,7 +2843,10 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
     } else {
       if (onStatus) onStatus('Downloading (server does not support parallel chunks)…');
       const res = await fetch(url, { signal: watchdog.signal });
-      const total = Number(res.headers.get('content-length') || 0);
+      // Cross-origin responses often don't expose content-length even when
+      // the HEAD request above got one — fall back to that so the progress
+      // indicator isn't stuck showing nothing while data is really flowing.
+      const total = Number(res.headers.get('content-length') || 0) || len;
       const reader = res.body.getReader();
       const bytes = [];
       let received = 0;
@@ -2819,7 +2856,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
         bytes.push(value);
         received += value.length;
         watchdog.poke();
-        if (total && onProgress) onProgress(Math.min(99, (received / total) * 100));
+        if (onProgress) onProgress(total ? Math.min(99, (received / total) * 100) : null, received, total);
       }
       result = new Blob(bytes);
     }
@@ -2832,8 +2869,8 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
     // failed, or the watchdog gave up on a stalled connection) falls back
     // to the CORS relay instead of leaving the download stuck forever.
     if (signal && signal.aborted) throw directErr;
-    if (onProgress) onProgress(0);
-    return await proxyDownload(url, signal, onStatus ? { set textContent(v) { onStatus(v); } } : null);
+    if (onProgress) onProgress(0, 0, 0);
+    return await proxyDownload(url, signal, onStatus ? { set textContent(v) { onStatus(v); } } : null, onProgress);
   }
 }
 
@@ -2925,7 +2962,7 @@ function updateAutoDlIndicator(tab) {
   if (tab._autoDLAbort) {
     el.style.display = 'block';
     el.classList.remove('ready');
-    pctEl.innerHTML = Math.round(tab._autoDLPct || 0) + '%';
+    pctEl.innerHTML = (tab._autoDLPct != null) ? Math.round(tab._autoDLPct) + '%' : formatBytes(tab._autoDLBytes || 0);
   } else if (tab._savedBlob) {
     el.style.display = 'block';
     el.classList.add('ready');
@@ -2944,10 +2981,12 @@ async function autoDownloadInBackground(tab, url) {
   const ctrl = new AbortController();
   tab._autoDLAbort = ctrl;
   tab._autoDLPct = 0;
+  tab._autoDLBytes = 0;
   updateAutoDlIndicator(tab);
   try {
-    const blob = await downloadVideoBlob(url, ctrl.signal, (pct) => {
+    const blob = await downloadVideoBlob(url, ctrl.signal, (pct, received) => {
       tab._autoDLPct = pct;
+      tab._autoDLBytes = received;
       updateAutoDlIndicator(tab);
     }, null);
     if (ctrl.signal.aborted) return;
@@ -2957,6 +2996,7 @@ async function autoDownloadInBackground(tab, url) {
     tab._autoDLPct = 100;
     updateAutoDlIndicator(tab);
     swapTabToBlob(tab, URL.createObjectURL(blob), blob, url);
+    saveOfflineVideo({ id: 'v' + Date.now() + Math.random().toString(36).slice(2), url, title: guessFilenameFromUrl(url), time: Date.now(), size: blob.size, blob });
   } catch (e) {
     // Silent by design — streaming playback continues untouched.
   } finally {
