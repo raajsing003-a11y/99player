@@ -155,6 +155,7 @@
   .panel-row span.link { color:#8ecdf7; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
   .panel-row span.link.masked { color:#888; letter-spacing:2px; user-select:none; }
   .toolbar input#urlInput.masked { -webkit-text-security:disc; text-security:disc; }
+  #extractUrlInput.masked { -webkit-text-security:disc; text-security:disc; }
   .panel-row button { background:none; border:none; color:#e57373; font-size:15px; cursor:pointer; flex-shrink:0; padding:4px; }
   .panel-empty { color:#777; padding:10px 4px; font-size:12.5px; line-height:1.5; }
 
@@ -1224,7 +1225,7 @@ function loadUrl(tabId, rawUrl, isNewNav) {
   status.style.display = 'block';
   status.textContent = tab.isVideo
     ? 'Loading video — direct .mp4/.webm links play natively; streaming pages like YouTube should be opened as a normal site instead.'
-    : 'Loading ' + url + ' — some sites block embedding and won\'t display here.';
+    : (maskMode ? 'Loading \u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 — some sites block embedding and won\'t display here.' : 'Loading ' + url + ' — some sites block embedding and won\'t display here.');
 
   if (tab.id === activeTabId) {
     // Privacy: never repopulate the address bar with a video's URL after it loads.
@@ -2786,6 +2787,8 @@ function applyMaskModeUI() {
   btn.innerHTML = maskMode ? '&#128584;' : '&#128373;';
   const urlInput = document.getElementById('urlInput');
   urlInput.classList.toggle('masked', maskMode);
+  const extractUrlInput = document.getElementById('extractUrlInput');
+  if (extractUrlInput) extractUrlInput.classList.toggle('masked', maskMode);
   renderHistoryPanel();
   renderBookmarksPanel();
   renderDownloadsPanel();
