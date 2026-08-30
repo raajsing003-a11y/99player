@@ -355,7 +355,7 @@
   .lock-label { font-size:13px; color:#eee; font-weight:500; letter-spacing:.2px; }
   .lock-sublabel { font-size:10.5px; color:#999; margin-top:-4px; }
   .auto-dl-indicator {
-    position:absolute; top:58px; right:10px; z-index:15;
+    position:absolute; top:10px; right:10px; z-index:15;
     background:rgba(0,0,0,0.7); color:#fff; font-size:13px;
     padding:8px 14px; border-radius:14px; backdrop-filter:blur(6px);
     cursor:default; white-space:nowrap; font-weight:600;
@@ -908,7 +908,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '2.4';
+const NOVA_VERSION = '2.8';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -1450,22 +1450,37 @@ function loadUrl(tabId, rawUrl, isNewNav) {
   }
 
   tab.title = url.replace(/^https?:\/\//, '');
-  tab.el.src = url;
 
   if (tab.isVideo) {
-    tab.el.play().catch(() => {});
-    ensureAudioGraphIfBoosted(tab);
-    updateVolumeGain(tab, settings.volBoost);
-    applyFiltersToTab(tab);
     // Clear any leftover "Save" state from a previous video in this tab —
     // otherwise the save button could briefly point at the wrong file.
     tab._savedBlob = null;
     tab._savedFilename = null;
-    updateAutoDlIndicator(tab);
-    // Start downloading the full file in the background right away, so
-    // playback can silently switch from streaming to the fully-downloaded
-    // copy (no more buffering) without the user having to press anything.
-    autoDownloadInBackground(tab, url);
+    tab._blobFallbackTried = false;
+    // Most browsers (everything except Safari) have no native HLS decoder,
+    // so handing an .m3u8 straight to <video src> just sits there forever
+    // with no picture and no error — the element never even fires 'error'
+    // because from its point of view it's still "loading" a text file it
+    // doesn't understand. Detect that up front and go straight to the
+    // segment-downloader + blob playback path instead of guessing wrong.
+    if (/\.m3u8(\?|$)/i.test(url) && !nativeCanPlayHls()) {
+      tab.el.removeAttribute('src');
+      tab._blobFallbackTried = true;
+      loadVideoViaBlobFallback(tab, url);
+    } else {
+      tab.el.src = url;
+      tab.el.play().catch(() => {});
+      ensureAudioGraphIfBoosted(tab);
+      updateVolumeGain(tab, settings.volBoost);
+      applyFiltersToTab(tab);
+      updateAutoDlIndicator(tab);
+      // Start downloading the full file in the background right away, so
+      // playback can silently switch from streaming to the fully-downloaded
+      // copy (no more buffering) without the user having to press anything.
+      autoDownloadInBackground(tab, url);
+    }
+  } else {
+    tab.el.src = url;
   }
 
   const status = document.getElementById('status');
@@ -1820,10 +1835,10 @@ function setGradingVisible(tab, on) {
 }
 function drawGradingFrame(tab) {
   const g = tab.gl;
-  if (!g || !g.ok) return;
+  if (!g || !g.ok) return true;
   const gl = g.gl;
   const vw = tab.el.videoWidth, vh = tab.el.videoHeight;
-  if (!vw || !vh) return;
+  if (!vw || !vh) return true; // metadata not ready yet — not an error, just wait
   // When AI Enhance is on, render the canvas backing store at the video's
   // actual displayed size (not just its source resolution) so the shader's
   // edge-push sharpening effectively upscales it, instead of the browser's
@@ -1842,7 +1857,16 @@ function drawGradingFrame(tab) {
     gl.viewport(0, 0, tw, th);
   }
   gl.bindTexture(gl.TEXTURE_2D, g.texture);
-  try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, tab.el); } catch (e) { return; }
+  try {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, tab.el);
+  } catch (e) {
+    // Cross-origin video without CORS headers permanently taints the WebGL
+    // canvas the instant we try to read its pixels — every future frame
+    // will fail the exact same way, it's not transient. Signal the loop to
+    // stop and fall back to plain <video> instead of leaving a black,
+    // never-updating canvas on screen indefinitely.
+    return false;
+  }
   gl.uniform2f(g.u_texel, 1 / vw, 1 / vh);
   gl.uniform1f(g.u_ai, settings.aiEnhance / 100);
   gl.uniform1f(g.u_vibrance, settings.vibrance / 100);
@@ -1850,12 +1874,24 @@ function drawGradingFrame(tab) {
   gl.uniform1f(g.u_selRange, settings.selRange / 360);
   gl.uniform1f(g.u_selSat, settings.selSat / 100);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  return true;
 }
 function startGradingLoop(tab) {
   if (gradingRAF) cancelAnimationFrame(gradingRAF);
   function frame() {
     if (tab.id !== activeTabId || !tab.canvas.classList.contains('active-frame')) { gradingRAF = null; return; }
-    drawGradingFrame(tab);
+    const ok = drawGradingFrame(tab);
+    if (!ok) {
+      // Stop the loop and hand the screen back to the real <video> instead
+      // of looping forever on a canvas that will never successfully draw —
+      // that was the actual bug behind "video plays but screen is black".
+      gradingRAF = null;
+      setGradingVisible(tab, false);
+      if (tab.id === activeTabId) {
+        showMiniToast('Color/AI Enhance effects aren\u2019t available for this video \u2014 showing normal playback instead');
+      }
+      return;
+    }
     gradingRAF = requestAnimationFrame(frame);
   }
   gradingRAF = requestAnimationFrame(frame);
@@ -1947,6 +1983,106 @@ function bindVideoElementEvents(tab) {
     const idx = videoTabs.indexOf(tab);
     if (!settings.loop && idx >= 0 && idx < videoTabs.length - 1) activateTab(videoTabs[idx + 1].id) && videoTabs[idx + 1].el.play().catch(()=>{});
   });
+  // Previously nothing listened for playback errors at all: a link the
+  // <video> tag couldn't stream directly (wrong CORS headers, a redirect
+  // chain it refuses to follow, a container/codec combo it can't decode
+  // over a live stream but can decode from a fully-buffered file, etc.)
+  // just sat on "Loading video…" forever with no explanation and no retry.
+  // Now a real error gets one automatic retry via the full-download-then-
+  // play-as-blob path (this also rescues plenty of cases that look like
+  // "unsupported format" but are actually just streaming-related), and if
+  // that also fails, the person gets an actual reason instead of silence.
+  el.addEventListener('error', () => {
+    if (tab.id !== activeTabId) return;
+    const err = el.error;
+    if (!err) return;
+    const currentUrl = tab.history[tab.historyIndex];
+    const isBlobSrc = el.currentSrc && el.currentSrc.startsWith('blob:');
+    if (!isBlobSrc && !tab._blobFallbackTried && currentUrl) {
+      tab._blobFallbackTried = true;
+      loadVideoViaBlobFallback(tab, currentUrl);
+      return;
+    }
+    const MEDIA_ERR_MESSAGES = {
+      1: 'Video loading was aborted.',
+      2: 'Network error while loading the video.',
+      3: 'This video file looks corrupted, or uses a codec this browser can\u2019t decode.',
+      4: 'This video format/codec isn\u2019t supported by this browser.'
+    };
+    const msg = MEDIA_ERR_MESSAGES[err.code] || 'This video could not be played.';
+    showMiniToast(msg);
+    const status = document.getElementById('status');
+    status.style.display = 'block';
+    status.textContent = msg;
+  });
+}
+
+// Feature-detects real native HLS support (Safari/iOS) vs browsers that will
+// silently do nothing with an .m3u8 handed to <video src>.
+function nativeCanPlayHls() {
+  try {
+    const v = document.createElement('video');
+    return v.canPlayType('application/vnd.apple.mpegurl') !== '' ||
+           v.canPlayType('application/x-mpegURL') !== '';
+  } catch (e) { return false; }
+}
+
+// Fully downloads a stream/file this tab can't play directly (HLS master
+// or media playlists, or anything that threw a playback error) and plays
+// it back from an in-memory Blob instead. Reuses the same segment-fetching
+// + CORS-relay-fallback + retry logic already used for the offline "Save"
+// feature, so this gets identical resilience instead of a second, weaker
+// implementation.
+async function loadVideoViaBlobFallback(tab, url) {
+  const status = document.getElementById('status');
+  if (tab.id === activeTabId) {
+    status.style.display = 'block';
+    status.textContent = 'This link needs to be fetched before it can play \u2014 preparing\u2026';
+  }
+  try {
+    const blob = await downloadVideoBlob(url, null,
+      () => {},
+      (msg) => { if (tab.id === activeTabId) status.textContent = msg; });
+    // Bail out quietly if the user navigated this tab elsewhere while we
+    // were still downloading.
+    if (tab.history[tab.historyIndex] !== url) return;
+    // We already have the full file in memory — treat it as saved so the
+    // Save/offline UI reflects reality instead of re-downloading it again.
+    tab._savedBlob = blob;
+    tab._savedFilename = guessFilenameFromUrl(url, blob.type);
+    const saveResult = await saveOfflineVideo({ id: 'v' + Date.now() + Math.random().toString(36).slice(2), url, title: guessFilenameFromUrl(url, blob.type), time: Date.now(), size: blob.size, blob });
+    if (saveResult.ok) updateAutoDlIndicator(tab);
+    // Most real HLS streams use raw MPEG-TS segments, which browsers can
+    // download fine but can't decode as a playback container — assigning
+    // that straight to <video src> here would just go black with no
+    // explanation. Check first, same as the other two download paths.
+    const probe = document.createElement('video');
+    if (blob.type && probe.canPlayType(blob.type) === '') {
+      if (tab.id === activeTabId) {
+        status.style.display = 'block';
+        status.textContent = 'Saved to Downloads \u2014 this stream needs an external player (e.g. VLC) to watch; it can\u2019t preview here.';
+      }
+      updateAutoDlIndicator(tab);
+      return;
+    }
+    if (tab.el._objectUrl) { try { URL.revokeObjectURL(tab.el._objectUrl); } catch (e) {} }
+    const objUrl = URL.createObjectURL(blob);
+    tab.el._objectUrl = objUrl;
+    tab.el.src = objUrl;
+    tab.el.play().catch(() => {});
+    ensureAudioGraphIfBoosted(tab);
+    updateVolumeGain(tab, settings.volBoost);
+    applyFiltersToTab(tab);
+    updateAutoDlIndicator(tab);
+    if (tab.id === activeTabId) status.style.display = 'none';
+  } catch (e) {
+    const msg = "Couldn't load this video" + (e && e.message ? ' \u2014 ' + e.message : '');
+    if (tab.id === activeTabId) {
+      status.style.display = 'block';
+      status.textContent = msg;
+    }
+    showMiniToast(msg);
+  }
 }
 
 function setPlayPauseIcon(isPlaying) {
@@ -3705,6 +3841,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       let nextPiece = 0;
       let activeWorkers = 0;
       let rampBlocked = false;
+      let firstFatalError = null;
       // 48 concurrent connections was too aggressive for phones — mobile
       // WebViews have tighter memory/socket limits than desktop, and pushing
       // that many parallel pieces at once was a plausible cause of downloads
@@ -3741,26 +3878,55 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
           return fetchPiece(idx, attemptsLeft - 1);
         }
       };
-      async function worker() {
+      // Every worker's promise — including ones the ramp launches AFTER the
+      // initial Promise.all below would otherwise have already been called —
+      // gets pushed here, and nothing is considered "done" until every
+      // promise ever added to this array (an ever-growing list) has settled.
+      const allWorkerPromises = [];
+      function launchWorker() {
         activeWorkers++;
-        while (nextPiece < pieces.length) {
-          const idx = nextPiece++;
-          partBlobs[idx] = await fetchPiece(idx, 2);
-        }
-        activeWorkers--;
+        const p = (async () => {
+          try {
+            while (nextPiece < pieces.length && !firstFatalError) {
+              const idx = nextPiece++;
+              partBlobs[idx] = await fetchPiece(idx, 2);
+            }
+          } catch (e) {
+            if (!firstFatalError) firstFatalError = e;
+          } finally {
+            activeWorkers--;
+          }
+        })();
+        allWorkerPromises.push(p);
+        return p;
       }
-      const workerPromises = [];
       const START_WORKERS = 6;
-      for (let i = 0; i < Math.min(START_WORKERS, pieces.length); i++) workerPromises.push(worker());
+      for (let i = 0; i < Math.min(START_WORKERS, pieces.length); i++) launchWorker();
       // Ramp: every 800ms, if nothing has failed recently and there's still
       // unclaimed work, add another worker — up to MAX_WORKERS. Stops ramping
       // permanently once any real failure is seen (server pushing back).
       const ramp = setInterval(() => {
-        if (rampBlocked || nextPiece >= pieces.length || activeWorkers >= MAX_WORKERS) { clearInterval(ramp); return; }
-        workerPromises.push(worker());
+        if (rampBlocked || firstFatalError || nextPiece >= pieces.length || activeWorkers >= MAX_WORKERS) { clearInterval(ramp); return; }
+        launchWorker();
       }, 800);
-      await Promise.all(workerPromises);
-      clearInterval(ramp);
+      // Wait for the whole pool to actually drain — poll instead of a single
+      // Promise.all call, since the set of promises to wait for keeps
+      // growing for as long as the ramp is still adding workers.
+      await new Promise(resolve => {
+        const poll = setInterval(() => {
+          if (firstFatalError || (nextPiece >= pieces.length && activeWorkers === 0)) {
+            clearInterval(poll);
+            clearInterval(ramp);
+            resolve();
+          }
+        }, 120);
+      });
+      // Now every promise that was ever launched is guaranteed settled (the
+      // poll above only resolves once activeWorkers hits 0), so this just
+      // surfaces any error that hasn't already been thrown, cleanly.
+      await Promise.all(allWorkerPromises).catch(() => {});
+      if (firstFatalError) throw firstFatalError;
+      if (partBlobs.some(p => !p)) throw new Error('Download finished with missing pieces — please retry');
       result = new Blob(partBlobs);
     } else {
       if (onStatus) onStatus('Downloading (server does not support parallel chunks)…');
@@ -3800,24 +3966,32 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
   }
 }
 
-function guessFilenameFromUrl(url) {
+function guessFilenameFromUrl(url, blobType) {
   try {
     const path = new URL(url).pathname;
     const name = path.split('/').filter(Boolean).pop();
-    // An HLS playlist URL isn't the real saved file — the actual saved data
-    // is either concatenated .ts (mpeg-ts) or fmp4 segments, so give it a
-    // sensible playable extension instead of literally naming it .m3u8.
-    if (name && /\.m3u8$/i.test(name)) return name.replace(/\.m3u8$/i, '.ts');
+    if (name && /\.m3u8$/i.test(name)) {
+      // The playlist URL isn't the real saved file — the actual saved data
+      // is either concatenated .ts (mpeg-ts) or fmp4 segments. Previously
+      // this always renamed to .ts regardless of which one it actually was,
+      // so an fMP4-based HLS stream (real, playable MP4 data) got saved
+      // with a .ts extension — misleading at best, and some device gallery
+      // apps/players won't even offer to open a ".ts" file. Use the actual
+      // Blob mime type when it's available to pick the right one.
+      const base = name.replace(/\.m3u8$/i, '');
+      if (blobType === 'video/mp4') return base + '.mp4';
+      return base + '.ts';
+    }
     if (name && /\.[a-z0-9]{2,4}$/i.test(name)) return decodeURIComponent(name);
   } catch (e) {}
-  return 'video.mp4';
+  return blobType === 'video/mp2t' ? 'video.ts' : 'video.mp4';
 }
 function swapTabToBlob(tab, objectUrl, blob, sourceUrl) {
   if (tab.isLocalFile && /^blob:/i.test(tab.el.src)) { try { URL.revokeObjectURL(tab.el.src); } catch (e) {} }
   tab.isLocalFile = true; // so closing this tab releases the blob URL too
   // Keep the blob + a filename around so a "Save to device" button can offer
   // it after the download finishes, without re-downloading anything.
-  if (blob) { tab._savedBlob = blob; tab._savedFilename = guessFilenameFromUrl(sourceUrl || tab.history[tab.historyIndex] || ''); }
+  if (blob) { tab._savedBlob = blob; tab._savedFilename = guessFilenameFromUrl(sourceUrl || tab.history[tab.historyIndex] || '', blob.type); }
   const wasTime = tab.el.currentTime || 0;
   const wasMuted = tab.el.muted;
   tab.el.src = objectUrl;
@@ -3881,24 +4055,36 @@ async function fastDownloadAndPlay(tab) {
   try {
     const blob = await downloadVideoBlob(url, signal, updateFastLoadProgress, (t) => { title.textContent = t; });
     updateFastLoadProgress(100);
+    // Raw MPEG-TS (most HLS streams use .ts segments, not fMP4) can be
+    // downloaded fine but phones' <video> element can't decode that
+    // container for in-app playback — canPlayType() correctly says so.
+    // The bug this used to have: it treated "can't preview in-app" as
+    // "can't save at all" and returned before ever calling saveOfflineVideo
+    // or offering the file to the device — so almost every HLS-sourced
+    // video (the majority of real streaming sites) silently never got
+    // downloaded or saved, no matter how many times this button was
+    // pressed. Now it still saves the actual file; it only skips swapping
+    // the on-screen player over to it (which would go black).
     const probe = document.createElement('video');
-    if (blob.type && probe.canPlayType(blob.type) === '') {
-      // Downloaded fine, but this is a raw MPEG-TS blob — phones can't
-      // decode that natively. Swapping the player to it would just turn the
-      // screen black, so leave the video streaming normally instead and say
-      // why, rather than silently breaking playback.
-      overlay.classList.remove('visible');
-      alert("Downloaded successfully, but this video's stream format (MPEG-TS) can't be played back from a saved file on phone browsers — it'll keep playing normally as a live stream instead.");
-      fastLoadAbort = null;
-      return;
+    const cannotPreviewInApp = !!(blob.type && probe.canPlayType(blob.type) === '');
+    if (!cannotPreviewInApp) {
+      swapTabToBlob(tab, URL.createObjectURL(blob), blob, url);
+    } else {
+      // swapTabToBlob is what normally stashes these for the "Save to
+      // device" button and the ready badge — since we're intentionally not
+      // calling it here (it would also swap in-app playback), set them
+      // directly so saving to the device still works for this file.
+      tab._savedBlob = blob;
+      tab._savedFilename = guessFilenameFromUrl(url, blob.type);
     }
-    swapTabToBlob(tab, URL.createObjectURL(blob), blob, url);
-    const saveResult = await saveOfflineVideo({ id: 'v' + Date.now() + Math.random().toString(36).slice(2), url, title: guessFilenameFromUrl(url), time: Date.now(), size: blob.size, blob });
+    const saveResult = await saveOfflineVideo({ id: 'v' + Date.now() + Math.random().toString(36).slice(2), url, title: guessFilenameFromUrl(url, blob.type), time: Date.now(), size: blob.size, blob });
     overlay.classList.remove('visible');
     if (!saveResult.ok) {
       alert(saveResult.error === 'storage-full'
-        ? "Video is playing, but there wasn't enough free storage on this device to save a copy for offline playback — even after clearing older downloads. Try removing a few videos from Downloads and use the lightning button again."
-        : "Video is playing, but it couldn't be saved for offline playback this time. You can try the lightning button again.");
+        ? "There wasn't enough free storage on this device to save a copy for offline playback — even after clearing older downloads. Try removing a few videos from Downloads and use the lightning button again."
+        : "It couldn't be saved for offline playback this time. You can try the lightning button again.");
+    } else if (cannotPreviewInApp) {
+      showMiniToast('Saved to Downloads \u2014 this stream needs an external player (e.g. VLC) to watch, playback here keeps streaming normally');
     } else if (saveResult.freedSpace) {
       showMiniToast('Saved (freed space from older downloads)');
     }
@@ -3928,6 +4114,28 @@ document.getElementById('fastLoadBtn').addEventListener('click', () => {
 // copy (no more buffering); if it fails, the video just keeps streaming
 // normally as if nothing happened. A small, unobtrusive % indicator shows
 // progress (only while the downloading tab is the one on screen).
+// The quick-controls row wraps onto a second (sometimes third) line depending
+// on screen width and how many of its buttons happen to be visible — so a
+// fixed pixel offset for the download/save badge below it (previously
+// top:58px in CSS) was only correct for one particular row count. On
+// narrower phones the row wraps and the badge lands right on top of the
+// second row's buttons, exactly like in the screenshot. This measures the
+// controls' real rendered height each time and places the badge just below it.
+function positionAutoDlIndicator() {
+  const el = document.getElementById('autoDlIndicator');
+  const qc = document.getElementById('quickControls');
+  const stage = document.getElementById('stage');
+  if (!el || !qc || !stage) return;
+  if (qc.style.display === 'none' || getComputedStyle(qc).display === 'none') {
+    el.style.top = '10px';
+    return;
+  }
+  const qcRect = qc.getBoundingClientRect();
+  const stageRect = stage.getBoundingClientRect();
+  el.style.top = Math.round(qcRect.bottom - stageRect.top + 8) + 'px';
+}
+window.addEventListener('resize', () => { if (document.getElementById('autoDlIndicator').style.display !== 'none') positionAutoDlIndicator(); });
+
 function updateAutoDlIndicator(tab) {
   const el = document.getElementById('autoDlIndicator');
   const pctEl = document.getElementById('autoDlPct');
@@ -3952,6 +4160,7 @@ function updateAutoDlIndicator(tab) {
   } else {
     el.style.display = 'none';
   }
+  if (el.style.display === 'block') positionAutoDlIndicator();
 }
 document.getElementById('autoDlIndicator').addEventListener('click', () => {
   const tab = getTab(activeTabId);
@@ -3976,16 +4185,21 @@ async function autoDownloadInBackground(tab, url) {
     // Discard the result if the tab moved on to a different video/page
     // while this was downloading in the background.
     if (tab.history[tab.historyIndex] !== url) return;
-    // Same MPEG-TS check as the manual fast-download — a raw .ts blob can't
-    // be decoded by the phone's <video> element, so swapping to it would
-    // silently turn the screen black. This path runs quietly in the
-    // background by design, so just leave the video streaming normally and
-    // don't save an offline copy that would never play back either.
+    // Same MPEG-TS reality as the manual fast-download button: raw .ts
+    // segments (most real HLS streams) can't be decoded by <video> for
+    // in-app preview, but that's not a reason to also skip saving the file
+    // — that was the actual bug: this silently threw away almost every
+    // HLS-sourced download without ever writing it to Downloads/Offline.
     const probe = document.createElement('video');
-    if (blob.type && probe.canPlayType(blob.type) === '') { updateAutoDlIndicator(tab); return; }
+    const cannotPreviewInApp = !!(blob.type && probe.canPlayType(blob.type) === '');
     tab._autoDLPct = 100;
     updateAutoDlIndicator(tab);
-    swapTabToBlob(tab, URL.createObjectURL(blob), blob, url);
+    if (!cannotPreviewInApp) {
+      swapTabToBlob(tab, URL.createObjectURL(blob), blob, url);
+    } else {
+      tab._savedBlob = blob;
+      tab._savedFilename = guessFilenameFromUrl(url, blob.type);
+    }
     // Previously this call wasn't awaited or checked at all — if the
     // IndexedDB write failed (storage full, blob too large, DB error), the
     // video would keep playing fine from the in-memory blob (so nothing
@@ -3994,11 +4208,16 @@ async function autoDownloadInBackground(tab, url) {
     // retried on a storage-full error (same as the manual download button),
     // and a real failure that survives the retry shows a brief, unobtrusive
     // toast instead of just vanishing silently.
-    const saveResult = await saveOfflineVideo({ id: 'v' + Date.now() + Math.random().toString(36).slice(2), url, title: guessFilenameFromUrl(url), time: Date.now(), size: blob.size, blob });
-    if (!saveResult.ok && tab.id === activeTabId) {
-      showMiniToast(saveResult.error === 'storage-full'
-        ? "Playing, but couldn't save offline — storage full"
-        : "Playing, but couldn't save offline copy");
+    const saveResult = await saveOfflineVideo({ id: 'v' + Date.now() + Math.random().toString(36).slice(2), url, title: guessFilenameFromUrl(url, blob.type), time: Date.now(), size: blob.size, blob });
+    if (tab.id === activeTabId) {
+      if (!saveResult.ok) {
+        showMiniToast(saveResult.error === 'storage-full'
+          ? "Playing, but couldn't save offline — storage full"
+          : "Playing, but couldn't save offline copy");
+      } else {
+        updateAutoDlIndicator(tab);
+        if (cannotPreviewInApp) showMiniToast('Saved to Downloads \u2014 needs an external player (e.g. VLC) to watch offline');
+      }
     }
   } catch (e) {
     // Silent by design for a user cancel — but a real failure (bad network,
@@ -4037,10 +4256,17 @@ document.getElementById('shotBtn').addEventListener('click', () => {
   const ctx = canvas.getContext('2d');
   ctx.filter = 'brightness(' + settings.bright/100 + ') contrast(' + settings.contrast/100 + ') saturate(' + settings.sat/100 + ')';
   ctx.drawImage(t.el, 0, 0, canvas.width, canvas.height);
-  const link = document.createElement('a');
-  link.download = 'frame-' + Date.now() + '.png';
-  link.href = canvas.toDataURL('image/png');
-  link.click();
+  try {
+    const link = document.createElement('a');
+    link.download = 'frame-' + Date.now() + '.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  } catch (e) {
+    // A cross-origin video (no CORS headers) taints the canvas — toDataURL
+    // throws a SecurityError here with zero visible feedback otherwise, so
+    // tapping the button just silently did nothing. Say why instead.
+    showMiniToast('Can\u2019t capture a frame from this video \u2014 the site blocks it');
+  }
 });
 
 function applyPresetValues(vals) { Object.assign(settings, vals); applyEnhanceSettingsToUI(); saveEnhanceSettings(); }
