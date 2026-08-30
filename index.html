@@ -1596,11 +1596,14 @@ function loadUrl(tabId, rawUrl, isNewNav) {
       updateVolumeGain(tab, settings.volBoost);
       applyFiltersToTab(tab);
       updateAutoDlIndicator(tab);
-      // No auto-download here anymore — a video that plays fine natively
-      // just plays. If it turns out this link can't actually be streamed
-      // (see the 'error' listener in bindVideoElementEvents below), that's
-      // where the person is told to use the lightning button instead of
-      // this silently downloading everything in the background.
+      // Auto-start the same download the lightning button triggers, in
+      // silent/badge mode — the small progress badge over the video, no
+      // full-screen overlay — so playback switches to the fully-downloaded
+      // local copy (smooth, no buffering) and gets saved automatically,
+      // without the person needing to tap anything. A link that can't play
+      // at all is handled separately by the 'error' listener below, which
+      // tells the person to use the lightning button instead.
+      fastDownloadAndPlay(tab, true);
     }
   } else {
     tab.el.src = url;
@@ -3776,10 +3779,10 @@ async function loadVideoViaHlsJs(tab, url) {
   });
   hls.loadSource(url);
   hls.attachMedia(tab.el);
+  // Same auto-start as the direct-link path, so HLS sources also begin
+  // downloading (badge mode) right away — smooth playback + auto-save.
   updateAutoDlIndicator(tab);
-  // No auto-download here — this stream is already playing fine via
-  // hls.js. If the person wants an offline copy, the lightning button
-  // downloads it manually.
+  fastDownloadAndPlay(tab, true);
 }
 
 // Raw MPEG-TS segments (what most real HLS streams actually use) decode fine
