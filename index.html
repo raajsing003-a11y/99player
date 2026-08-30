@@ -296,8 +296,8 @@
 
   /* Quick video controls overlay (top-right utility icons) */
   .quick-controls {
-    position:absolute; top:10px; right:10px; left:auto; transform:none;
-    display:flex; flex-wrap:wrap; justify-content:flex-end; gap:6px; max-width:calc(100% - 20px);
+    position:absolute; top:10px; right:10px; left:96px; transform:none;
+    display:flex; flex-wrap:wrap; justify-content:flex-end; gap:6px;
     z-index:6;
   }
   .quick-controls button {
@@ -918,7 +918,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '2.8';
+const NOVA_VERSION = '3.0';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -3434,7 +3434,7 @@ function ensureMuxJs() {
 // it's to REMUX it: unpack the same H.264/AAC data already inside each TS
 // segment and repackage it in an MP4 container instead, which both this
 // player and every phone gallery/player app already understand natively.
-async function remuxTsPartsToMp4(parts, onStatus) {
+async function remuxTsPartsToMp4(parts, onStatus, onProgress) {
   await ensureMuxJs();
   return new Promise((resolve, reject) => {
     try {
@@ -3449,9 +3449,23 @@ async function remuxTsPartsToMp4(parts, onStatus) {
         if (!initSegment || !mediaChunks.length) { reject(new Error('Remux produced no playable data')); return; }
         resolve(new Blob([initSegment, ...mediaChunks], { type: 'video/mp4' }));
       });
-      if (onStatus) onStatus('Converting for playback\u2026');
-      for (const buf of parts) transmuxer.push(new Uint8Array(buf));
-      transmuxer.flush();
+      // Pushing every segment into the transmuxer in one synchronous loop is
+      // what made the progress bar look frozen at 99% — the whole thing ran
+      // as one long uninterrupted block with no chance for the UI (or this
+      // callback) to update until it was completely done. Feeding segments
+      // in one at a time via setTimeout(0) between each lets the percentage
+      // and status text actually move during this step instead of the app
+      // appearing to hang right before the finish line.
+      let i = 0;
+      function pushNext() {
+        if (i >= parts.length) { transmuxer.flush(); return; }
+        transmuxer.push(new Uint8Array(parts[i]));
+        i++;
+        if (onStatus) onStatus('Converting for playback\u2026 (' + i + '/' + parts.length + ')');
+        if (onProgress) onProgress(99 + Math.round((i / parts.length) * 1));
+        setTimeout(pushNext, 0);
+      }
+      pushNext();
     } catch (e) { reject(e); }
   });
 }
@@ -3497,6 +3511,14 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
     try { segments.push(new URL(t, playlistUrl).href); } catch (e) {}
   }
   if (!segments.length) throw new Error('No segments found in playlist');
+  // Kick off the remux library fetch now, in parallel with the segment
+  // downloads below, instead of waiting until segments finish and only then
+  // starting it — that sequential fetch (a few hundred KB over the network)
+  // was adding its own delay right after the progress bar hit 99%, on top of
+  // the actual conversion work. By the time segments finish downloading,
+  // this has usually already loaded.
+  const isFmp4Guess = /\.m4s(\?|$)/i.test(segments[0]) || /#EXT-X-MAP/.test(text);
+  if (!isFmp4Guess) ensureMuxJs().catch(() => {});
 
   const fetchSegment = async (u) => {
     // Each segment gets a real retry budget instead of one shot. Previously a
@@ -3557,14 +3579,12 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
     // instead of silently saving a video that will stutter or fail to play.
     throw new Error(failedSegments + ' of ' + segments.length + ' segments could not be downloaded after retrying — the source may have removed or expired part of this stream.');
   }
-  const isFmp4 = /\.m4s(\?|$)/i.test(segments[0]) || /#EXT-X-MAP/.test(text);
-  if (isFmp4) return new Blob(parts, { type: 'video/mp4' });
+  if (isFmp4Guess) return new Blob(parts, { type: 'video/mp4' });
   // Raw MPEG-TS segments — remux them into a normal MP4 so the saved file
   // can actually be replayed (in this app and by any player on the phone),
   // instead of saving an unplayable raw .ts blob.
   try {
-    if (onStatus) onStatus('Converting for playback\u2026');
-    return await remuxTsPartsToMp4(parts, onStatus);
+    return await remuxTsPartsToMp4(parts, onStatus, onProgress);
   } catch (e) {
     // Remux failed (odd codec, corrupt segment, library couldn't load, etc.)
     // — still return the raw TS so the download itself doesn't fail outright;
@@ -4221,6 +4241,31 @@ document.getElementById('fastLoadBtn').addEventListener('click', () => {
 // narrower phones the row wraps and the badge lands right on top of the
 // second row's buttons, exactly like in the screenshot. This measures the
 // controls' real rendered height each time and places the badge just below it.
+// Keeps the quick-controls row (rotate/flip/enhance/etc.) clear of the
+// top-left cluster (back arrow, hide-toolbar arrow, Kids Lock badge) instead
+// of a fixed guess for its width. That cluster's width isn't constant — the
+// Kids Lock badge alone adds ~90px when it's showing — so a static offset
+// only worked for whichever combination of buttons happened to be visible
+// when it was written. Previously this caused the first 1-2 quick-control
+// buttons (Video enhancer, Paste link) to render directly underneath the
+// higher z-index cluster and disappear completely, even though they were
+// technically still "there" — this keeps them a fixed gap clear of it
+// regardless of which of those buttons/badges are currently shown.
+function positionQuickControls() {
+  const topLeft = document.getElementById('playerTopLeft');
+  const qc = document.getElementById('quickControls');
+  if (!topLeft || !qc) return;
+  const w = topLeft.getBoundingClientRect().width;
+  qc.style.left = Math.round(w + 18) + 'px';
+}
+(function () {
+  const topLeft = document.getElementById('playerTopLeft');
+  if (!topLeft) return;
+  new ResizeObserver(positionQuickControls).observe(topLeft);
+})();
+window.addEventListener('resize', positionQuickControls);
+positionQuickControls();
+
 function positionAutoDlIndicator() {
   const el = document.getElementById('autoDlIndicator');
   const qc = document.getElementById('quickControls');
