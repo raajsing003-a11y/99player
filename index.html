@@ -535,7 +535,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 1.6</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 2.1</div>
   </div>
 
   <div class="toolbar">
@@ -839,7 +839,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '1.6';
+const NOVA_VERSION = '2.1';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -860,6 +860,44 @@ let isLocked = false;
 let isKidsLock = false;
 let orientMode = 'auto';
 let playerMode = false;
+
+/* ================= Domain pattern memory ================= */
+// Learns, per domain, which route actually worked last time (which CORS
+// proxy found the video on an extraction page, and whether a video host
+// answers HEAD/Range requests directly). Next time a link from the same
+// domain is opened, we try that known-good route FIRST — a single request
+// instead of racing every proxy — so repeat domains open noticeably faster.
+// Falls back to the normal full race whenever there's no memory yet, or the
+// remembered route stops working (site changed something), and re-learns
+// silently either way.
+let domainPatterns = {};
+let domainPatternsSaveTimer = null;
+function getDomain(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch (e) { return null; }
+}
+function saveDomainPatterns() {
+  clearTimeout(domainPatternsSaveTimer);
+  domainPatternsSaveTimer = setTimeout(() => {
+    try { window.storage.set('novabrowser:domainpatterns', JSON.stringify(domainPatterns)); } catch (e) {}
+  }, 400);
+}
+async function loadDomainPatterns() {
+  try {
+    const d = await window.storage.get('novabrowser:domainpatterns');
+    domainPatterns = d ? JSON.parse(d.value) : {};
+  } catch (e) { domainPatterns = {}; }
+}
+// method: 'extract' (which CORS_PROXIES index found the video on a page) or
+// 'stream' (whether the video host itself accepts direct HEAD/Range requests,
+// or which relay was needed instead).
+function recordDomainPattern(domain, method, data) {
+  if (!domain) return;
+  domainPatterns[domain] = Object.assign({}, domainPatterns[domain], { [method]: data, updated: Date.now() });
+  saveDomainPatterns();
+}
+function getDomainPattern(domain, method) {
+  return domain && domainPatterns[domain] ? domainPatterns[domain][method] : null;
+}
 
 /* ================= Persistence ================= */
 // This app was originally built against Claude's artifact `window.storage`
@@ -890,6 +928,7 @@ async function loadPersistedData() {
   try { const s = await window.storage.get('novabrowser:enhancesettings'); if (s) settings = { ...settings, ...JSON.parse(s.value) }; } catch (e) {}
   try { const p = await window.storage.get('novabrowser:custompresets'); if (p) customPresets = JSON.parse(p.value); } catch (e) {}
   try { const m = await window.storage.get('novabrowser:maskmode'); maskMode = m ? m.value === '1' : false; } catch (e) { maskMode = false; }
+  await loadDomainPatterns();
   applyMaskModeUI();
 }
 
@@ -2724,6 +2763,32 @@ async function scanUrlForVideoCandidates(pageUrl, statusEl) {
 async function extractVideoCandidatesFast(pageUrl) {
   const statusEl = document.getElementById('extractStatus');
   if (statusEl) { statusEl.textContent = 'Loading page…'; statusEl.className = 'extract-status'; }
+
+  const runOne = async (fetchUrl) => {
+    const res = await fetchWithTimeout(fetchUrl, { method: 'GET', mode: 'cors' }, FAST_PROXY_TIMEOUT_MS);
+    if (!res.ok) return null;
+    let html = await res.text();
+    if (fetchUrl.indexOf('allorigins.win/get') !== -1) {
+      try { const parsed = JSON.parse(html); if (parsed && typeof parsed.contents === 'string') html = parsed.contents; } catch (e) {}
+    }
+    if (!html || html.length < 50) return null;
+    const found = findVideoUrlsInHtml(html, pageUrl);
+    return found.length ? found : null;
+  };
+
+  // Known-good route for this domain from a previous visit — try it alone
+  // first. One request instead of racing every proxy, so a domain you've
+  // already opened before comes back noticeably faster the next time.
+  const domain = getDomain(pageUrl);
+  const remembered = getDomainPattern(domain, 'extract');
+  if (remembered != null && CORS_PROXIES[remembered]) {
+    if (statusEl) statusEl.textContent = 'Using saved fast route for ' + domain + '…';
+    try {
+      const found = await runOne(CORS_PROXIES[remembered](pageUrl));
+      if (found) return found; // still works — done, skipped the race entirely
+    } catch (e) { /* remembered route stopped working — fall through and re-learn below */ }
+  }
+
   const attempt = (proxyFn) => new Promise((resolve) => {
     (async () => {
       try {
@@ -2742,16 +2807,20 @@ async function extractVideoCandidatesFast(pageUrl) {
       }
     })();
   });
-  const promises = FAST_CORS_PROXIES.map(fn => attempt(fn));
+  const promises = FAST_CORS_PROXIES.map((fn, idx) => attempt(fn).then(result => ({ result, idx })));
   return new Promise((resolveAll) => {
     let pending = promises.length;
     let doneAlready = false;
     promises.forEach(p => {
-      p.then(result => {
+      p.then(({ result, idx }) => {
         pending--;
         if (doneAlready) return;
         if (result && result.length) {
           doneAlready = true;
+          // FAST_CORS_PROXIES mirrors the first entries of CORS_PROXIES in the
+          // same order, so this index is valid there too — remember it for
+          // next time this domain is opened.
+          recordDomainPattern(domain, 'extract', idx);
           resolveAll(result);
         } else if (pending === 0) {
           doneAlready = true;
@@ -3041,7 +3110,12 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
 
   const parts = new Array(segments.length);
   let completed = 0;
-  const CONCURRENCY = 5;
+  // Worker-pool concurrency for fetching .ts/.m4s segments in parallel — 5 was
+  // conservative and left bandwidth on the table on fast connections; segments
+  // are small (a few hundred KB - a couple MB each) so a much higher pool keeps
+  // many in flight at once without any single request being large enough to
+  // matter individually.
+  const CONCURRENCY = 24;
   let nextIndex = 0;
   async function worker() {
     while (nextIndex < segments.length) {
@@ -3293,10 +3367,19 @@ async function proxyDownload(url, signal, title, onProgress) {
     u => 'https://corsproxy.io/?url=' + encodeURIComponent(u),
     u => 'https://thingproxy.freeboard.io/fetch/' + u
   ];
+  const domain = getDomain(url);
+  const remembered = getDomainPattern(domain, 'streamProxy');
+  // Try the relay that worked for this domain last time first, keeping the
+  // rest as fallback order — a repeat domain skips straight to the route
+  // that's known to work instead of working through the list from scratch.
+  const order = (remembered != null && proxies[remembered])
+    ? [remembered, ...proxies.map((_, i) => i).filter(i => i !== remembered)]
+    : proxies.map((_, i) => i);
   let lastErr = null;
-  for (let i = 0; i < proxies.length; i++) {
+  for (let n = 0; n < order.length; n++) {
+    const i = order[n];
     try {
-      if (title) title.textContent = i === 0 ? 'Direct download blocked — routing through a relay…' : 'Trying another relay (' + (i + 1) + '/' + proxies.length + ')…';
+      if (title) title.textContent = n === 0 ? 'Direct download blocked — routing through a relay…' : 'Trying another relay (' + (n + 1) + '/' + order.length + ')…';
       const res = await fetchWithTimeout(proxies[i](url), { signal }, 20000);
       if (!res.ok || !res.body) { lastErr = new Error('HTTP ' + res.status); continue; }
       const total = Number(res.headers.get('content-length') || 0);
@@ -3312,6 +3395,7 @@ async function proxyDownload(url, signal, title, onProgress) {
       }
       const blob = new Blob(bytes);
       if (blob.size < 1000) { lastErr = new Error('Empty/invalid response'); continue; } // relay likely returned an error page, not the video
+      recordDomainPattern(domain, 'streamProxy', i);
       return blob;
     } catch (e) {
       if (e.name === 'AbortError') throw e;
@@ -3355,6 +3439,15 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
     if (onStatus) onStatus('Preparing HLS download…');
     return await downloadHlsBlob(url, onProgress, onStatus, signal);
   }
+  const streamDomain = getDomain(url);
+  const knownDirectBlocked = getDomainPattern(streamDomain, 'streamDirect') === false;
+  if (knownDirectBlocked) {
+    // This host has failed direct fetches before — skip straight to the
+    // relay instead of spending a HEAD timeout + failed GET re-discovering
+    // that every time a video from this domain is opened.
+    if (onStatus) onStatus('Using saved relay route for ' + streamDomain + '…');
+    return await proxyDownload(url, signal, onStatus ? { set textContent(v) { onStatus(v); } } : null, onProgress);
+  }
   const watchdog = createStallWatchdog(signal, 25000);
   try {
     // HEAD is blocked by CORS on plenty of video hosts even when GET works
@@ -3374,42 +3467,87 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
 
     let result;
     if (len > 0 && acceptsRanges) {
-      // Scale parallel connections with file size — a fixed small count under-uses
-      // available bandwidth on larger files, while too many on a small file wastes
-      // connections for no gain. 6-24 range, roughly one chunk per ~4MB, so a fast
-      // connection actually gets saturated instead of capping out at 10 streams.
-      const CHUNKS = Math.max(6, Math.min(24, Math.round(len / (4 * 1024 * 1024))));
-      const chunkSize = Math.ceil(len / CHUNKS);
-      const ranges = [];
-      for (let i = 0; i < CHUNKS; i++) {
-        const start = i * chunkSize;
-        const end = Math.min(start + chunkSize - 1, len - 1);
-        if (start > end) break;
-        ranges.push([start, end]);
+      // Adaptive work-stealing pool instead of a fixed connection count.
+      // A fixed number is always a guess — too low leaves bandwidth unused,
+      // too high gets you rate-limited/blocked by servers that cap
+      // concurrent connections per IP (which then makes things slower, not
+      // faster). Instead: split the file into small ~1MB pieces in a shared
+      // queue, start with a modest worker pool, and ramp MORE workers in
+      // every second as long as pieces keep succeeding — up to a high
+      // ceiling. The moment a request fails (not from our own timeout), stop
+      // ramping and let the pool settle at whatever level the server/network
+      // actually sustains. This finds the real highest-safe concurrency for
+      // THIS server on THIS connection, rather than a number picked in
+      // advance that might be too conservative on a fast line or too
+      // aggressive against a strict server.
+      const PIECE_SIZE = 1 * 1024 * 1024;
+      const pieceCount = Math.max(1, Math.ceil(len / PIECE_SIZE));
+      const pieces = [];
+      for (let i = 0; i < pieceCount; i++) {
+        const start = i * PIECE_SIZE;
+        const end = Math.min(start + PIECE_SIZE - 1, len - 1);
+        pieces.push([start, end]);
       }
-      const loaded = new Array(ranges.length).fill(0);
+      const partBlobs = new Array(pieces.length);
+      const loaded = new Array(pieces.length).fill(0);
       const reportProgress = () => {
         if (!onProgress) return;
         const total = loaded.reduce((a, b) => a + b, 0);
         onProgress(Math.min(99, (total / len) * 100), total, len);
       };
-      const parts = await Promise.all(ranges.map(async ([start, end], idx) => {
-        const res = await fetch(url, { headers: { Range: 'bytes=' + start + '-' + end }, signal: watchdog.signal });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        if (!res.body) { const buf = await res.arrayBuffer(); loaded[idx] = buf.byteLength; watchdog.poke(); reportProgress(); return new Blob([buf]); }
-        const reader = res.body.getReader();
-        const bytes = [];
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          bytes.push(value);
-          loaded[idx] += value.length;
-          watchdog.poke();
+      let nextPiece = 0;
+      let activeWorkers = 0;
+      let rampBlocked = false;
+      const MAX_WORKERS = 48;
+      const fetchPiece = async (idx, attemptsLeft) => {
+        const [start, end] = pieces[idx];
+        try {
+          const res = await fetch(url, { headers: { Range: 'bytes=' + start + '-' + end }, signal: watchdog.signal });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          if (!res.body) { const buf = await res.arrayBuffer(); loaded[idx] = buf.byteLength; watchdog.poke(); reportProgress(); return new Blob([buf]); }
+          const reader = res.body.getReader();
+          const bytes = [];
+          let got = 0;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            bytes.push(value);
+            got += value.length;
+            loaded[idx] = got;
+            watchdog.poke();
+            reportProgress();
+          }
+          return new Blob(bytes);
+        } catch (e) {
+          if (watchdog.signal.aborted) throw e;
+          rampBlocked = true; // this server/network just pushed back — stop adding more workers
+          if (attemptsLeft <= 0) throw e;
+          loaded[idx] = 0;
           reportProgress();
+          return fetchPiece(idx, attemptsLeft - 1);
         }
-        return new Blob(bytes);
-      }));
-      result = new Blob(parts);
+      };
+      async function worker() {
+        activeWorkers++;
+        while (nextPiece < pieces.length) {
+          const idx = nextPiece++;
+          partBlobs[idx] = await fetchPiece(idx, 2);
+        }
+        activeWorkers--;
+      }
+      const workerPromises = [];
+      const START_WORKERS = 8;
+      for (let i = 0; i < Math.min(START_WORKERS, pieces.length); i++) workerPromises.push(worker());
+      // Ramp: every 800ms, if nothing has failed recently and there's still
+      // unclaimed work, add another worker — up to MAX_WORKERS. Stops ramping
+      // permanently once any real failure is seen (server pushing back).
+      const ramp = setInterval(() => {
+        if (rampBlocked || nextPiece >= pieces.length || activeWorkers >= MAX_WORKERS) { clearInterval(ramp); return; }
+        workerPromises.push(worker());
+      }, 800);
+      await Promise.all(workerPromises);
+      clearInterval(ramp);
+      result = new Blob(partBlobs);
     } else {
       if (onStatus) onStatus('Downloading (server does not support parallel chunks)…');
       const res = await fetch(url, { signal: watchdog.signal });
@@ -3433,6 +3571,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
     }
     if (!result || result.size < 1000) throw new Error('Empty/invalid response');
     watchdog.cleanup();
+    recordDomainPattern(streamDomain, 'streamDirect', true);
     return result;
   } catch (directErr) {
     watchdog.cleanup();
@@ -3441,6 +3580,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
     // failed, or the watchdog gave up on a stalled connection) falls back
     // to the CORS relay instead of leaving the download stuck forever.
     if (signal && signal.aborted) throw directErr;
+    recordDomainPattern(streamDomain, 'streamDirect', false);
     if (onProgress) onProgress(0, 0, 0);
     return await proxyDownload(url, signal, onStatus ? { set textContent(v) { onStatus(v); } } : null, onProgress);
   }
@@ -3465,13 +3605,28 @@ function swapTabToBlob(tab, objectUrl, blob, sourceUrl) {
   // it after the download finishes, without re-downloading anything.
   if (blob) { tab._savedBlob = blob; tab._savedFilename = guessFilenameFromUrl(sourceUrl || tab.history[tab.historyIndex] || ''); }
   const wasTime = tab.el.currentTime || 0;
-  const wasPlaying = !tab.el.paused;
   tab.el.src = objectUrl;
   tab.el.load();
   tab.el.addEventListener('loadedmetadata', function onMeta() {
     tab.el.removeEventListener('loadedmetadata', onMeta);
     tab.el.currentTime = wasTime;
-    if (wasPlaying) { tab.el.play().catch(() => {}); ensureAudioGraphIfBoosted(tab); }
+    // Always try to resume playback once the download finishes and we
+    // switch over to the local copy — not just when the stream happened to
+    // be mid-play already. Without this, a video that was still buffering
+    // (or never actually started, e.g. autoplay was blocked on first open)
+    // stayed paused-and-blank forever after the swap, which looked like the
+    // video had vanished even though the download genuinely completed.
+    const playPromise = tab.el.play();
+    if (playPromise && playPromise.catch) {
+      playPromise.then(() => { if (tab.id === activeTabId) ensureAudioGraphIfBoosted(tab); }).catch(() => {
+        // Autoplay blocked by the browser (no user gesture in this context) —
+        // still nudge the element so at least a real frame renders instead
+        // of a black stage; the user can tap play to actually resume.
+        try { tab.el.currentTime = wasTime; } catch (e) {}
+      });
+    } else {
+      ensureAudioGraphIfBoosted(tab);
+    }
   });
 }
 function saveTabBlobToDevice(tab) {
