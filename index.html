@@ -704,6 +704,27 @@ let orientMode = 'auto';
 let playerMode = false;
 
 /* ================= Persistence ================= */
+// This app was originally built against Claude's artifact `window.storage`
+// API, which only exists inside Claude's own preview — not in a normal
+// hosted page (like GitHub Pages). Outside that environment every
+// window.storage.get/set call silently failed, so nothing ever actually
+// saved. This shim backs the exact same get/set interface with real
+// localStorage, so it works correctly wherever the page is hosted, while
+// still using the real window.storage transparently if this ever runs
+// inside a Claude artifact again.
+if (!window.storage) {
+  window.storage = {
+    async get(key) {
+      try {
+        const v = localStorage.getItem(key);
+        return v === null ? null : { value: v };
+      } catch (e) { return null; }
+    },
+    async set(key, value) {
+      try { localStorage.setItem(key, value); return { value }; } catch (e) { return null; }
+    }
+  };
+}
 async function loadPersistedData() {
   try { const h = await window.storage.get('novabrowser:history'); globalHistory = h ? JSON.parse(h.value) : []; } catch (e) { globalHistory = []; }
   try { const b = await window.storage.get('novabrowser:bookmarks'); bookmarks = b ? JSON.parse(b.value) : []; } catch (e) { bookmarks = []; }
@@ -978,6 +999,10 @@ function loadUrl(tabId, rawUrl, isNewNav) {
     ensureAudioGraphIfBoosted(tab);
     updateVolumeGain(tab, settings.volBoost);
     applyFiltersToTab(tab);
+    // Start downloading the full file in the background right away, so
+    // playback can silently switch from streaming to the fully-downloaded
+    // copy (no more buffering) without the user having to press anything.
+    autoDownloadInBackground(tab, url);
   }
 
   const status = document.getElementById('status');
@@ -1037,7 +1062,11 @@ function closeTab(id) {
   const idx = tabs.findIndex(t => t.id === id);
   if (idx === -1) return;
   const tab = tabs[idx];
+  if (tab._autoDLAbort) { try { tab._autoDLAbort.abort(); } catch (e) {} }
   if (tab.isLocalFile && tab.el.src) { try { URL.revokeObjectURL(tab.el.src); } catch (e) {} }
+  // Boosted video tabs open a real AudioContext — close it too, otherwise
+  // it stays alive (and audible/consuming resources) after the tab is gone.
+  if (tab.audioCtx) { try { tab.audioCtx.close(); } catch (e) {} }
   tab.el.remove();
   if (tab.canvas) tab.canvas.remove();
   tabs.splice(idx, 1);
@@ -1518,6 +1547,16 @@ function exitPlayerModeFn(fromPopstate) {
   } catch (e) {}
 }
 window.addEventListener('popstate', () => { if (playerMode) exitPlayerModeFn(true); });
+// Browsers auto-suspend a tab's AudioContext when the app/tab goes to the
+// background (screen lock, app switch), and don't always resume it when
+// you come back — which silently kills audio on a boosted video tab.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  const tab = getTab(activeTabId);
+  if (tab && tab.audioCtx && tab.audioCtx.state === 'suspended') {
+    tab.audioCtx.resume().catch(() => {});
+  }
+});
 document.getElementById('exitPlayerBtn').addEventListener('click', () => exitPlayerModeFn());
 document.getElementById('stage').addEventListener('click', (e) => {
   const tab = getTab(activeTabId);
@@ -2373,9 +2412,91 @@ async function proxyDownload(url, signal, title) {
   throw lastErr || new Error('All relays failed');
 }
 
+// Core download logic shared by the manual "Fast download" button and the
+// automatic background download — fetches the whole video into memory,
+// preferring parallel range-chunked requests, falling back to a single
+// stream, then to a CORS relay if the host blocks direct requests.
+async function downloadVideoBlob(url, signal, onProgress, onStatus) {
+  try {
+    const head = await fetchWithTimeout(url, { method: 'HEAD', signal }, 8000);
+    const len = Number(head.headers.get('content-length') || 0);
+    const acceptsRanges = (head.headers.get('accept-ranges') || '').toLowerCase().includes('bytes');
+
+    if (len > 0 && acceptsRanges) {
+      const CHUNKS = 6;
+      const chunkSize = Math.ceil(len / CHUNKS);
+      const ranges = [];
+      for (let i = 0; i < CHUNKS; i++) {
+        const start = i * chunkSize;
+        const end = Math.min(start + chunkSize - 1, len - 1);
+        if (start > end) break;
+        ranges.push([start, end]);
+      }
+      const loaded = new Array(ranges.length).fill(0);
+      const reportProgress = () => {
+        if (!onProgress) return;
+        const total = loaded.reduce((a, b) => a + b, 0);
+        onProgress(Math.min(99, (total / len) * 100));
+      };
+      const parts = await Promise.all(ranges.map(async ([start, end], idx) => {
+        const res = await fetch(url, { headers: { Range: 'bytes=' + start + '-' + end }, signal });
+        if (!res.body) { const buf = await res.arrayBuffer(); loaded[idx] = buf.byteLength; reportProgress(); return new Blob([buf]); }
+        const reader = res.body.getReader();
+        const bytes = [];
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          bytes.push(value);
+          loaded[idx] += value.length;
+          reportProgress();
+        }
+        return new Blob(bytes);
+      }));
+      return new Blob(parts);
+    } else {
+      if (onStatus) onStatus('Downloading (server does not support parallel chunks)…');
+      const res = await fetch(url, { signal });
+      const total = Number(res.headers.get('content-length') || 0);
+      const reader = res.body.getReader();
+      const bytes = [];
+      let received = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes.push(value);
+        received += value.length;
+        if (total && onProgress) onProgress(Math.min(99, (received / total) * 100));
+      }
+      return new Blob(bytes);
+    }
+  } catch (directErr) {
+    if (directErr.name === 'AbortError') throw directErr;
+    // Direct connection failed — almost always the video host blocking
+    // cross-origin requests (no Access-Control-Allow-Origin header).
+    // Fall back to routing the download through a CORS relay.
+    if (onProgress) onProgress(0);
+    return await proxyDownload(url, signal, onStatus ? { set textContent(v) { onStatus(v); } } : null);
+  }
+}
+
+function swapTabToBlob(tab, objectUrl) {
+  if (tab.isLocalFile && /^blob:/i.test(tab.el.src)) { try { URL.revokeObjectURL(tab.el.src); } catch (e) {} }
+  tab.isLocalFile = true; // so closing this tab releases the blob URL too
+  const wasTime = tab.el.currentTime || 0;
+  const wasPlaying = !tab.el.paused;
+  tab.el.src = objectUrl;
+  tab.el.load();
+  tab.el.addEventListener('loadedmetadata', function onMeta() {
+    tab.el.removeEventListener('loadedmetadata', onMeta);
+    tab.el.currentTime = wasTime;
+    if (wasPlaying) { tab.el.play().catch(() => {}); ensureAudioGraphIfBoosted(tab); }
+  });
+}
+
 async function fastDownloadAndPlay(tab) {
   const url = tab.el.currentSrc || tab.el.src;
   if (!url || /^blob:/i.test(url)) return; // already local/fast
+  if (tab._autoDLAbort) { try { tab._autoDLAbort.abort(); } catch (e) {} tab._autoDLAbort = null; } // manual takes over from any auto-download in flight
   const overlay = document.getElementById('fastLoadOverlay');
   const title = document.getElementById('fastLoadTitle');
   overlay.classList.add('visible');
@@ -2384,82 +2505,9 @@ async function fastDownloadAndPlay(tab) {
   const signal = fastLoadAbort.signal;
 
   try {
-    let blob;
-    try {
-      // Try a direct connection first — fastest path when the host allows CORS.
-      const head = await fetchWithTimeout(url, { method: 'HEAD', signal }, 8000);
-      const len = Number(head.headers.get('content-length') || 0);
-      const acceptsRanges = (head.headers.get('accept-ranges') || '').toLowerCase().includes('bytes');
-
-      if (len > 0 && acceptsRanges) {
-        // Split the file into parallel chunks — like a download manager — so the
-        // full connection speed gets used instead of a single slow stream.
-        const CHUNKS = 6;
-        const chunkSize = Math.ceil(len / CHUNKS);
-        const ranges = [];
-        for (let i = 0; i < CHUNKS; i++) {
-          const start = i * chunkSize;
-          const end = Math.min(start + chunkSize - 1, len - 1);
-          if (start > end) break;
-          ranges.push([start, end]);
-        }
-        const loaded = new Array(ranges.length).fill(0);
-        const reportProgress = () => {
-          const total = loaded.reduce((a, b) => a + b, 0);
-          updateFastLoadProgress(Math.min(99, (total / len) * 100));
-        };
-        const parts = await Promise.all(ranges.map(async ([start, end], idx) => {
-          const res = await fetch(url, { headers: { Range: 'bytes=' + start + '-' + end }, signal });
-          if (!res.body) { const buf = await res.arrayBuffer(); loaded[idx] = buf.byteLength; reportProgress(); return new Blob([buf]); }
-          const reader = res.body.getReader();
-          const bytes = [];
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            bytes.push(value);
-            loaded[idx] += value.length;
-            reportProgress();
-          }
-          return new Blob(bytes);
-        }));
-        blob = new Blob(parts);
-      } else {
-        // Server doesn't support ranges — fall back to one fast sequential download.
-        title.textContent = 'Downloading (server does not support parallel chunks)…';
-        const res = await fetch(url, { signal });
-        const total = Number(res.headers.get('content-length') || 0);
-        const reader = res.body.getReader();
-        const bytes = [];
-        let received = 0;
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          bytes.push(value);
-          received += value.length;
-          if (total) updateFastLoadProgress(Math.min(99, (received / total) * 100));
-        }
-        blob = new Blob(bytes);
-      }
-    } catch (directErr) {
-      if (directErr.name === 'AbortError') throw directErr;
-      // Direct connection failed — almost always the video host blocking
-      // cross-origin requests (no Access-Control-Allow-Origin header).
-      // Fall back to routing the download through a CORS relay.
-      updateFastLoadProgress(0);
-      blob = await proxyDownload(url, signal, title);
-    }
-
+    const blob = await downloadVideoBlob(url, signal, updateFastLoadProgress, (t) => { title.textContent = t; });
     updateFastLoadProgress(100);
-    const objectUrl = URL.createObjectURL(blob);
-    const wasTime = tab.el.currentTime || 0;
-    const wasPlaying = !tab.el.paused;
-    tab.el.src = objectUrl;
-    tab.el.load();
-    tab.el.addEventListener('loadedmetadata', function onMeta() {
-      tab.el.removeEventListener('loadedmetadata', onMeta);
-      tab.el.currentTime = wasTime;
-      if (wasPlaying) { tab.el.play().catch(() => {}); ensureAudioGraphIfBoosted(tab); }
-    });
+    swapTabToBlob(tab, URL.createObjectURL(blob));
     overlay.classList.remove('visible');
   } catch (e) {
     if (e.name !== 'AbortError') {
@@ -2480,6 +2528,30 @@ document.getElementById('fastLoadBtn').addEventListener('click', () => {
   }
   fastDownloadAndPlay(t);
 });
+
+// Runs the same download automatically, quietly, in the background —
+// no overlay, no interrupting the stream that's already playing. If it
+// succeeds, playback silently switches over to the fully-downloaded local
+// copy (no more buffering); if it fails, the video just keeps streaming
+// normally as if nothing happened.
+async function autoDownloadInBackground(tab, url) {
+  if (!tab || !url || /^blob:/i.test(url) || tab.isLocalFile) return;
+  if (tab._autoDLAbort) { try { tab._autoDLAbort.abort(); } catch (e) {} }
+  const ctrl = new AbortController();
+  tab._autoDLAbort = ctrl;
+  try {
+    const blob = await downloadVideoBlob(url, ctrl.signal, null, null);
+    if (ctrl.signal.aborted) return;
+    // Discard the result if the tab moved on to a different video/page
+    // while this was downloading in the background.
+    if (tab.history[tab.historyIndex] !== url) return;
+    swapTabToBlob(tab, URL.createObjectURL(blob));
+  } catch (e) {
+    // Silent by design — streaming playback continues untouched.
+  } finally {
+    if (tab._autoDLAbort === ctrl) tab._autoDLAbort = null;
+  }
+}
 document.getElementById('fastLoadCancelBtn').addEventListener('click', () => {
   if (fastLoadAbort) fastLoadAbort.abort();
   document.getElementById('fastLoadOverlay').classList.remove('visible');
