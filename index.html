@@ -610,7 +610,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 9.0</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 9.4</div>
   </div>
 
   <div class="toolbar">
@@ -937,7 +937,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '9.0';
+const NOVA_VERSION = '9.4';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -1596,10 +1596,8 @@ function loadUrl(tabId, rawUrl, isNewNav) {
       updateVolumeGain(tab, settings.volBoost);
       applyFiltersToTab(tab);
       updateAutoDlIndicator(tab);
-      // Start downloading the full file in the background right away, so
-      // playback can silently switch from streaming to the fully-downloaded
-      // copy (no more buffering) without the user having to press anything.
-      autoDownloadInBackground(tab, url);
+      // Downloading only ever starts when the user taps the lightning
+      // (fast-download) button — no automatic download on link load.
     }
   } else {
     tab.el.src = url;
@@ -3770,11 +3768,8 @@ async function loadVideoViaHlsJs(tab, url) {
   });
   hls.loadSource(url);
   hls.attachMedia(tab.el);
-  // Still keep a full copy downloading quietly in the background so the
-  // Save/offline flow and "switch to buffer-free local copy" behavior work
-  // exactly as they do for direct .mp4 links.
+  // Downloading only ever starts when the user taps the lightning button.
   updateAutoDlIndicator(tab);
-  autoDownloadInBackground(tab, url);
 }
 
 // Raw MPEG-TS segments (what most real HLS streams actually use) decode fine
@@ -4093,6 +4088,16 @@ function mp4bBuildStbl(stsdBytes, samples, mdatSampleOffsets) {
 // better than a remux that silently produces a broken file.
 async function remuxFragmentedToFlatMp4(initSegment, mediaChunks) {
   try {
+    // Even with the per-sample copy bug fixed above, this step still needs
+    // to hold the original fragmented data AND the new flat copy in memory
+    // at the same time — roughly 2x the video's size at peak. On a very
+    // large download that alone can be enough to get the WebView renderer
+    // killed for memory on a mid-range phone. Past this size, skip the
+    // remux and keep the fragmented blob (still plays fine from the start,
+    // just not seekable) rather than risk crashing the app on completion.
+    const totalBytes = (initSegment.byteLength || 0) + mediaChunks.reduce((a, c) => a + (c.byteLength || 0), 0);
+    const MAX_REMUX_BYTES = 300 * 1024 * 1024; // 300MB
+    if (totalBytes > MAX_REMUX_BYTES) return null;
     const initBuf = initSegment.buffer ? initSegment.buffer.slice(initSegment.byteOffset, initSegment.byteOffset + initSegment.byteLength) : initSegment;
     const initView = new DataView(initBuf);
     const moov = mp4bFind(initView, 0, initBuf.byteLength, 'moov');
@@ -4146,17 +4151,30 @@ async function remuxFragmentedToFlatMp4(initSegment, mediaChunks) {
 
     let mdatCursor = 0;
     const trackSampleData = [];
+    // Normalize each mediaChunk to a plain ArrayBuffer exactly ONCE (not
+    // per-sample) — this used to re-slice (copy) the *entire* chunk's
+    // buffer for every single sample drawn from it, so a chunk holding e.g.
+    // 200 samples had its full bytes copied 200 times over. On a
+    // multi-hundred-MB video that multiplication blew past what the
+    // WebView renderer process can hold and crashed the whole app right at
+    // the 100%-downloaded mark, when this remux step kicks in. Caching the
+    // normalized buffer here means each chunk's bytes are read once no
+    // matter how many samples come out of it.
+    const normalizedChunks = mediaChunks.map(c =>
+      c.buffer ? c.buffer.slice(c.byteOffset, c.byteOffset + c.byteLength) : c);
     for (const t of trackDefs) {
       const relOffsets = [];
-      const chunks = [];
+      const totalSize = t.samples.reduce((a, s) => a + s.size, 0);
+      const bytes = new Uint8Array(totalSize); // one allocation for this track's samples
+      let writeOffset = 0;
       for (const s of t.samples) {
         relOffsets.push(mdatCursor);
         mdatCursor += s.size;
-        const chunkBuf = mediaChunks[s.chunkIndex];
-        const src = chunkBuf.buffer ? chunkBuf.buffer.slice(chunkBuf.byteOffset, chunkBuf.byteOffset + chunkBuf.byteLength) : chunkBuf;
-        chunks.push(new Uint8Array(src, s.byteOffset, s.size));
+        const src = normalizedChunks[s.chunkIndex];
+        bytes.set(new Uint8Array(src, s.byteOffset, s.size), writeOffset);
+        writeOffset += s.size;
       }
-      trackSampleData.push({ relOffsets, bytes: concatUint8(chunks) });
+      trackSampleData.push({ relOffsets, bytes });
     }
 
     // mvhd: minimal, movie-wide header — timescale of 1000 (ms) with the
@@ -5426,13 +5444,17 @@ function formatElapsed(ms) {
   const rem = Math.round(s - m * 60);
   return m + 'm ' + rem + 's';
 }
-async function fastDownloadAndPlay(tab) {
+async function fastDownloadAndPlay(tab, silent) {
   const url = tab.el.currentSrc || tab.el.src;
   if (!url || /^blob:/i.test(url)) return; // already local/fast
   if (tab._autoDLAbort) { try { tab._autoDLAbort.abort(); } catch (e) {} tab._autoDLAbort = null; } // manual takes over from any auto-download in flight
   const overlay = document.getElementById('fastLoadOverlay');
   const title = document.getElementById('fastLoadTitle');
-  overlay.classList.add('visible');
+  // Auto-triggered downloads (silent=true, right when a video starts
+  // playing) go straight to the small on-video badge — same UI the manual
+  // lightning button's "Watch now" (background) mode already used — instead
+  // of popping up the full-screen overlay the user never asked for.
+  if (!silent) overlay.classList.add('visible');
   updateFastLoadProgress(0);
   fastLoadAbort = new AbortController();
   const signal = fastLoadAbort.signal;
@@ -5449,12 +5471,13 @@ async function fastDownloadAndPlay(tab) {
   tab._autoDLPct = 0;
   tab._autoDLBytes = 0;
   tab._autoDLTotal = 0;
-  let minimized = false;
+  let minimized = !!silent;
   document.getElementById('fastLoadBgBtn').onclick = () => {
     minimized = true;
     overlay.classList.remove('visible');
     updateAutoDlIndicator(tab);
   };
+  if (silent) updateAutoDlIndicator(tab); // show the badge immediately instead of waiting for the first progress tick
 
   try {
     const blob = await downloadVideoBlob(url, signal, (pct, received, total) => {
@@ -5524,7 +5547,11 @@ document.getElementById('fastLoadBtn').addEventListener('click', () => {
     // nothing here instead of showing a confusing failure.
     return;
   }
-  fastDownloadAndPlay(t);
+  // Show the same small progress badge the old silent auto-download used
+  // (e.g. "79% · 192.0 MB / 0 KB" over the video) instead of the
+  // full-screen overlay — tapping lightning starts the download straight
+  // into that badge.
+  fastDownloadAndPlay(t, true);
 });
 
 // Runs the same download automatically, quietly, in the background —
