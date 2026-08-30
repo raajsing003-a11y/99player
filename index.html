@@ -937,7 +937,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '4.4';
+const NOVA_VERSION = '4.5';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -4607,24 +4607,30 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
 }
 
 function guessFilenameFromUrl(url, blobType) {
+  const extFor = () => (blobType === 'video/mp2t' ? '.ts' : blobType === 'video/webm' ? '.webm' : '.mp4');
   try {
     const path = new URL(url).pathname;
-    const name = path.split('/').filter(Boolean).pop();
+    let name = decodeURIComponent(path.split('/').filter(Boolean).pop() || '');
+    // Strip characters that break filenames on save (device filesystems,
+    // Android share sheets, etc.) while keeping the link's actual name.
+    name = name.replace(/[\\/:*?"<>|]/g, '_').trim();
     if (name && /\.m3u8$/i.test(name)) {
       // The playlist URL isn't the real saved file — the actual saved data
-      // is either concatenated .ts (mpeg-ts) or fmp4 segments. Previously
-      // this always renamed to .ts regardless of which one it actually was,
-      // so an fMP4-based HLS stream (real, playable MP4 data) got saved
-      // with a .ts extension — misleading at best, and some device gallery
-      // apps/players won't even offer to open a ".ts" file. Use the actual
-      // Blob mime type when it's available to pick the right one.
+      // is either concatenated .ts (mpeg-ts) or fmp4 segments. Use the
+      // actual Blob mime type to pick the right extension instead of always
+      // assuming .ts, which used to mislabel real, playable MP4 data.
       const base = name.replace(/\.m3u8$/i, '');
-      if (blobType === 'video/mp4') return base + '.mp4';
-      return base + '.ts';
+      return base + (blobType === 'video/mp4' ? '.mp4' : '.ts');
     }
-    if (name && /\.[a-z0-9]{2,4}$/i.test(name)) return decodeURIComponent(name);
+    if (name) {
+      // Use the link's own name as the saved filename either way — if it
+      // already ends in a recognizable extension keep that, otherwise keep
+      // the name as-is and just add the right extension for what was
+      // actually downloaded.
+      return /\.[a-z0-9]{2,4}$/i.test(name) ? name : name + extFor();
+    }
   } catch (e) {}
-  return blobType === 'video/mp2t' ? 'video.ts' : 'video.mp4';
+  return 'video' + extFor();
 }
 function swapTabToBlob(tab, objectUrl, blob, sourceUrl) {
   if (tab.isLocalFile && /^blob:/i.test(tab.el.src)) { try { URL.revokeObjectURL(tab.el.src); } catch (e) {} }
