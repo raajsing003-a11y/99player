@@ -2308,6 +2308,20 @@ const CORS_PROXIES = [
   url => url.replace(/^https:/, 'http:') // some blocked-by-HTTPS-mixed-content pages resolve over plain http
 ];
 const PROXY_TIMEOUT_MS = 12000;
+// Fast-path proxies: the original, smaller/quicker route list used before the
+// extractor grew extra routes, retries and iframe-following. Tried first on every
+// extraction because it resolves in a few seconds for the common case (video
+// directly in the page source) — the slower, more thorough scan below only runs
+// when this quick pass comes back empty.
+const FAST_CORS_PROXIES = [
+  url => url, // try direct fetch first (works when the site allows CORS)
+  url => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
+  url => 'https://corsproxy.io/?url=' + encodeURIComponent(url),
+  url => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url),
+  url => 'https://thingproxy.freeboard.io/fetch/' + url,
+  url => 'https://proxy.cors.sh/' + url
+];
+const FAST_PROXY_TIMEOUT_MS = 7000;
 let lastExtractFailReason = '';
 
 // fetch with a hard timeout, so one dead/slow proxy doesn't stall the whole chain
@@ -2613,7 +2627,64 @@ async function scanUrlForVideoCandidates(pageUrl, statusEl) {
   return { found: result, iframeCandidates: [...new Set(collectedIframes)], anyFetchSucceeded, lastHttpStatus };
 }
 
+// Quick single-pass scan: fires the small fast-proxy list in parallel, returns as
+// soon as any one of them turns up a candidate, no iframe-following and no retry.
+// This is what extraction used to be before it grew slower and more thorough —
+// it's the right first attempt because most pages that work at all have the video
+// directly in the raw page source, so there's no need to pay for the heavier scan.
+async function extractVideoCandidatesFast(pageUrl) {
+  const statusEl = document.getElementById('extractStatus');
+  if (statusEl) { statusEl.textContent = 'Loading page…'; statusEl.className = 'extract-status'; }
+  const attempt = (proxyFn) => new Promise((resolve) => {
+    (async () => {
+      try {
+        const fetchUrl = proxyFn(pageUrl);
+        const res = await fetchWithTimeout(fetchUrl, { method: 'GET', mode: 'cors' }, FAST_PROXY_TIMEOUT_MS);
+        if (!res.ok) { resolve(null); return; }
+        let html = await res.text();
+        if (fetchUrl.indexOf('allorigins.win/get') !== -1) {
+          try { const parsed = JSON.parse(html); if (parsed && typeof parsed.contents === 'string') html = parsed.contents; } catch (e) {}
+        }
+        if (!html || html.length < 50) { resolve(null); return; }
+        const found = findVideoUrlsInHtml(html, pageUrl);
+        resolve(found.length ? found : null);
+      } catch (e) {
+        resolve(null);
+      }
+    })();
+  });
+  const promises = FAST_CORS_PROXIES.map(fn => attempt(fn));
+  return new Promise((resolveAll) => {
+    let pending = promises.length;
+    let doneAlready = false;
+    promises.forEach(p => {
+      p.then(result => {
+        pending--;
+        if (doneAlready) return;
+        if (result && result.length) {
+          doneAlready = true;
+          resolveAll(result);
+        } else if (pending === 0) {
+          doneAlready = true;
+          resolveAll([]);
+        }
+      });
+    });
+  });
+}
+
 async function extractVideoCandidatesFromPage(pageUrl) {
+  // Fast path first — quick, small proxy list, single pass. Covers the common
+  // case in a few seconds instead of the much longer thorough scan below.
+  const fast = await extractVideoCandidatesFast(pageUrl);
+  if (fast.length) return fast;
+  // Fast path found nothing — fall back to the slower, more thorough scan (more
+  // proxy routes, transient-failure retry, and following embedded iframes/redirects
+  // a few levels deep) for tougher pages the quick pass can't handle.
+  return extractVideoCandidatesFromPageSlow(pageUrl);
+}
+
+async function extractVideoCandidatesFromPageSlow(pageUrl) {
   const first = await extractVideoCandidatesFromPageOnce(pageUrl);
   if (first.length) return first;
   // Transient failures (a proxy timing out mid-request, a momentary network blip)
