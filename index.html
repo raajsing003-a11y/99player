@@ -3745,26 +3745,36 @@ async function playHlsProgressive(tab, url) {
   // be fed to the transmuxer/SourceBuffer strictly in order, so downloading
   // far ahead of what can actually be appended just wastes memory.
   let nextIndex = 0;
+  async function handleSegmentDone(idx) {
+    completed++;
+    if (isFmp4Guess) {
+      enqueue(parts[idx]);
+      if (!firstChunkAppended) { firstChunkAppended = true; tab.el.play().catch(() => {}); if (tab.id === activeTabId) status.style.display = 'none'; }
+    } else {
+      pushReadySegments();
+    }
+    tab._autoDLAbort = tab._autoDLAbort || { abort() {} };
+    tab._autoDLPct = (completed / segments.length) * 100;
+    tab._autoDLBytes = parts.filter(Boolean).reduce((a, p) => a + p.byteLength, 0);
+    updateAutoDlIndicator(tab);
+    if (tab.id === activeTabId && !firstChunkAppended) setStatus('Buffering ' + Math.round((completed / segments.length) * 100) + '%…');
+  }
+  // Segment 0 gets the whole connection to itself first — no other segment
+  // requests compete with it for bandwidth — since it's the one blocking
+  // first frame / playback start. Only once it lands does the rest of the
+  // pool open up and go wide on the remaining segments.
+  nextIndex = 1;
+  try { parts[0] = await fetchSegment(segments[0]); await handleSegmentDone(0); }
+  catch (e) { failedSegments++; }
   async function worker() {
     while (nextIndex < segments.length) {
       const idx = nextIndex++;
       try { parts[idx] = await fetchSegment(segments[idx]); }
       catch (e) { failedSegments++; continue; }
-      completed++;
-      if (isFmp4Guess) {
-        enqueue(parts[idx]);
-        if (!firstChunkAppended) { firstChunkAppended = true; tab.el.play().catch(() => {}); if (tab.id === activeTabId) status.style.display = 'none'; }
-      } else {
-        pushReadySegments();
-      }
-      tab._autoDLAbort = tab._autoDLAbort || { abort() {} };
-      tab._autoDLPct = (completed / segments.length) * 100;
-      tab._autoDLBytes = parts.filter(Boolean).reduce((a, p) => a + p.byteLength, 0);
-      updateAutoDlIndicator(tab);
-      if (tab.id === activeTabId && !firstChunkAppended) setStatus('Buffering ' + Math.round((completed / segments.length) * 100) + '%…');
+      await handleSegmentDone(idx);
     }
   }
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, segments.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, Math.max(0, segments.length - 1)) }, worker));
 
   if (!isFmp4Guess && transmuxer) { transmuxer.flush(); await muxDonePromise; }
   tab._autoDLAbort = null;
