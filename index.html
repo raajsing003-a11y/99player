@@ -2125,8 +2125,17 @@ function nativeCanPlayHls() {
 // + CORS-relay-fallback + retry logic already used for the offline "Save"
 // feature, so this gets identical resilience instead of a second, weaker
 // implementation.
-async function loadVideoViaBlobFallback(tab, url) {
+async function loadVideoViaBlobFallback(tab, url, skipProgressive) {
   const status = document.getElementById('status');
+  // HLS/TS streams can play progressively via MediaSource as segments finish
+  // converting — no need to wait for the whole stream to download first.
+  // Only genuinely single-file, unknown-format downloads (rare — most
+  // "unsupported format" cases coming through here are HLS) still need the
+  // full file in hand before anything can play.
+  if (!skipProgressive && /\.m3u8(\?|$)/i.test(url)) {
+    try { return await playHlsProgressive(tab, url); }
+    catch (e) { /* fall through to the full-download path below */ }
+  }
   if (tab.id === activeTabId) {
     status.style.display = 'block';
     status.textContent = 'This link needs to be fetched before it can play \u2014 preparing\u2026';
@@ -3599,18 +3608,16 @@ async function remuxTsPartsToMp4(parts, onStatus, onProgress) {
   });
 }
 
-// Downloads an HLS stream (media playlist + all its .ts/.m4s segments) and
-// concatenates them into a single playable Blob. A plain fetch of a .m3u8
-// URL only grabs the small text playlist, not the actual video — which is
-// why HLS sources previously "failed" to download or saved a useless
-// few-KB text file instead of a video.
-async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
+// Shared playlist-resolution step used by both the full-blob HLS downloader
+// (downloadHlsBlob, used for explicit Save) and the progressive MSE player
+// (playHlsProgressive, used so playback can start from already-downloaded
+// segments instead of waiting for the whole stream).
+async function fetchHlsPlaylistSegments(mediaPlaylistUrl, signal) {
   const fetchText = async (u) => {
     try {
       const r = await fetchWithTimeout(u, { signal }, 10000);
       if (r.ok) return await r.text();
     } catch (e) {}
-    // Fall back through the same CORS relays used elsewhere if direct fetch is blocked
     for (const proxyFn of FAST_CORS_PROXIES.slice(1)) {
       try {
         const r = await fetchWithTimeout(proxyFn(u), { signal }, 10000);
@@ -3621,8 +3628,6 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
   };
   let playlistUrl = mediaPlaylistUrl;
   let text = await fetchText(playlistUrl);
-  // If we were handed a master playlist instead of a media playlist, resolve
-  // to its best variant first.
   if (/#EXT-X-STREAM-INF/.test(text)) {
     const variant = await resolveBestHlsVariant(playlistUrl);
     if (!variant) throw new Error('No playable variant found in HLS playlist');
@@ -3640,13 +3645,168 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
     try { segments.push(new URL(t, playlistUrl).href); } catch (e) {}
   }
   if (!segments.length) throw new Error('No segments found in playlist');
+  const isFmp4Guess = /\.m4s(\?|$)/i.test(segments[0]) || /#EXT-X-MAP/.test(text);
+  return { segments, isFmp4Guess, playlistUrl, text };
+}
+
+// Plays a raw-TS/fMP4 HLS stream (the kind that needs the manual
+// download+remux fallback because hls.js/native HLS isn't available) as
+// each segment finishes converting, instead of waiting for the entire
+// stream to download first. Uses MediaSource so already-ready chunks get
+// appended and start playing while the rest keep downloading in the
+// background — same segments end up saved for offline use once done, no
+// re-downloading.
+async function playHlsProgressive(tab, url) {
+  const status = document.getElementById('status');
+  const setStatus = (msg) => { if (tab.id === activeTabId) { status.style.display = 'block'; status.textContent = msg; } };
+  setStatus('Preparing stream…');
+  const { segments, isFmp4Guess, text } = await fetchHlsPlaylistSegments(url, null);
+  if (tab.history[tab.historyIndex] !== url) return;
+
+  if (!('MediaSource' in window)) {
+    // No MSE support at all — fall back to the old download-everything-first path.
+    return loadVideoViaBlobFallback(tab, url, true);
+  }
+
+  const CANDIDATE_MIMES = [
+    'video/mp4; codecs="avc1.64001f, mp4a.40.2"',
+    'video/mp4; codecs="avc1.4d401f, mp4a.40.2"',
+    'video/mp4; codecs="avc1.42E01E, mp4a.40.2"'
+  ];
+  const mime = CANDIDATE_MIMES.find(m => window.MediaSource.isTypeSupported(m));
+  if (!mime) return loadVideoViaBlobFallback(tab, url, true);
+
+  const ms = new MediaSource();
+  if (tab.el._objectUrl) { try { URL.revokeObjectURL(tab.el._objectUrl); } catch (e) {} }
+  const msUrl = URL.createObjectURL(ms);
+  tab.el._objectUrl = msUrl;
+  tab.el.src = msUrl;
+  ensureAudioGraphIfBoosted(tab);
+  updateVolumeGain(tab, settings.volBoost);
+  applyFiltersToTab(tab);
+
+  let sourceBuffer = null;
+  const appendQueue = [];
+  let closing = false;
+  function pump() {
+    if (!sourceBuffer || sourceBuffer.updating || !appendQueue.length) return;
+    try { sourceBuffer.appendBuffer(appendQueue.shift()); }
+    catch (e) { /* buffer full or detached — chunk stays queued, retried on next updateend */ appendQueue.unshift(appendQueue.pop()); }
+  }
+  function enqueue(chunk) { appendQueue.push(chunk); pump(); }
+
+  await new Promise((resolve) => {
+    ms.addEventListener('sourceopen', () => {
+      try {
+        sourceBuffer = ms.addSourceBuffer(mime);
+        sourceBuffer.addEventListener('updateend', pump);
+        resolve();
+      } catch (e) { resolve(); }
+    }, { once: true });
+  });
+  if (!sourceBuffer) return loadVideoViaBlobFallback(tab, url, true);
+
+  let firstChunkAppended = false;
+  let initSegment = null, mediaChunks = [];
+  let transmuxer = null;
+  let muxResolve;
+  const muxDonePromise = new Promise((res) => { muxResolve = res; });
+  if (!isFmp4Guess) {
+    await ensureMuxJs();
+    transmuxer = new muxjs.mp4.Transmuxer();
+    transmuxer.on('data', (segment) => {
+      if (segment.initSegment && !initSegment) { initSegment = segment.initSegment; enqueue(initSegment.buffer.slice(0)); }
+      if (segment.data && segment.data.length) {
+        mediaChunks.push(segment.data);
+        enqueue(segment.data.buffer.slice(0));
+        if (!firstChunkAppended) { firstChunkAppended = true; tab.el.play().catch(() => {}); if (tab.id === activeTabId) status.style.display = 'none'; }
+      }
+    });
+    transmuxer.on('done', muxResolve);
+  }
+
+  const parts = new Array(segments.length);
+  let completed = 0, failedSegments = 0, pushIndex = 0;
+  function pushReadySegments() {
+    if (!transmuxer) return;
+    while (parts[pushIndex] !== undefined) { transmuxer.push(new Uint8Array(parts[pushIndex])); pushIndex++; }
+  }
+  const fetchSegment = async (u) => {
+    for (let pass = 0; pass < 2; pass++) {
+      try { const r = await fetchWithTimeout(u, {}, 15000); if (r.ok) return await r.arrayBuffer(); } catch (e) {}
+      for (const proxyFn of FAST_CORS_PROXIES.slice(1)) {
+        try { const r = await fetchWithTimeout(proxyFn(u), {}, 15000); if (r.ok) return await r.arrayBuffer(); } catch (e) {}
+      }
+      if (pass === 0) await new Promise(r => setTimeout(r, 700));
+    }
+    throw new Error('Segment failed: ' + u);
+  };
+  const CONCURRENCY = 6; // lower than the full-download path — segments must
+  // be fed to the transmuxer/SourceBuffer strictly in order, so downloading
+  // far ahead of what can actually be appended just wastes memory.
+  let nextIndex = 0;
+  async function worker() {
+    while (nextIndex < segments.length) {
+      const idx = nextIndex++;
+      try { parts[idx] = await fetchSegment(segments[idx]); }
+      catch (e) { failedSegments++; continue; }
+      completed++;
+      if (isFmp4Guess) {
+        enqueue(parts[idx]);
+        if (!firstChunkAppended) { firstChunkAppended = true; tab.el.play().catch(() => {}); if (tab.id === activeTabId) status.style.display = 'none'; }
+      } else {
+        pushReadySegments();
+      }
+      tab._autoDLAbort = tab._autoDLAbort || { abort() {} };
+      tab._autoDLPct = (completed / segments.length) * 100;
+      tab._autoDLBytes = parts.filter(Boolean).reduce((a, p) => a + p.byteLength, 0);
+      updateAutoDlIndicator(tab);
+      if (tab.id === activeTabId && !firstChunkAppended) setStatus('Buffering ' + Math.round((completed / segments.length) * 100) + '%…');
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, segments.length) }, worker));
+
+  if (!isFmp4Guess && transmuxer) { transmuxer.flush(); await muxDonePromise; }
+  tab._autoDLAbort = null;
+  updateAutoDlIndicator(tab);
+
+  const finalize = () => {
+    if (closing) return;
+    closing = true;
+    if (ms.readyState === 'open') { try { ms.endOfStream(); } catch (e) {} }
+  };
+  if (!appendQueue.length && (!sourceBuffer || !sourceBuffer.updating)) finalize();
+  else sourceBuffer.addEventListener('updateend', function onDone() {
+    if (!appendQueue.length) { sourceBuffer.removeEventListener('updateend', onDone); finalize(); }
+  });
+
+  // Build the same completed file for offline saving, reusing what was
+  // already downloaded/converted instead of fetching everything again.
+  if (failedSegments === 0) {
+    const blob = isFmp4Guess ? new Blob(parts, { type: 'video/mp4' })
+      : (initSegment && mediaChunks.length ? new Blob([initSegment, ...mediaChunks], { type: 'video/mp4' }) : null);
+    if (blob) {
+      tab._savedBlob = blob;
+      tab._savedFilename = guessFilenameFromUrl(url, 'video/mp4');
+      saveOfflineVideo({ id: 'v' + Date.now() + Math.random().toString(36).slice(2), url, title: tab._savedFilename, time: Date.now(), size: blob.size, blob })
+        .then((r) => { if (r.ok) updateAutoDlIndicator(tab); });
+    }
+  }
+}
+
+// Downloads an HLS stream (media playlist + all its .ts/.m4s segments) and
+// concatenates them into a single playable Blob. A plain fetch of a .m3u8
+// URL only grabs the small text playlist, not the actual video — which is
+// why HLS sources previously "failed" to download or saved a useless
+// few-KB text file instead of a video.
+async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
+  const { segments, isFmp4Guess, playlistUrl, text } = await fetchHlsPlaylistSegments(mediaPlaylistUrl, signal);
   // Kick off the remux library fetch now, in parallel with the segment
   // downloads below, instead of waiting until segments finish and only then
   // starting it — that sequential fetch (a few hundred KB over the network)
   // was adding its own delay right after the progress bar hit 99%, on top of
   // the actual conversion work. By the time segments finish downloading,
   // this has usually already loaded.
-  const isFmp4Guess = /\.m4s(\?|$)/i.test(segments[0]) || /#EXT-X-MAP/.test(text);
   if (!isFmp4Guess) ensureMuxJs().catch(() => {});
 
   const fetchSegment = async (u) => {
