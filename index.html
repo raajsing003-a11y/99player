@@ -1560,7 +1560,25 @@ function exitPlayerModeFn(fromPopstate) {
     if (document.fullscreenElement) (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
   } catch (e) {}
 }
-window.addEventListener('popstate', () => { if (playerMode) exitPlayerModeFn(true); });
+window.addEventListener('popstate', () => {
+  if (playerMode) { exitPlayerModeFn(true); return; }
+  // The device/browser "back" gesture used to exit the site entirely,
+  // because the app never told the browser it had somewhere to go back
+  // to internally. Now it goes back a step inside the current tab first
+  // (like a real browser's back button), and only actually exits once
+  // there's nothing left to go back to inside the app.
+  const tab = getTab(activeTabId);
+  if (tab && tab.historyIndex > 0) {
+    tab.historyIndex--;
+    const url = tab.history[tab.historyIndex];
+    tab.el.src = url;
+    document.getElementById('urlInput').value = tab.isVideo ? '' : url;
+    updateNavButtons(); updateBookmarkStar();
+    try { history.pushState({ novaAppNav: true }, ''); } catch (e) {} // re-arm for the next back press
+  }
+  // else: nothing left to go back to — let the back gesture actually exit.
+});
+try { history.pushState({ novaAppNav: true }, ''); } catch (e) {} // arm the very first back press
 // Browsers auto-suspend a tab's AudioContext when the app/tab goes to the
 // background (screen lock, app switch), and don't always resume it when
 // you come back — which silently kills audio on a boosted video tab.
@@ -1996,11 +2014,35 @@ let lastExtractFailReason = '';
 async function fetchWithTimeout(url, opts, ms) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
+  // Respect BOTH an external abort signal (user cancelled / tab closed) AND
+  // this function's own timeout — previously the timeout's controller
+  // silently replaced any signal passed in via opts, so external cancels
+  // were ignored here.
+  const externalSignal = opts && opts.signal;
+  const onExternalAbort = () => ctrl.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) ctrl.abort();
+    else externalSignal.addEventListener('abort', onExternalAbort);
+  }
   try {
     return await fetch(url, Object.assign({}, opts, { signal: ctrl.signal }));
   } finally {
     clearTimeout(t);
+    if (externalSignal) externalSignal.removeEventListener('abort', onExternalAbort);
   }
+}
+// Combines an external AbortSignal with a hard timeout — used to make sure
+// a stalled/hanging download connection eventually gives up and falls back
+// instead of leaving the transfer stuck forever with no error and no result.
+function withTimeout(externalSignal, ms) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  const onExternalAbort = () => ctrl.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) ctrl.abort();
+    else externalSignal.addEventListener('abort', onExternalAbort);
+  }
+  return { signal: ctrl.signal, cleanup: () => { clearTimeout(t); if (externalSignal) externalSignal.removeEventListener('abort', onExternalAbort); } };
 }
 const SEARCH_ENGINE_PATTERNS = [
   /(^|\.)bing\.com\/search/i,
@@ -2442,12 +2484,37 @@ async function proxyDownload(url, signal, title) {
 // automatic background download — fetches the whole video into memory,
 // preferring parallel range-chunked requests, falling back to a single
 // stream, then to a CORS relay if the host blocks direct requests.
+// Aborts if no new data arrives for `stallMs` — without this, a connection
+// that goes quiet (server stops responding mid-transfer) hangs forever with
+// no error and no result, so progress gets stuck and the eventual "Save"
+// button never appears. A real user-triggered cancel (external signal) is
+// distinguished from a stall timeout in the catch block below.
+function createStallWatchdog(externalSignal, stallMs) {
+  const ctrl = new AbortController();
+  let timer = null;
+  const reset = () => { clearTimeout(timer); timer = setTimeout(() => ctrl.abort(), stallMs); };
+  const onExternalAbort = () => ctrl.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) ctrl.abort();
+    else externalSignal.addEventListener('abort', onExternalAbort);
+  }
+  reset();
+  return {
+    signal: ctrl.signal,
+    poke: reset,
+    cleanup: () => { clearTimeout(timer); if (externalSignal) externalSignal.removeEventListener('abort', onExternalAbort); }
+  };
+}
+
 async function downloadVideoBlob(url, signal, onProgress, onStatus) {
+  const watchdog = createStallWatchdog(signal, 15000);
   try {
-    const head = await fetchWithTimeout(url, { method: 'HEAD', signal }, 8000);
+    const head = await fetchWithTimeout(url, { method: 'HEAD', signal: watchdog.signal }, 8000);
     const len = Number(head.headers.get('content-length') || 0);
     const acceptsRanges = (head.headers.get('accept-ranges') || '').toLowerCase().includes('bytes');
+    watchdog.poke();
 
+    let result;
     if (len > 0 && acceptsRanges) {
       const CHUNKS = 6;
       const chunkSize = Math.ceil(len / CHUNKS);
@@ -2465,8 +2532,8 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
         onProgress(Math.min(99, (total / len) * 100));
       };
       const parts = await Promise.all(ranges.map(async ([start, end], idx) => {
-        const res = await fetch(url, { headers: { Range: 'bytes=' + start + '-' + end }, signal });
-        if (!res.body) { const buf = await res.arrayBuffer(); loaded[idx] = buf.byteLength; reportProgress(); return new Blob([buf]); }
+        const res = await fetch(url, { headers: { Range: 'bytes=' + start + '-' + end }, signal: watchdog.signal });
+        if (!res.body) { const buf = await res.arrayBuffer(); loaded[idx] = buf.byteLength; watchdog.poke(); reportProgress(); return new Blob([buf]); }
         const reader = res.body.getReader();
         const bytes = [];
         while (true) {
@@ -2474,14 +2541,15 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
           if (done) break;
           bytes.push(value);
           loaded[idx] += value.length;
+          watchdog.poke();
           reportProgress();
         }
         return new Blob(bytes);
       }));
-      return new Blob(parts);
+      result = new Blob(parts);
     } else {
       if (onStatus) onStatus('Downloading (server does not support parallel chunks)…');
-      const res = await fetch(url, { signal });
+      const res = await fetch(url, { signal: watchdog.signal });
       const total = Number(res.headers.get('content-length') || 0);
       const reader = res.body.getReader();
       const bytes = [];
@@ -2491,15 +2559,20 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
         if (done) break;
         bytes.push(value);
         received += value.length;
+        watchdog.poke();
         if (total && onProgress) onProgress(Math.min(99, (received / total) * 100));
       }
-      return new Blob(bytes);
+      result = new Blob(bytes);
     }
+    watchdog.cleanup();
+    return result;
   } catch (directErr) {
-    if (directErr.name === 'AbortError') throw directErr;
-    // Direct connection failed — almost always the video host blocking
-    // cross-origin requests (no Access-Control-Allow-Origin header).
-    // Fall back to routing the download through a CORS relay.
+    watchdog.cleanup();
+    // A genuine user-triggered cancel (tab closed, manual cancel button,
+    // navigated away) should actually stop — anything else (direct fetch
+    // failed, or the watchdog gave up on a stalled connection) falls back
+    // to the CORS relay instead of leaving the download stuck forever.
+    if (signal && signal.aborted) throw directErr;
     if (onProgress) onProgress(0);
     return await proxyDownload(url, signal, onStatus ? { set textContent(v) { onStatus(v); } } : null);
   }
