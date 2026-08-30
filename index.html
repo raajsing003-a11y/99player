@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nova Browser 11</title>
+<title>Nova Browser 12</title>
 <meta name="description" content="A private in-app browser with fast video download and offline playback.">
 <meta name="theme-color" content="#121212">
 <meta name="mobile-web-app-capable" content="yes">
@@ -610,7 +610,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 11</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 12</div>
   </div>
 
   <div class="toolbar">
@@ -938,7 +938,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '11';
+const NOVA_VERSION = '12';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -1607,16 +1607,10 @@ function loadUrl(tabId, rawUrl, isNewNav) {
       updateVolumeGain(tab, settings.volBoost);
       applyFiltersToTab(tab);
       updateAutoDlIndicator(tab);
-      // Auto-start the same download the lightning button triggers, in
-      // silent/badge mode — the small progress badge over the video, no
-      // full-screen overlay — so playback switches to the fully-downloaded
-      // local copy (smooth, no buffering) and gets saved automatically.
-      // Only when the person has left Auto-DL on (Settings ▸ Auto-DL); with
-      // it off the video just streams online and the lightning button still
-      // works to download it manually. A link that can't play at all either
-      // way is handled separately by the 'error' listener below, which
-      // tells the person to use the lightning button instead.
-      if (settings.autoDownload) fastDownloadAndPlay(tab, true);
+      // No download here — a link that plays fine online has no need to be
+      // downloaded at all. If it turns out this link actually CAN'T play
+      // online, the 'error' listener below either auto-downloads it (Auto-DL
+      // on) or tells the person to tap the lightning button (Auto-DL off).
     }
   } else {
     tab.el.src = url;
@@ -2233,16 +2227,24 @@ function bindVideoElementEvents(tab) {
     if (tab.id !== activeTabId) return;
     const err = el.error;
     if (!err) return;
+    const currentUrl = tab.history[tab.historyIndex];
     const isBlobSrc = el.currentSrc && el.currentSrc.startsWith('blob:');
-    // This link can't be streamed/played directly by the browser — rather
-    // than silently downloading it in the background, tell the person so
-    // they can tap the lightning button themselves to fetch and play it.
-    if (!isBlobSrc) {
-      const msg = 'This video can\u2019t play directly \u2014 tap the \u26a1 lightning button to download and play it.';
-      showMiniToast(msg);
-      const status = document.getElementById('status');
-      status.style.display = 'block';
-      status.textContent = msg;
+    // This link can't be streamed/played directly by the browser — it
+    // genuinely needs to be downloaded to play at all, unlike a normal
+    // video that just plays online with nothing saved. If Auto-DL is on,
+    // fetch it automatically; if it's off, tell the person to tap the
+    // lightning button themselves instead of downloading behind their back.
+    if (!isBlobSrc && currentUrl) {
+      if (settings.autoDownload && !tab._blobFallbackTried) {
+        tab._blobFallbackTried = true;
+        fastDownloadAndPlay(tab, true);
+      } else if (!settings.autoDownload) {
+        const msg = 'This video can\u2019t play directly \u2014 tap the \u26a1 lightning button to download and play it.';
+        showMiniToast(msg);
+        const status = document.getElementById('status');
+        status.style.display = 'block';
+        status.textContent = msg;
+      }
       return;
     }
     const MEDIA_ERR_MESSAGES = {
@@ -3818,7 +3820,10 @@ async function loadVideoViaHlsJs(tab, url) {
   hls.loadSource(url);
   hls.attachMedia(tab.el);
   updateAutoDlIndicator(tab);
-  if (settings.autoDownload) fastDownloadAndPlay(tab, true);
+  // No auto-download here — this stream is expected to just play via
+  // hls.js. If it turns out this stream can't actually play (see the
+  // fatal ERROR handler above), that already falls back to a real
+  // download since there's no other way to play it at all.
 }
 
 // Raw MPEG-TS segments (what most real HLS streams actually use) decode fine
