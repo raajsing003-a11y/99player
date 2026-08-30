@@ -1,0 +1,2578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Nova Browser</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin:0; padding:0; height:100%; overflow:hidden; }
+  body {
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    background:#121212; color:#eee;
+  }
+  .app {
+    display:flex; flex-direction:column; height:100vh; height:100dvh;
+    background:#121212;
+  }
+  .app.player-mode .tabbar,
+  .app.player-mode .toolbar,
+  .app.player-mode #status,
+  .app.player-mode .panel { display:none !important; }
+  .app.player-mode .stage { flex:1 1 100%; }
+
+  .app.immersive-mode .tabbar,
+  .app.immersive-mode .toolbar,
+  .app.immersive-mode #status,
+  .app.immersive-mode .panel { display:none !important; }
+  .app.immersive-mode .stage { flex:1 1 100%; }
+
+  .exit-player-btn {
+    position:absolute; top:10px; left:10px; z-index:10;
+    width:44px; height:44px; border-radius:50%; border:none; background:rgba(0,0,0,0.75);
+    color:#fff; font-size:19px; cursor:pointer; display:none;
+    align-items:center; justify-content:center; backdrop-filter:blur(6px);
+    box-shadow:0 2px 8px rgba(0,0,0,0.4);
+  }
+  .app.player-mode .exit-player-btn { display:flex; }
+
+  .exit-immersive-btn {
+    position:absolute; top:10px; left:10px; z-index:6;
+    width:32px; height:32px; border-radius:50%; border:none; background:rgba(0,0,0,0.55);
+    color:#fff; font-size:15px; cursor:pointer; display:none;
+    align-items:center; justify-content:center; backdrop-filter:blur(6px);
+  }
+  .app.immersive-mode .exit-immersive-btn { display:flex; }
+
+  .grab-video-btn {
+    position:absolute; bottom:22px; right:16px; z-index:6;
+    display:none; align-items:center; gap:6px;
+    padding:12px 18px; border-radius:26px; border:none;
+    background:#d97757; color:#fff; font-size:13.5px; font-weight:600;
+    cursor:pointer; box-shadow:0 4px 14px rgba(0,0,0,0.4);
+    backdrop-filter:blur(6px);
+  }
+  .grab-video-btn.visible { display:flex; }
+  .grab-video-btn:active { background:#c56a4c; }
+  .grab-video-btn.working { opacity:.7; pointer-events:none; }
+
+  /* ---------- Tab bar ---------- */
+  .tabbar {
+    display:flex; align-items:center; gap:4px;
+    padding:8px 6px 0 6px; background:#161616; overflow-x:auto;
+    scrollbar-width:none;
+  }
+  .tabbar::-webkit-scrollbar { display:none; }
+  .tab {
+    display:flex; align-items:center; gap:6px;
+    max-width:150px; padding:9px 10px; border-radius:12px 12px 0 0;
+    background:#242424; color:#aaa; font-size:12px; white-space:nowrap;
+    cursor:pointer; flex-shrink:0; border:1px solid transparent; border-bottom:none;
+  }
+  .tab.active { background:#2f2f2f; color:#fff; border-color:#3a3a3a; }
+  .tab.video-tab.active { border-bottom:2px solid #d97757; margin-bottom:-1px; }
+  .tab-icon { flex-shrink:0; font-size:11px; opacity:.85; }
+  .tab-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:95px; }
+  .tab-close { opacity:.5; padding:0 2px; font-size:14px; }
+  .tab-close:hover { opacity:1; }
+  .new-tab-btn {
+    flex-shrink:0; width:30px; height:30px; border-radius:9px;
+    background:#242424; color:#bbb; border:none; font-size:17px;
+    cursor:pointer; display:flex; align-items:center; justify-content:center;
+  }
+
+  /* ---------- Toolbar ---------- */
+  .toolbar {
+    display:flex; flex-wrap:wrap; gap:6px; align-items:center;
+    padding:8px; background:#2f2f2f; border-bottom:1px solid #1c1c1c;
+  }
+  .nav-buttons, .extra-buttons { display:flex; gap:4px; flex-shrink:0; }
+  .icon-btn {
+    width:36px; height:36px; border-radius:50%; border:none;
+    background:#3d3d3d; color:#fff; font-size:15px; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; flex-shrink:0;
+    transition:background .15s ease;
+  }
+  .icon-btn:active { background:#4a4a4a; }
+  .icon-btn:disabled { opacity:.3; cursor:default; }
+  .icon-btn.active-toggle { background:#d97757; color:#fff; }
+  .url-wrap { position:relative; flex:1 1 auto; min-width:0; display:flex; }
+  .toolbar input[type="text"], .toolbar input[type="search"] {
+    flex:1 1 auto; min-width:0;
+    padding:10px 40px 10px 16px; border-radius:22px; border:none;
+    background:#454545; color:#fff; font-size:15px; outline:none;
+    width:100%;
+    /* Privacy: mask the link/URL text as dots (like a password field) when
+       not actively being edited. While focused (typing/pasting), it's
+       shown in plain text so you can actually verify what you pasted —
+       otherwise a bad paste (stray space, wrong link, etc.) is invisible
+       and impossible to catch. */
+    -webkit-text-security: disc;
+  }
+  .toolbar input[type="text"]:focus, .toolbar input[type="search"]:focus {
+    -webkit-text-security: none;
+  }
+  .toolbar input[type="text"]::placeholder, .toolbar input[type="search"]::placeholder { color:#999; }
+  .url-copy-btn {
+    position:absolute; right:4px; top:50%; transform:translateY(-50%);
+    width:32px; height:32px; border-radius:50%; border:none; background:transparent;
+    color:#ccc; font-size:15px; cursor:pointer; display:flex; align-items:center; justify-content:center;
+  }
+  .url-copy-btn:active { background:rgba(255,255,255,0.12); }
+  .url-copy-btn.copied { color:#d97757; }
+  .toolbar select#engineSelect {
+    padding:10px 6px; border-radius:14px; border:none;
+    background:#454545; color:#ddd; font-size:11px; max-width:96px; flex-shrink:0;
+  }
+  .toolbar-row2 { display:flex; gap:6px; width:100%; }
+  .go-btn {
+    flex:1 1 auto; padding:10px 20px; border-radius:20px; border:none;
+    background:#d97757; color:#fff; font-size:14px; font-weight:600; cursor:pointer;
+  }
+  #status {
+    padding:6px 14px; font-size:11.5px; color:#999; background:#1a1a1a;
+    display:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+
+  /* ---------- Dropdown panels (history/bookmarks/downloads) ---------- */
+  .panel {
+    display:none; background:#1e1e1e; color:#eee; padding:6px 10px;
+    max-height:min(260px, 34vh); overflow-y:auto; font-size:13px; border-bottom:1px solid #333;
+  }
+  .panel.open { display:block; }
+  .panel-row {
+    display:flex; justify-content:space-between; align-items:center;
+    padding:9px 4px; border-bottom:1px solid #2a2a2a; gap:8px;
+  }
+  .panel-row:last-child { border-bottom:none; }
+  .panel-row span.link { color:#8ecdf7; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; filter:blur(5px); }
+  .panel-row span.link:active { filter:none; } /* tap-and-hold to peek */
+  .panel-row button { background:none; border:none; color:#e57373; font-size:15px; cursor:pointer; flex-shrink:0; padding:4px; }
+  .panel-empty { color:#777; padding:10px 4px; font-size:12.5px; line-height:1.5; }
+
+  /* ---------- Content stage ---------- */
+  .stage {
+    flex:1; position:relative; overflow:hidden; min-height:0; background:#000;
+  }
+  .refresh-indicator {
+    position:absolute; top:0; left:50%; transform:translate(-50%,-100%);
+    width:32px; height:32px; border-radius:50%; background:#3a3a3a; color:#fff;
+    display:flex; align-items:center; justify-content:center; font-size:14px;
+    transition:transform .15s ease; z-index:5; pointer-events:none;
+  }
+  .stage iframe.desktop-mode { width:1280px !important; transform-origin:top left; }
+  .stage iframe, .stage video, .stage canvas {
+    position:absolute; top:0; left:0; width:100%; height:100%; border:none; background:#000;
+    display:none;
+  }
+  .stage iframe.active-frame, .stage video.active-frame, .stage canvas.active-frame { display:block; }
+  .stage video.active-frame, .stage canvas.active-frame {
+    object-fit:contain;
+    filter: brightness(var(--b,1)) contrast(var(--c,1)) saturate(var(--s,1)) blur(var(--denoise,0px)) url(#sharpenFilter);
+  }
+  .stage video.grading-hidden { display:none !important; }
+  .empty-tab-hint {
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    color:#666; font-size:13.5px; text-align:center; padding:30px; line-height:1.6; pointer-events:none;
+  }
+
+  /* Quick video controls overlay (top-right utility icons) */
+  .quick-controls {
+    position:absolute; top:10px; right:10px; left:auto; transform:none;
+    display:flex; flex-wrap:wrap; justify-content:flex-end; gap:6px; max-width:calc(100% - 20px);
+    z-index:6;
+  }
+  .quick-controls button {
+    width:32px; height:32px; border-radius:50%; border:none; background:rgba(0,0,0,0.55);
+    color:#fff; font-size:13px; cursor:pointer; display:flex; align-items:center; justify-content:center;
+    backdrop-filter:blur(6px);
+  }
+  .quick-controls button.active-toggle { background:#d97757; }
+  .quick-controls button:active { background:rgba(255,255,255,0.25); }
+
+  /* Bottom custom transport bar */
+  .video-controlbar {
+    position:absolute; left:0; right:0; bottom:0; z-index:6;
+    padding:18px 14px 10px; display:none; flex-direction:column; gap:6px;
+    background:linear-gradient(to top, rgba(0,0,0,0.75), rgba(0,0,0,0));
+  }
+  .video-controlbar.visible { display:flex; }
+  .seek-row { display:flex; align-items:center; gap:8px; }
+  .seek-row span { font-size:11px; color:#ddd; min-width:36px; text-align:center; flex-shrink:0; }
+  .seek-row input[type="range"] {
+    flex:1; accent-color:#d97757; height:20px;
+  }
+  .transport-row { display:flex; align-items:center; justify-content:center; gap:18px; }
+  .transport-row button {
+    background:none; border:none; color:#fff; cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .transport-row button.play-pause {
+    width:52px; height:52px; border-radius:50%; background:rgba(255,255,255,0.12); font-size:22px;
+  }
+  .transport-row button.small { font-size:19px; width:38px; height:38px; }
+  .transport-row button.tiny { font-size:15px; width:32px; height:32px; opacity:.85; }
+  .transport-row button:disabled { opacity:.25; cursor:default; }
+
+  /* Lock overlay */
+  .lock-overlay {
+    position:absolute; inset:0; z-index:8; display:none;
+    align-items:center; justify-content:center;
+    background:rgba(0,0,0,0.001); /* nearly invisible, but blocks touches */
+  }
+  .lock-overlay.visible { display:flex; }
+  .lock-card {
+    display:flex; flex-direction:column; align-items:center; gap:10px;
+    padding:22px 30px; border-radius:26px;
+    background:rgba(15,15,15,0.55); backdrop-filter:blur(14px);
+    border:1px solid rgba(255,255,255,0.08);
+    user-select:none; cursor:pointer; animation:lockFloat 3s ease-in-out infinite;
+  }
+  @keyframes lockFloat { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-6px); } }
+  .lock-ring { position:relative; width:64px; height:64px; display:flex; align-items:center; justify-content:center; }
+  .lock-ring svg { position:absolute; inset:0; width:64px; height:64px; transform:rotate(-90deg); }
+  .lock-ring .ring-track { fill:none; stroke:rgba(255,255,255,0.12); stroke-width:3; }
+  .lock-ring .ring-fill {
+    fill:none; stroke:#d97757; stroke-width:3; stroke-linecap:round;
+    stroke-dasharray:175.9; stroke-dashoffset:175.9;
+  }
+  .lock-ring .ring-fill.charging { transition:stroke-dashoffset 1.8s linear; }
+  .lock-ring .ring-fill.resetting { transition:stroke-dashoffset .25s ease; }
+  .lock-icon { font-size:24px; z-index:1; transition:transform .2s ease; }
+  .lock-card.pressed .lock-icon { transform:scale(0.88); }
+  .lock-label { font-size:13px; color:#eee; font-weight:500; letter-spacing:.2px; }
+  .lock-sublabel { font-size:10.5px; color:#999; margin-top:-4px; }
+  .kids-badge {
+    position:absolute; top:10px; left:50px; z-index:8;
+    background:rgba(217,119,87,0.85); color:#fff; font-size:10.5px;
+    padding:4px 9px; border-radius:10px; display:none;
+  }
+  .kids-badge.visible { display:block; }
+
+  /* Gesture feedback indicator */
+  .gesture-indicator {
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    z-index:7; background:rgba(0,0,0,0.65); color:#fff; padding:10px 18px;
+    border-radius:14px; font-size:14px; display:none; text-align:center;
+    min-width:90px; pointer-events:none;
+  }
+  .gesture-indicator.visible { display:block; }
+  .gesture-bar-track {
+    width:70px; height:4px; background:rgba(255,255,255,0.25); border-radius:2px; margin:6px auto 0;
+  }
+  .gesture-bar-fill { height:100%; background:#d97757; border-radius:2px; }
+
+  /* Aspect / orientation dropdown menus */
+  .float-menu {
+    position:absolute; top:48px; right:10px; z-index:7; display:none;
+    background:rgba(20,20,20,0.92); border-radius:12px; padding:6px; backdrop-filter:blur(6px);
+    flex-direction:column; gap:2px; min-width:150px;
+  }
+  .float-menu.visible { display:flex; }
+  .float-menu button {
+    background:none; border:none; color:#eee; font-size:12.5px; text-align:left;
+    padding:9px 10px; border-radius:8px; cursor:pointer;
+  }
+  .float-menu button.active-toggle { background:#d97757; color:#fff; }
+
+  /* ---------- Enhance sheet ---------- */
+  .enhance-sheet {
+    display:none; flex-direction:column; background:#1c1c1c; border-top:1px solid #2e2e2e;
+    max-height:46vh; flex-shrink:0;
+    position:absolute; left:0; right:0; bottom:0; z-index:9;
+    box-shadow:0 -6px 18px rgba(0,0,0,0.45);
+  }
+  .enhance-sheet.open { display:flex; }
+  .enhance-tabs { display:flex; background:#1c1c1c; }
+  .enhance-tabs button {
+    flex:1; padding:10px 4px; border:none; background:none; color:#999; font-size:11.5px; cursor:pointer;
+    border-bottom:2px solid transparent;
+  }
+  .enhance-tabs button.active { color:#fff; border-bottom-color:#d97757; }
+  .enhance-body {
+    padding:10px 16px 16px; display:none; flex-direction:column; gap:18px; overflow-y:auto;
+    flex:1 1 auto; min-height:0;
+    /* Let vertical scroll happen naturally, but sliders below get touch-action:none
+       so a drag that starts ON a slider is never mistaken for a page scroll. */
+    touch-action:pan-y;
+    -webkit-overflow-scrolling:touch;
+  }
+  .enhance-body.active { display:flex; }
+  .slider-row {
+    display:flex; flex-direction:column; gap:8px;
+    padding:8px 4px; border-radius:10px;
+    background:rgba(255,255,255,0.03);
+  }
+  .slider-row label { display:flex; justify-content:space-between; align-items:center; font-size:12.5px; color:#ccc; }
+  .slider-row .val-wrap { display:flex; align-items:center; gap:6px; font-variant-numeric:tabular-nums; }
+  .slider-row .reset-btn {
+    background:none; border:none; color:#888; font-size:16px; line-height:1;
+    padding:6px 7px; cursor:pointer; border-radius:6px;
+  }
+  .slider-row .reset-btn:active { color:#d97757; background:rgba(217,119,87,0.15); }
+  /* touch-action:none is the actual fix for erratic/jumpy sliders on mobile:
+     without it, the browser can't tell a horizontal slider-drag apart from a
+     vertical list-scroll and sometimes hands the gesture to the wrong one,
+     which is what caused values to jump or the wrong control to move. */
+  .slider-row input[type="range"] {
+    width:100%; accent-color:#d97757; height:40px; touch-action:none;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .slider-row input[type="range"]::-webkit-slider-thumb {
+    width:26px; height:26px; margin-top:0;
+  }
+  .slider-row input[type="range"]::-moz-range-thumb {
+    width:26px; height:26px; border:none;
+  }
+  .slider-row input[type="range"]::-webkit-slider-runnable-track { height:6px; border-radius:3px; }
+  .slider-row input[type="range"]::-moz-range-track { height:6px; border-radius:3px; }
+  .row-buttons { display:flex; gap:8px; margin-top:2px; flex-wrap:wrap; }
+  .row-buttons button {
+    flex:1; padding:9px; border-radius:14px; border:none;
+    background:#333; color:#eee; font-size:12.5px; cursor:pointer; min-width:70px;
+  }
+  .row-buttons button.primary { background:#d97757; }
+  .row-buttons button.active-toggle { background:#4a7c59; }
+  .presets { display:flex; gap:6px; flex-wrap:wrap; }
+  .presets button {
+    padding:7px 13px; border-radius:12px; border:none;
+    background:#2a2a2a; color:#ddd; font-size:11.5px; cursor:pointer;
+  }
+  .presets button.custom { background:#3a2a4a; }
+  .note { font-size:10.5px; color:#767676; line-height:1.5; }
+  .speed-row { display:flex; gap:6px; flex-wrap:wrap; }
+  .speed-row button {
+    padding:7px 11px; border-radius:10px; border:none; background:#2a2a2a; color:#ddd;
+    font-size:12px; cursor:pointer;
+  }
+  .speed-row button.active-toggle { background:#d97757; color:#fff; }
+
+  #fileInput { display:none; }
+
+  /* ---------- Extract-video-from-link overlay ---------- */
+  .extract-overlay {
+    position:absolute; inset:0; z-index:9; display:none;
+    align-items:center; justify-content:center;
+    background:rgba(0,0,0,0.6); backdrop-filter:blur(4px);
+    padding:20px;
+  }
+  .extract-overlay.visible { display:flex; }
+  .extract-card {
+    width:100%; max-width:400px; background:#1e1e1e; border:1px solid #333;
+    border-radius:18px; padding:20px; display:flex; flex-direction:column; gap:10px;
+  }
+  .extract-title { font-size:15.5px; font-weight:600; color:#fff; }
+  .extract-sub { font-size:12px; color:#aaa; line-height:1.5; }
+  .extract-card input[type="url"] {
+    padding:11px 14px; border-radius:14px; border:1px solid #3a3a3a;
+    background:#2a2a2a; color:#fff; font-size:14px; outline:none;
+    -webkit-text-security: disc;
+  }
+  .extract-card input[type="url"]:focus { border-color:#d97757; }
+  .extract-status {
+    font-size:12px; color:#d97757; min-height:16px; line-height:1.4;
+    white-space:pre-wrap; word-break:break-all;
+  }
+  .extract-status.error { color:#e57373; }
+  .extract-status.success { color:#7ec98a; }
+  .extract-buttons { display:flex; gap:8px; margin-top:4px; }
+  .extract-buttons button {
+    flex:1; padding:11px; border-radius:14px; border:none; font-size:13.5px; cursor:pointer;
+  }
+  .extract-buttons .secondary { background:#333; color:#eee; }
+  .extract-buttons .primary { background:#d97757; color:#fff; font-weight:600; }
+  .extract-buttons .primary:disabled { opacity:.5; cursor:default; }
+  .extract-note { font-size:10.5px; color:#767676; line-height:1.5; margin-top:2px; }
+
+  .quality-list { display:flex; flex-direction:column; gap:6px; max-height:180px; overflow-y:auto; }
+  .quality-list button {
+    display:flex; justify-content:space-between; align-items:center;
+    padding:11px 14px; border-radius:12px; border:1px solid #333; background:#262626;
+    color:#eee; font-size:13px; cursor:pointer;
+  }
+  .quality-list button:active { background:#333; }
+  .quality-list button .badge { font-size:11px; color:#d97757; font-weight:600; }
+
+  /* ---------- Fast download & play overlay ---------- */
+  .fastload-overlay {
+    position:absolute; inset:0; z-index:10; display:none;
+    align-items:center; justify-content:center;
+    background:rgba(0,0,0,0.7); backdrop-filter:blur(4px); padding:20px;
+  }
+  .fastload-overlay.visible { display:flex; }
+  .fastload-card {
+    width:100%; max-width:340px; background:#1e1e1e; border:1px solid #333;
+    border-radius:18px; padding:22px; display:flex; flex-direction:column; gap:12px; align-items:center;
+  }
+  .fastload-title { font-size:13.5px; color:#eee; text-align:center; }
+  .fastload-bar-track { width:100%; height:8px; background:#333; border-radius:4px; overflow:hidden; }
+  .fastload-bar-fill { height:100%; width:0%; background:#d97757; transition:width .2s ease; }
+  .fastload-pct { font-size:12px; color:#aaa; }
+  .fastload-card .secondary { padding:9px 20px; border-radius:12px; border:none; background:#333; color:#eee; font-size:12.5px; cursor:pointer; }
+
+  @media (min-width: 640px) {
+    .toolbar-row2 { width:auto; }
+    .go-btn { padding:10px 26px; }
+  }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <filter id="sharpenFilter">
+    <feConvolveMatrix id="sharpenMatrix" order="3" kernelMatrix="0 0 0  0 1 0  0 0 0" preserveAlpha="true" />
+  </filter>
+</svg>
+
+<div class="app">
+  <div class="tabbar" id="tabbar"></div>
+
+  <div class="toolbar">
+    <div class="nav-buttons">
+      <button class="icon-btn" id="backBtn" title="Back">&#8592;</button>
+      <button class="icon-btn" id="fwdBtn" title="Forward">&#8594;</button>
+      <button class="icon-btn" id="reloadBtn" title="Reload">&#8635;</button>
+    </div>
+    <div class="url-wrap">
+      <input id="urlInput" type="search" enterkeyhint="go" autocomplete="off" autocapitalize="off" autocorrect="off" placeholder="Search or enter URL">
+      <button class="url-copy-btn" id="urlCopyBtn" title="Copy this website's link">&#128203;</button>
+      <button class="url-copy-btn" id="urlExternalBtn" title="Open in your device's browser (use this if a site refuses to load here)">&#8663;</button>
+    </div>
+    <select id="engineSelect" title="Search engine">
+      <option value="bing">Bing</option>
+      <option value="ddg">DuckDuckGo</option>
+      <option value="google">Google</option>
+      <option value="brave">Brave</option>
+      <option value="ecosia">Ecosia</option>
+      <option value="startpage">Startpage</option>
+      <option value="yahoo">Yahoo</option>
+      <option value="wikipedia">Wikipedia</option>
+    </select>
+    <div class="extra-buttons">
+      <button class="icon-btn" id="immersiveBtn" title="Hide toolbar (full-page view)">&#128065;</button>
+      <button class="icon-btn" id="bookmarkBtn" title="Bookmark this page">&#9734;</button>
+      <button class="icon-btn" id="historyBtn" title="History">&#8987;</button>
+      <button class="icon-btn" id="bookmarksBtn" title="Bookmarks">&#128278;</button>
+      <button class="icon-btn" id="downloadsBtn" title="Downloads">&#8681;</button>
+      <button class="icon-btn" id="openFileBtn" title="Open video from device">&#128194;</button>
+      <button class="icon-btn" id="extractVideoBtn" title="Open video from a page link">&#127916;</button>
+      <button class="icon-btn" id="enhanceBtn" title="Video enhancer" disabled><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"/></svg></button>
+      <button class="icon-btn" id="desktopBtn" title="Toggle desktop/mobile view">&#128421;</button>
+      <button class="icon-btn" id="fullscreenBtn" title="Fullscreen">&#9974;</button>
+    </div>
+    <input type="file" id="fileInput" accept="video/*">
+    <div class="toolbar-row2">
+      <button class="go-btn" id="goBtn">Go</button>
+    </div>
+  </div>
+
+  <div id="status"></div>
+  <div class="panel" id="historyPanel"></div>
+  <div class="panel" id="bookmarksPanel"></div>
+  <div class="panel" id="downloadsPanel"></div>
+
+  <div class="stage" id="stage">
+    <div class="refresh-indicator" id="refreshIndicator">&#8635;</div>
+    <div class="empty-tab-hint" id="emptyHint">Search the web, paste a link, or tap &#128194; to open a video from your device.</div>
+
+    <button class="exit-player-btn" id="exitPlayerBtn" title="Back to browser">&#8592;</button>
+    <button class="exit-immersive-btn" id="exitImmersiveBtn" title="Show toolbar">&#8593;</button>
+    <button class="grab-video-btn" id="grabVideoBtn" title="Find video on this page">&#127916; Get video</button>
+    <div class="fastload-overlay" id="fastLoadOverlay">
+      <div class="fastload-card">
+        <div class="fastload-title" id="fastLoadTitle">Downloading for smooth playback…</div>
+        <div class="fastload-bar-track"><div class="fastload-bar-fill" id="fastLoadBarFill"></div></div>
+        <div class="fastload-pct" id="fastLoadPct">0%</div>
+        <button id="fastLoadCancelBtn" class="secondary">Cancel</button>
+      </div>
+    </div>
+    <div class="extract-overlay" id="extractOverlay">
+      <div class="extract-card">
+        <div class="extract-title">Open video from a page link</div>
+        <div class="extract-sub">Paste a website link. Nova will try to find the video on that page and open it directly in the player.</div>
+        <input type="url" id="extractUrlInput" placeholder="https://example.com/some-page" autocomplete="off" autocapitalize="off" autocorrect="off">
+        <div class="extract-status" id="extractStatus"></div>
+        <div class="quality-list" id="qualityList"></div>
+        <div class="extract-buttons">
+          <button id="extractCancelBtn" class="secondary">Cancel</button>
+          <button id="extractGoBtn" class="primary">Find video</button>
+        </div>
+        <div class="extract-note">Works best on blogs, news sites and pages that host their own video file. Sites like YouTube, Instagram, Facebook or Netflix protect their video streams and can't be opened this way &mdash; paste a direct video link instead.</div>
+      </div>
+    </div>
+    <div class="kids-badge" id="kidsBadge">Kids Lock &#128274;</div>
+
+    <div class="quick-controls" id="quickControls" style="display:none;">
+      <button id="enhanceBtnPlayer" title="Video enhancer"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"/></svg></button>
+      <button id="rotateBtn" title="Rotate">&#8635;</button>
+      <button id="flipBtn" title="Flip horizontal">&#8646;</button>
+      <button id="pipBtn" title="Picture in picture">&#9635;</button>
+      <button id="fastLoadBtn" title="Download &amp; play fast (uses full speed instead of streaming)">&#9889;</button>
+      <button id="shotBtn" title="Capture frame">&#128247;</button>
+      <button id="aspectBtn" title="Aspect ratio">&#9635;&#65039;</button>
+      <button id="orientBtn" title="Orientation">&#128260;</button>
+      <button id="fullscreenBtnPlayer" title="Fullscreen">&#9974;</button>
+      <button id="lockBtn" title="Lock screen (hold for Kids Lock)">&#128275;</button>
+    </div>
+
+    <div class="float-menu" id="aspectMenu">
+      <button data-aspect="fit">Fit to screen</button>
+      <button data-aspect="stretch">Stretch</button>
+      <button data-aspect="crop">Crop</button>
+      <button data-aspect="native">100% (native size)</button>
+      <button data-aspect="16:9">16:9</button>
+      <button data-aspect="4:3">4:3</button>
+    </div>
+    <div class="float-menu" id="orientMenu">
+      <button data-orient="auto">Auto-rotate</button>
+      <button data-orient="landscape">Landscape lock</button>
+      <button data-orient="portrait">Portrait lock</button>
+    </div>
+
+    <div class="gesture-indicator" id="gestureIndicator">
+      <span id="gestureText">50%</span>
+      <div class="gesture-bar-track"><div class="gesture-bar-fill" id="gestureBarFill" style="width:50%;"></div></div>
+    </div>
+
+    <div class="lock-overlay" id="lockOverlay">
+      <div class="lock-card" id="lockCard">
+        <div class="lock-ring">
+          <svg viewBox="0 0 64 64">
+            <circle class="ring-track" cx="32" cy="32" r="28"></circle>
+            <circle class="ring-fill" id="ringFill" cx="32" cy="32" r="28"></circle>
+          </svg>
+          <span class="lock-icon" id="lockIcon">&#128274;</span>
+        </div>
+        <div class="lock-label" id="lockLabel">Tap to unlock</div>
+        <div class="lock-sublabel" id="lockSublabel" style="display:none;">Hold to unlock</div>
+      </div>
+    </div>
+
+    <div class="video-controlbar" id="videoControlbar">
+      <div class="seek-row">
+        <span id="curTime">0:00</span>
+        <input type="range" id="seekBar" min="0" max="100" value="0" step="0.1">
+        <span id="durTime">0:00</span>
+      </div>
+      <div class="transport-row">
+        <button class="tiny" id="prevBtn" title="Previous video">&#9198;</button>
+        <button class="small" id="rewindBtn" title="Back 10s">&#8630;</button>
+        <button class="play-pause" id="playPauseBtn" title="Play/Pause">&#9654;</button>
+        <button class="small" id="forwardBtn" title="Forward 10s">&#8631;</button>
+        <button class="tiny" id="nextBtn" title="Next video">&#9197;</button>
+      </div>
+    </div>
+  <div class="enhance-sheet" id="enhanceSheet">
+    <div class="enhance-tabs">
+      <button data-etab="adjust" class="active">Adjust</button>
+      <button data-etab="quality">Quality</button>
+      <button data-etab="playback">Playback</button>
+      <button data-etab="presets">Presets</button>
+    </div>
+
+    <div class="enhance-body active" id="etab-adjust">
+      <div class="slider-row">
+        <label><span>Sharpness / Clarity</span><span class="val-wrap"><span id="sharpVal">0</span><button class="reset-btn" data-key="sharp" data-default="0" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="sharp" min="0" max="100" value="0">
+      </div>
+      <div class="slider-row">
+        <label><span>Brightness</span><span class="val-wrap"><span id="brightVal">100%</span><button class="reset-btn" data-key="bright" data-default="100" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="bright" min="40" max="200" value="100">
+      </div>
+      <div class="slider-row">
+        <label><span>Contrast</span><span class="val-wrap"><span id="contrastVal">100%</span><button class="reset-btn" data-key="contrast" data-default="100" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="contrast" min="40" max="200" value="100">
+      </div>
+      <div class="slider-row">
+        <label><span>Saturation</span><span class="val-wrap"><span id="satVal">100%</span><button class="reset-btn" data-key="sat" data-default="100" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="sat" min="0" max="200" value="100">
+      </div>
+      <div class="slider-row">
+        <label><span>Vibrance</span><span class="val-wrap"><span id="vibranceVal">100%</span><button class="reset-btn" data-key="vibrance" data-default="100" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="vibrance" min="0" max="200" value="100">
+      </div>
+      <div class="note">Vibrance boosts dull/muted colors more than already-saturated ones (skin tones move less than a global Saturation boost would).</div>
+      <div class="slider-row">
+        <label><span>Selective color</span><span class="val-wrap"><span id="selSwatch" style="display:inline-block;width:14px;height:14px;border-radius:3px;"></span><button class="reset-btn" data-key="selHue" data-default="0" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="selHue" min="0" max="360" value="0">
+      </div>
+      <div class="slider-row">
+        <label><span>Range (how wide)</span><span class="val-wrap"><span id="selRangeVal">30&deg;</span><button class="reset-btn" data-key="selRange" data-default="30" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="selRange" min="5" max="90" value="30">
+      </div>
+      <div class="slider-row">
+        <label><span>Color saturation</span><span class="val-wrap"><span id="selSatVal">100%</span><button class="reset-btn" data-key="selSat" data-default="100" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="selSat" min="0" max="200" value="100">
+      </div>
+      <div class="note">Selective color changes saturation of only the chosen hue (e.g. just reds, or just blues) &mdash; other colors stay untouched. Needs GPU rendering, so it only switches on while Vibrance or Selective color saturation are away from 100%.</div>
+      <div class="note">Settings save automatically and apply to every video you open. Sharpness is simulated edge-enhancement, not true resolution upscaling.</div>
+    </div>
+
+    <div class="enhance-body" id="etab-quality">
+      <div class="row-buttons"><button id="autoEnhanceBtn" class="primary">Auto Enhance</button></div>
+      <div class="slider-row">
+        <label><span>AI Enhance (Anime4K-style)</span><span class="val-wrap"><span id="aiEnhanceVal">0</span><button class="reset-btn" data-key="aiEnhance" data-default="0" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="aiEnhance" min="0" max="100" value="0">
+      </div>
+      <div class="note">Real-time GPU line-sharpening inspired by the Anime4K algorithm: it detects edges and pushes them crisper, and renders at your screen's resolution instead of the video's, so it also acts as a smart upscale for low-res video. This is a lightweight real-time filter, not a true AI model &mdash; genuine AI super-resolution (like ESRGAN/waifu2x) needs a neural network per frame, which is too slow for live video in a browser.</div>
+      <div class="slider-row">
+        <label><span>Noise Reduction</span><span class="val-wrap"><span id="denoiseVal">0</span><button class="reset-btn" data-key="denoise" data-default="0" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="denoise" min="0" max="100" value="0">
+      </div>
+      <div class="slider-row">
+        <label><span>Detail Boost</span><span class="val-wrap"><span id="detailVal">0</span><button class="reset-btn" data-key="detail" data-default="0" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="detail" min="0" max="100" value="0">
+      </div>
+      <div class="slider-row">
+        <label><span>Exposure</span><span class="val-wrap"><span id="exposureVal">0</span><button class="reset-btn" data-key="exposure" data-default="0" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="exposure" min="-50" max="50" value="0">
+      </div>
+      <div class="slider-row">
+        <label><span>Gamma</span><span class="val-wrap"><span id="gammaVal">100%</span><button class="reset-btn" data-key="gamma" data-default="100" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="gamma" min="50" max="200" value="100">
+      </div>
+      <div class="slider-row">
+        <label><span>Shadows lift</span><span class="val-wrap"><span id="shadowsVal">0</span><button class="reset-btn" data-key="shadows" data-default="0" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="shadows" min="0" max="100" value="0">
+      </div>
+      <div class="slider-row">
+        <label><span>Highlights recovery</span><span class="val-wrap"><span id="highlightsVal">0</span><button class="reset-btn" data-key="highlights" data-default="0" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="highlights" min="0" max="100" value="0">
+      </div>
+      <div class="note">"Noise Reduction" softens grain then re-sharpens edges. "Detail Boost" raises edge contrast. None of these recover detail the source doesn't have — true upscaling needs AI, which a browser filter can't do.</div>
+    </div>
+
+    <div class="enhance-body" id="etab-playback">
+      <div class="slider-row">
+        <label><span>Volume boost</span><span class="val-wrap"><span id="volVal">100%</span><button class="reset-btn" data-key="volBoost" data-default="100" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="volBoost" min="0" max="300" value="100">
+      </div>
+      <div class="note">Above 100% uses audio gain amplification — very high boost can distort loud audio.</div>
+      <div class="slider-row">
+        <label>Playback speed</label>
+        <div class="speed-row">
+          <button data-speed="0.5">0.5x</button>
+          <button data-speed="0.75">0.75x</button>
+          <button data-speed="1" class="active-toggle">1x</button>
+          <button data-speed="1.25">1.25x</button>
+          <button data-speed="1.5">1.5x</button>
+          <button data-speed="2">2x</button>
+        </div>
+      </div>
+      <div class="row-buttons">
+        <button id="loopBtn">Loop: Off</button>
+        <button id="muteBtn">Mute</button>
+      </div>
+    </div>
+
+    <div class="enhance-body" id="etab-presets">
+      <div class="presets">
+        <button data-preset="reset">Reset</button>
+        <button data-preset="clear">Clear boost</button>
+        <button data-preset="warm">Warm</button>
+        <button data-preset="vivid">Vivid</button>
+        <button data-preset="lowlight">Low-light fix</button>
+      </div>
+      <div class="row-buttons"><button id="saveCustomBtn">Save current as My Preset</button></div>
+      <div class="presets" id="customPresetRow"></div>
+      <div class="note">"My Preset" stores your own saved look. Tap Reset to clear all sliders back to neutral.</div>
+    </div>
+  </div>
+  </div>
+</div>
+
+<script>
+/* ================= State ================= */
+let tabs = [];
+let activeTabId = null;
+let tabCounter = 0;
+let globalHistory = [];
+let bookmarks = [];
+let downloads = [];
+
+const VIDEO_EXT_RE = /\.(mp4|webm|ogg|ogv|mov|m3u8)(\?.*)?$/i;
+const DOWNLOAD_EXT_RE = /\.(pdf|zip|rar|7z|docx?|xlsx?|pptx?|csv|json|txt|png|jpe?g|gif|svg|apk|exe|dmg|mp3|wav)(\?.*)?$/i;
+
+let settings = { bright: 100, contrast: 100, sat: 100, sharp: 0, volBoost: 100, loop: false,
+  denoise: 0, detail: 0, exposure: 0, gamma: 100, shadows: 0, highlights: 0,
+  vibrance: 100, selHue: 0, selRange: 30, selSat: 100, aiEnhance: 0 };
+let customPresets = {};
+const sharpMatrix = document.getElementById('sharpenMatrix');
+
+let isLocked = false;
+let isKidsLock = false;
+let orientMode = 'auto';
+let playerMode = false;
+
+/* ================= Persistence ================= */
+async function loadPersistedData() {
+  try { const h = await window.storage.get('novabrowser:history'); globalHistory = h ? JSON.parse(h.value) : []; } catch (e) { globalHistory = []; }
+  try { const b = await window.storage.get('novabrowser:bookmarks'); bookmarks = b ? JSON.parse(b.value) : []; } catch (e) { bookmarks = []; }
+  try { const d = await window.storage.get('novabrowser:downloads'); downloads = d ? JSON.parse(d.value) : []; } catch (e) { downloads = []; }
+  try { const s = await window.storage.get('novabrowser:enhancesettings'); if (s) settings = { ...settings, ...JSON.parse(s.value) }; } catch (e) {}
+  try { const p = await window.storage.get('novabrowser:custompresets'); if (p) customPresets = JSON.parse(p.value); } catch (e) {}
+}
+
+/* ---- Session (open tabs) persistence ---- */
+let sessionSaveTimer = null;
+function saveSession() {
+  clearTimeout(sessionSaveTimer);
+  sessionSaveTimer = setTimeout(async () => {
+    try {
+      const data = {
+        activeTabId,
+        tabs: tabs
+          .filter(t => !t.isVideo && !t.isLocalFile) // blob/local video sources can't survive reload
+          .map(t => ({
+            id: t.id,
+            url: t.history[t.historyIndex] || '',
+            title: t.title,
+            history: t.history,
+            historyIndex: t.historyIndex,
+            desktopMode: t.desktopMode
+          }))
+      };
+      await window.storage.set('novabrowser:session', JSON.stringify(data));
+    } catch (e) {}
+  }, 400);
+}
+async function restoreSession() {
+  try {
+    const s = await window.storage.get('novabrowser:session');
+    if (!s) return false;
+    const data = JSON.parse(s.value);
+    if (!data || !data.tabs || !data.tabs.length) return false;
+    let toActivate = null;
+    data.tabs.forEach(saved => {
+      const tab = createTab(null, false);
+      tab.history = saved.history || [];
+      tab.historyIndex = typeof saved.historyIndex === 'number' ? saved.historyIndex : -1;
+      tab.desktopMode = !!saved.desktopMode;
+      const url = saved.url || tab.history[tab.historyIndex];
+      if (url) {
+        tab.el.src = url;
+        tab.title = saved.title || url.replace(/^https?:\/\//, '');
+      }
+      if (saved.id === data.activeTabId) toActivate = tab.id;
+      renderTabbar();
+    });
+    if (toActivate) activateTab(toActivate);
+    else if (tabs.length) activateTab(tabs[tabs.length - 1].id);
+    return true;
+  } catch (e) { return false; }
+}
+async function saveHistory() { try { await window.storage.set('novabrowser:history', JSON.stringify(globalHistory)); } catch (e) {} }
+async function saveBookmarks() { try { await window.storage.set('novabrowser:bookmarks', JSON.stringify(bookmarks)); } catch (e) {} }
+async function saveDownloads() { try { await window.storage.set('novabrowser:downloads', JSON.stringify(downloads)); } catch (e) {} }
+async function saveEnhanceSettings() { try { await window.storage.set('novabrowser:enhancesettings', JSON.stringify(settings)); } catch (e) {} }
+async function saveCustomPresets() { try { await window.storage.set('novabrowser:custompresets', JSON.stringify(customPresets)); } catch (e) {} }
+
+/* ================= Search engines ================= */
+const ENGINES = {
+  bing:      q => 'https://www.bing.com/search?q=' + encodeURIComponent(q) + '&form=QBLH',
+  ddg:       q => 'https://lite.duckduckgo.com/lite/?q=' + encodeURIComponent(q),
+  google:    q => 'https://www.google.com/search?q=' + encodeURIComponent(q),
+  brave:     q => 'https://search.brave.com/search?q=' + encodeURIComponent(q),
+  ecosia:    q => 'https://www.ecosia.org/search?q=' + encodeURIComponent(q),
+  startpage: q => 'https://www.startpage.com/sp/search?query=' + encodeURIComponent(q),
+  yahoo:     q => 'https://search.yahoo.com/search?p=' + encodeURIComponent(q),
+  wikipedia: q => 'https://en.wikipedia.org/w/index.php?search=' + encodeURIComponent(q)
+};
+function resolveUrl(raw) {
+  // Strip invisible characters that sometimes ride along with a paste
+  // (zero-width space, non-breaking space, stray newlines) — these used to
+  // make a perfectly valid pasted link fail the URL check below and get
+  // sent to the search engine (showing as a Bing search) instead of opening
+  // directly.
+  let url = raw.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim();
+  if (!url) return null;
+  if (/^https?:\/\//i.test(url)) return url;
+  // Collapse any stray internal spaces before checking if this looks like a
+  // domain — a genuine multi-word search phrase won't match the pattern
+  // below anyway, so this only helps real links survive a messy paste.
+  const compact = url.replace(/\s+/g, '');
+  if (/^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?([\/?#][^\s]*)?$/i.test(compact)) return 'https://' + compact;
+  const engine = document.getElementById('engineSelect').value;
+  return (ENGINES[engine] || ENGINES.bing)(url);
+}
+
+/* ================= Tabs ================= */
+function createTab(initialUrl, isVideo, opts) {
+  opts = opts || {};
+  tabCounter++;
+  const id = 'tab' + tabCounter;
+  let el;
+  if (isVideo) {
+    el = document.createElement('video');
+    el.controls = false;
+    el.playsInline = true;
+    el.loop = settings.loop;
+    el.preload = 'auto';
+  } else {
+    el = document.createElement('iframe');
+    el.allowFullscreen = true;
+    el.setAttribute('allow', 'fullscreen; autoplay; encrypted-media; picture-in-picture; clipboard-write; clipboard-read; microphone; camera; geolocation; accelerometer; gyroscope; midi');
+    el.setAttribute('referrerpolicy', 'no-referrer-when-downgrade');
+    el.setAttribute('loading', 'eager');
+    // Force everything to stay inside this browser: block popups / new windows
+    // and stop pages from hijacking the top-level window (common "redirect to
+    // another app" trick). Sites still work normally inside this frame.
+    el.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-presentation allow-storage-access-by-user-activation');
+  }
+  el.id = id;
+  document.getElementById('stage').appendChild(el);
+
+  let canvas = null;
+  if (isVideo) {
+    canvas = document.createElement('canvas');
+    canvas.id = id + '_grade';
+    document.getElementById('stage').appendChild(canvas);
+  }
+
+  const tab = {
+    id, el, canvas, gl: null, isVideo: !!isVideo,
+    history: [], historyIndex: -1,
+    title: isVideo ? (opts.title || 'Video') : 'New Tab',
+    desktopMode: false,
+    rotation: 0, flipped: false, zoomScale: 1,
+    gestureBrightness: 1,
+    aspect: 'fit',
+    audioCtx: null, gainNode: null, sourceNode: null,
+    isLocalFile: !!opts.isLocalFile
+  };
+  tabs.push(tab);
+  activateTab(id);
+
+  if (isVideo) {
+    bindVideoElementEvents(tab);
+    applyAspect(tab, tab.aspect);
+  }
+
+  if (isVideo && opts.objectUrl) {
+    tab.el.src = opts.objectUrl;
+    tab.history = [opts.objectUrl];
+    tab.historyIndex = 0;
+    tab.el.play().catch(() => {});
+    ensureAudioGraphIfBoosted(tab);
+    updateVolumeGain(tab, settings.volBoost);
+    applyFiltersToTab(tab);
+    updateNavButtons();
+    renderTabbar();
+  } else if (initialUrl) {
+    loadUrl(id, initialUrl, true);
+  } else {
+    renderTabbar();
+  }
+  updateEmptyHint();
+  return tab;
+}
+
+function getTab(id) { return tabs.find(t => t.id === id); }
+
+function activateTab(id) {
+  activeTabId = id;
+  tabs.forEach(t => t.el.classList.toggle('active-frame', t.id === id));
+  const tab = getTab(id);
+  const input = document.getElementById('urlInput');
+  if (tab && tab.isVideo) {
+    // Privacy: a video tab shows nothing in the address bar at all — no
+    // masked dots, no placeholder hint, completely blank.
+    input.value = '';
+    input.placeholder = '';
+  } else if (tab && tab.isLocalFile) {
+    input.value = '';
+    input.placeholder = tab.title;
+  } else if (tab && tab.historyIndex >= 0) {
+    input.value = tab.history[tab.historyIndex];
+    input.placeholder = 'Search or enter URL';
+  } else {
+    input.value = '';
+    input.placeholder = 'Search or enter URL';
+  }
+  updateNavButtons();
+  renderTabbar();
+  closePanels();
+  applyDesktopMode(tab || { isVideo: true });
+  document.getElementById('desktopBtn').classList.toggle('active-toggle', !!(tab && tab.desktopMode));
+  document.getElementById('enhanceBtn').disabled = !(tab && tab.isVideo);
+  document.getElementById('fastLoadBtn').style.opacity = (tab && tab.isVideo && !tab.isLocalFile) ? '1' : '0.35';
+  document.getElementById('fastLoadBtn').title = (tab && tab.isLocalFile) ? 'Local files already play instantly — nothing to download' : 'Download & play fast (uses full speed instead of streaming)';
+  if (!(tab && tab.isVideo)) {
+    document.getElementById('enhanceSheet').classList.remove('open');
+    document.getElementById('enhanceBtn').classList.remove('active-toggle');
+    document.getElementById('enhanceBtnPlayer').classList.remove('active-toggle');
+  }
+  document.getElementById('quickControls').style.display = (tab && tab.isVideo && !isLocked) ? 'flex' : 'none';
+  document.getElementById('videoControlbar').classList.toggle('visible', !!(tab && tab.isVideo && !isLocked));
+  closeFloatMenus();
+  if (tab && tab.isVideo) {
+    applyFiltersToTab(tab);
+    applyTabTransform(tab);
+    applyAspect(tab, tab.aspect);
+    refreshPlaybackUIForTab(tab);
+    refreshTransportUI(tab);
+  } else if (playerMode) {
+    exitPlayerModeFn();
+  }
+  updateEmptyHint();
+  updateGradingForActiveTab();
+  saveSession();
+}
+
+function updateEmptyHint() {
+  const tab = getTab(activeTabId);
+  const hint = document.getElementById('emptyHint');
+  const showHint = !tab || (!tab.isVideo && tab.historyIndex < 0) || (tab.isVideo && !tab.el.src);
+  hint.style.display = showHint ? 'flex' : 'none';
+  updateGrabVideoBtn();
+}
+
+function updateGrabVideoBtn() {
+  const btn = document.getElementById('grabVideoBtn');
+  const tab = getTab(activeTabId);
+  const onBrowsedPage = !!(tab && !tab.isVideo && !tab.isLocalFile && tab.historyIndex >= 0 && tab.history[tab.historyIndex]);
+  btn.classList.toggle('visible', onBrowsedPage);
+}
+
+function loadUrl(tabId, rawUrl, isNewNav) {
+  const tab = getTab(tabId);
+  if (!tab) return;
+  const url = resolveUrl(rawUrl);
+  if (!url) return;
+
+  const looksLikeVideo = VIDEO_EXT_RE.test(url);
+  if (looksLikeVideo && !tab.isVideo) {
+    const newEl = document.createElement('video');
+    newEl.id = tab.el.id;
+    newEl.controls = false;
+    newEl.playsInline = true;
+    newEl.loop = settings.loop;
+    newEl.preload = 'auto';
+    newEl.className = tab.el.className;
+    tab.el.replaceWith(newEl);
+    tab.el = newEl;
+    tab.isVideo = true;
+    tab.aspect = tab.aspect || 'fit';
+    bindVideoElementEvents(tab);
+    applyAspect(tab, tab.aspect);
+  }
+
+  if (isNewNav) {
+    tab.history = tab.history.slice(0, tab.historyIndex + 1);
+    tab.history.push(url);
+    tab.historyIndex = tab.history.length - 1;
+    globalHistory.unshift({ url, time: new Date().toLocaleString() });
+    if (globalHistory.length > 100) globalHistory.pop();
+    saveHistory();
+    if (DOWNLOAD_EXT_RE.test(url)) {
+      downloads.unshift({ url, time: new Date().toLocaleString() });
+      if (downloads.length > 100) downloads.pop();
+      saveDownloads();
+    }
+  }
+
+  tab.title = url.replace(/^https?:\/\//, '');
+  tab.el.src = url;
+
+  if (tab.isVideo) {
+    tab.el.play().catch(() => {});
+    ensureAudioGraphIfBoosted(tab);
+    updateVolumeGain(tab, settings.volBoost);
+    applyFiltersToTab(tab);
+  }
+
+  const status = document.getElementById('status');
+  status.style.display = 'block';
+  status.textContent = tab.isVideo
+    ? 'Loading video — direct .mp4/.webm links play natively; streaming pages like YouTube should be opened as a normal site instead.'
+    : 'Loading ' + url + ' — some sites block embedding and won\'t display here.';
+
+  if (tab.id === activeTabId) {
+    // Privacy: never repopulate the address bar with a video's URL after it loads.
+    document.getElementById('urlInput').value = tab.isVideo ? '' : url;
+    document.getElementById('enhanceBtn').disabled = !tab.isVideo;
+    document.getElementById('quickControls').style.display = (tab.isVideo && !isLocked) ? 'flex' : 'none';
+    document.getElementById('videoControlbar').classList.toggle('visible', !!(tab.isVideo && !isLocked));
+    if (tab.isVideo) { refreshTransportUI(tab); }
+  }
+  updateBookmarkStar();
+  updateNavButtons();
+  renderTabbar();
+  updateEmptyHint();
+  if (tab.id === activeTabId) updateGradingForActiveTab();
+  saveSession();
+}
+
+function updateNavButtons() {
+  const tab = getTab(activeTabId);
+  document.getElementById('backBtn').disabled = !tab || tab.historyIndex <= 0;
+  document.getElementById('fwdBtn').disabled = !tab || tab.historyIndex >= tab.history.length - 1;
+}
+
+function renderTabbar() {
+  const bar = document.getElementById('tabbar');
+  bar.innerHTML = '';
+  tabs.forEach(t => {
+    const elTab = document.createElement('div');
+    elTab.className = 'tab' + (t.id === activeTabId ? ' active' : '') + (t.isVideo ? ' video-tab' : '');
+    const icon = t.isVideo ? '&#9654;' : '&#127760;';
+    // Privacy: video tabs show no text at all — not even a generic label —
+    // just the icon, so nothing about an open video is visible anywhere,
+    // including the tab strip itself.
+    const label = t.isVideo ? '' : 'Tab';
+    elTab.innerHTML = '<span class="tab-icon">' + icon + '</span><span class="tab-title">' + label + '</span><span class="tab-close">&times;</span>';
+    elTab.querySelector('.tab-title').addEventListener('click', () => activateTab(t.id));
+    elTab.querySelector('.tab-icon').addEventListener('click', () => activateTab(t.id));
+    elTab.querySelector('.tab-close').addEventListener('click', (e) => { e.stopPropagation(); closeTab(t.id); });
+    bar.appendChild(elTab);
+  });
+  const newBtn = document.createElement('button');
+  newBtn.className = 'new-tab-btn';
+  newBtn.textContent = '+';
+  newBtn.title = 'New tab';
+  newBtn.addEventListener('click', () => createTab());
+  bar.appendChild(newBtn);
+}
+
+function closeTab(id) {
+  const idx = tabs.findIndex(t => t.id === id);
+  if (idx === -1) return;
+  const tab = tabs[idx];
+  if (tab.isLocalFile && tab.el.src) { try { URL.revokeObjectURL(tab.el.src); } catch (e) {} }
+  tab.el.remove();
+  if (tab.canvas) tab.canvas.remove();
+  tabs.splice(idx, 1);
+  if (tabs.length === 0) { createTab(); return; }
+  if (activeTabId === id) {
+    const newIdx = Math.max(0, idx - 1);
+    activateTab(tabs[newIdx].id);
+  } else {
+    renderTabbar();
+  }
+  saveSession();
+}
+
+/* ================= Panels ================= */
+function closePanels() {
+  document.getElementById('historyPanel').classList.remove('open');
+  document.getElementById('bookmarksPanel').classList.remove('open');
+  document.getElementById('downloadsPanel').classList.remove('open');
+}
+function renderHistoryPanel() {
+  const panel = document.getElementById('historyPanel');
+  panel.innerHTML = '';
+  if (globalHistory.length === 0) { panel.innerHTML = '<div class="panel-empty">No history yet.</div>'; return; }
+  globalHistory.forEach(h => {
+    const row = document.createElement('div');
+    row.className = 'panel-row';
+    row.innerHTML = '<span class="link">' + h.url + '</span><span style="color:#777;font-size:11px;">' + h.time + '</span>';
+    row.querySelector('.link').addEventListener('click', () => { loadUrl(activeTabId, h.url, true); closePanels(); });
+    panel.appendChild(row);
+  });
+}
+function updateBookmarkStar() {
+  const tab = getTab(activeTabId);
+  const url = tab && tab.historyIndex >= 0 ? tab.history[tab.historyIndex] : null;
+  const btn = document.getElementById('bookmarkBtn');
+  const isBookmarked = url && bookmarks.includes(url);
+  btn.classList.toggle('active-toggle', !!isBookmarked);
+  btn.innerHTML = isBookmarked ? '&#9733;' : '&#9734;';
+}
+function renderBookmarksPanel() {
+  const panel = document.getElementById('bookmarksPanel');
+  panel.innerHTML = '';
+  if (bookmarks.length === 0) { panel.innerHTML = '<div class="panel-empty">No bookmarks yet. Tap the star to save the current page.</div>'; return; }
+  bookmarks.forEach(url => {
+    const row = document.createElement('div');
+    row.className = 'panel-row';
+    row.innerHTML = '<span class="link">' + url + '</span><button>&times;</button>';
+    row.querySelector('.link').addEventListener('click', () => { loadUrl(activeTabId, url, true); closePanels(); });
+    row.querySelector('button').addEventListener('click', () => {
+      bookmarks = bookmarks.filter(b => b !== url);
+      saveBookmarks(); renderBookmarksPanel(); updateBookmarkStar();
+    });
+    panel.appendChild(row);
+  });
+}
+function renderDownloadsPanel() {
+  const panel = document.getElementById('downloadsPanel');
+  panel.innerHTML = '';
+  if (downloads.length === 0) {
+    panel.innerHTML = '<div class="panel-empty">No downloads detected yet. Only files opened directly via the address bar can be detected — files clicked inside an embedded page can\'t be tracked due to cross-site restrictions.</div>';
+    return;
+  }
+  const note = document.createElement('div');
+  note.className = 'panel-empty'; note.style.fontSize = '11px';
+  note.textContent = 'Opens the file in a new tab (actual download depends on the file and your device).';
+  panel.appendChild(note);
+  downloads.forEach(d => {
+    const row = document.createElement('div');
+    row.className = 'panel-row';
+    row.innerHTML = '<span class="link">' + d.url + '</span><span style="color:#777;font-size:11px;">' + d.time + '</span>';
+    row.querySelector('.link').addEventListener('click', () => { createTab(d.url); closePanels(); });
+    panel.appendChild(row);
+  });
+}
+
+/* ================= Desktop mode ================= */
+function applyDesktopMode(tab) {
+  if (tab.isVideo) return;
+  const container = document.getElementById('stage');
+  const containerWidth = container.clientWidth;
+  if (tab.desktopMode) {
+    const scale = containerWidth / 1280;
+    tab.el.classList.add('desktop-mode');
+    tab.el.style.transform = 'scale(' + scale + ')';
+    tab.el.style.height = (100 / scale) + '%';
+  } else {
+    tab.el.classList.remove('desktop-mode');
+    tab.el.style.transform = '';
+    tab.el.style.height = '100%';
+  }
+}
+
+/* ================= Video enhancer engine ================= */
+function ensureAudioGraph(tab) {
+  if (!tab) return;
+  if (!tab.audioCtx) {
+    try {
+      tab.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      tab.sourceNode = tab.audioCtx.createMediaElementSource(tab.el);
+      tab.gainNode = tab.audioCtx.createGain();
+      tab.sourceNode.connect(tab.gainNode).connect(tab.audioCtx.destination);
+    } catch (e) { /* restricted until user gesture; retried on play */ return; }
+  }
+  // Browsers create/leave AudioContext in a "suspended" state — once a
+  // MediaElementSource is attached, the <video> element's own audio output
+  // is silenced and ONLY plays through this context, so if it's never
+  // resumed, playback is silent even though the video plays fine.
+  if (tab.audioCtx.state === 'suspended') {
+    tab.audioCtx.resume().catch(() => {});
+  }
+}
+// Only wires the video into the Web Audio graph when it's actually needed
+// (Volume Boost pushed past 100%). Routing every video through
+// createMediaElementSource unconditionally silences audio entirely for most
+// videos here, since they're loaded from cross-origin links without CORS
+// headers — the Web Audio API mutes "tainted" cross-origin media as a
+// security measure. Leaving boost at 100% (the default) means audio just
+// plays natively through the <video> element, which has no such restriction.
+function ensureAudioGraphIfBoosted(tab) {
+  if (settings.volBoost !== 100 || (tab && tab.audioCtx)) ensureAudioGraph(tab);
+}
+function updateVolumeGain(tab, pct) {
+  if (!tab) return;
+  if (pct === 100 && !tab.gainNode) return; // no boost needed, no graph created — native audio plays fine
+  if (!tab.gainNode) ensureAudioGraph(tab);
+  if (!tab.gainNode) return;
+  tab.gainNode.gain.value = pct / 100;
+}
+function updateSharpen(amount) {
+  const k = amount / 100;
+  const center = 1 + 4 * k;
+  const side = -k;
+  sharpMatrix.setAttribute('kernelMatrix', [0, side, 0, side, center, side, 0, side, 0].join(' '));
+}
+function applyTabTransform(tab) {
+  const flipX = tab.flipped ? -1 : 1;
+  const t = 'rotate(' + tab.rotation + 'deg) scale(' + (tab.zoomScale * flipX) + ', ' + tab.zoomScale + ')';
+  tab.el.style.transform = t;
+  if (tab.canvas) tab.canvas.style.transform = t;
+}
+function computeEffectiveFilters() {
+  const exposureFactor = 1 + (settings.exposure / 100);
+  const gammaFactor = settings.gamma / 100;
+  const shadowLift = 1 + (settings.shadows / 400);
+  const highlightPull = 1 - (settings.highlights / 500);
+  const effBright = (settings.bright / 100) * exposureFactor * shadowLift * highlightPull;
+  const effContrast = (settings.contrast / 100) * gammaFactor;
+  const totalSharp = Math.min(100, settings.sharp + settings.detail * 0.6 + settings.denoise * 0.5);
+  updateSharpen(totalSharp);
+  return { effBright, effContrast, denoisePx: (settings.denoise / 100 * 1.4) };
+}
+function applyFiltersToTab(tab) {
+  if (!tab || !tab.isVideo) return;
+  const f = computeEffectiveFilters();
+  tab.el.style.setProperty('--b', f.effBright * (tab.gestureBrightness || 1));
+  tab.el.style.setProperty('--c', f.effContrast);
+  tab.el.style.setProperty('--s', settings.sat / 100);
+  tab.el.style.setProperty('--denoise', f.denoisePx + 'px');
+}
+function applyFiltersToAllVideoTabs() { tabs.forEach(t => { if (t.isVideo) applyFiltersToTab(t); }); }
+
+/* ================= Vibrance / Selective color (WebGL) =================
+   CSS `filter: saturate()` only scales ALL colors equally, so it can't do
+   vibrance (protecting already-saturated colors) or "boost just the reds"
+   style selective saturation. Those need real per-pixel color math, so this
+   renders the video frame through a tiny WebGL shader onto a canvas that
+   sits on top of the <video>. Base brightness/contrast/sharpen keep using
+   the existing CSS filter (applied to the canvas too), so this only ever
+   turns on when Vibrance or Selective color saturation are away from 100%. */
+let gradingRAF = null;
+const VERT_SRC = 'attribute vec2 p; varying vec2 v; void main(){ v = p*0.5+0.5; gl_Position = vec4(p,0.0,1.0); }';
+const FRAG_SRC = `
+precision mediump float;
+varying vec2 v;
+uniform sampler2D u_tex;
+uniform vec2 u_texel;
+uniform float u_ai;
+uniform float u_vibrance;
+uniform float u_selHue;
+uniform float u_selRange;
+uniform float u_selSat;
+vec3 rgb2hsv(vec3 c){
+  vec4 K = vec4(0.0,-1.0/3.0,2.0/3.0,-1.0);
+  vec4 p2 = mix(vec4(c.bg,K.wz), vec4(c.gb,K.xy), step(c.b,c.g));
+  vec4 q = mix(vec4(p2.xyw,c.r), vec4(c.r,p2.yzx), step(p2.x,c.r));
+  float d = q.x - min(q.w,q.y);
+  float e = 1.0e-10;
+  return vec3(abs(q.z + (q.w-q.y)/(6.0*d+e)), d/(q.x+e), q.x);
+}
+vec3 hsv2rgb(vec3 c){
+  vec4 K = vec4(1.0,2.0/3.0,1.0/3.0,3.0);
+  vec3 p2 = abs(fract(c.xxx + K.xyz)*6.0 - K.www);
+  return c.z * mix(K.xxx, clamp(p2-K.xxx,0.0,1.0), c.y);
+}
+void main(){
+  vec4 tex = texture2D(u_tex, v);
+  vec3 col = tex.rgb;
+  if (u_ai > 0.0) {
+    vec3 n  = texture2D(u_tex, v + vec2(0.0,-1.0)*u_texel).rgb;
+    vec3 s  = texture2D(u_tex, v + vec2(0.0, 1.0)*u_texel).rgb;
+    vec3 w  = texture2D(u_tex, v + vec2(-1.0,0.0)*u_texel).rgb;
+    vec3 e2 = texture2D(u_tex, v + vec2( 1.0,0.0)*u_texel).rgb;
+    vec3 nw = texture2D(u_tex, v + vec2(-1.0,-1.0)*u_texel).rgb;
+    vec3 ne = texture2D(u_tex, v + vec2( 1.0,-1.0)*u_texel).rgb;
+    vec3 sw = texture2D(u_tex, v + vec2(-1.0, 1.0)*u_texel).rgb;
+    vec3 se = texture2D(u_tex, v + vec2( 1.0, 1.0)*u_texel).rgb;
+    vec3 lumW = vec3(0.299,0.587,0.114);
+    float gx = dot((ne+2.0*e2+se) - (nw+2.0*w+sw), lumW);
+    float gy = dot((sw+2.0*s+se) - (nw+2.0*n+ne), lumW);
+    float edge = clamp(sqrt(gx*gx+gy*gy) * 3.0, 0.0, 1.0);
+    vec3 avg8 = (n+s+w+e2+nw+ne+sw+se) / 8.0;
+    // "push" the pixel away from the blurred average along its own contrast,
+    // strongest right on edges (this is the core trick Anime4K's line-sharpen
+    // pass uses) so lines look crisper without haloing flat/noisy areas.
+    vec3 pushed = col + (col - avg8) * (u_ai * 2.2) * edge;
+    col = clamp(pushed, 0.0, 1.0);
+  }
+  vec3 hsv = rgb2hsv(col);
+  float sat = hsv.y;
+  float vib = u_vibrance - 1.0;
+  sat = clamp(sat + vib * (1.0 - sat) * sat * 2.5, 0.0, 1.0);
+  float dist = abs(hsv.x - u_selHue);
+  dist = min(dist, 1.0 - dist);
+  float mask = 1.0 - smoothstep(0.0, u_selRange, dist);
+  sat = clamp(mix(sat, sat * u_selSat, mask), 0.0, 1.0);
+  hsv.y = sat;
+  gl_FragColor = vec4(hsv2rgb(hsv), tex.a);
+}`;
+function compileShader(gl, type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { gl.deleteShader(s); return null; }
+  return s;
+}
+function initGradingGL(tab) {
+  if (tab.gl) return tab.gl.ok ? tab.gl : null;
+  const gl = tab.canvas.getContext('webgl', { premultipliedAlpha: false }) || tab.canvas.getContext('experimental-webgl');
+  if (!gl) { tab.gl = { ok: false }; return null; }
+  const vs = compileShader(gl, gl.VERTEX_SHADER, VERT_SRC);
+  const fs = compileShader(gl, gl.FRAGMENT_SHADER, FRAG_SRC);
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { tab.gl = { ok: false }; return null; }
+  gl.useProgram(prog);
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, 'p');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  tab.gl = {
+    ok: true, gl, texture,
+    u_texel: gl.getUniformLocation(prog, 'u_texel'),
+    u_ai: gl.getUniformLocation(prog, 'u_ai'),
+    u_vibrance: gl.getUniformLocation(prog, 'u_vibrance'),
+    u_selHue: gl.getUniformLocation(prog, 'u_selHue'),
+    u_selRange: gl.getUniformLocation(prog, 'u_selRange'),
+    u_selSat: gl.getUniformLocation(prog, 'u_selSat')
+  };
+  return tab.gl;
+}
+function isGradingNeeded() { return settings.vibrance !== 100 || settings.selSat !== 100 || settings.aiEnhance > 0; }
+function setGradingVisible(tab, on) {
+  if (!tab || !tab.canvas) return;
+  if (on) {
+    const g = initGradingGL(tab);
+    if (!g) { on = false; }
+  }
+  if (on) {
+    tab.el.classList.add('grading-hidden');
+    tab.canvas.classList.add('active-frame');
+    startGradingLoop(tab);
+  } else {
+    tab.el.classList.remove('grading-hidden');
+    tab.canvas.classList.remove('active-frame');
+    if (gradingRAF) { cancelAnimationFrame(gradingRAF); gradingRAF = null; }
+  }
+}
+function drawGradingFrame(tab) {
+  const g = tab.gl;
+  if (!g || !g.ok) return;
+  const gl = g.gl;
+  const vw = tab.el.videoWidth, vh = tab.el.videoHeight;
+  if (!vw || !vh) return;
+  // When AI Enhance is on, render the canvas backing store at the video's
+  // actual displayed size (not just its source resolution) so the shader's
+  // edge-push sharpening effectively upscales it, instead of the browser's
+  // plain bilinear stretch. Capped for performance.
+  let tw = vw, th = vh;
+  if (settings.aiEnhance > 0) {
+    const rect = tab.canvas.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (rect.width && rect.height) {
+      tw = Math.max(vw, Math.min(1920, Math.round(rect.width * dpr)));
+      th = Math.max(vh, Math.min(1080, Math.round(rect.height * dpr)));
+    }
+  }
+  if (tab.canvas.width !== tw || tab.canvas.height !== th) {
+    tab.canvas.width = tw; tab.canvas.height = th;
+    gl.viewport(0, 0, tw, th);
+  }
+  gl.bindTexture(gl.TEXTURE_2D, g.texture);
+  try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, tab.el); } catch (e) { return; }
+  gl.uniform2f(g.u_texel, 1 / vw, 1 / vh);
+  gl.uniform1f(g.u_ai, settings.aiEnhance / 100);
+  gl.uniform1f(g.u_vibrance, settings.vibrance / 100);
+  gl.uniform1f(g.u_selHue, (settings.selHue % 360) / 360);
+  gl.uniform1f(g.u_selRange, settings.selRange / 360);
+  gl.uniform1f(g.u_selSat, settings.selSat / 100);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+function startGradingLoop(tab) {
+  if (gradingRAF) cancelAnimationFrame(gradingRAF);
+  function frame() {
+    if (tab.id !== activeTabId || !tab.canvas.classList.contains('active-frame')) { gradingRAF = null; return; }
+    drawGradingFrame(tab);
+    gradingRAF = requestAnimationFrame(frame);
+  }
+  gradingRAF = requestAnimationFrame(frame);
+}
+function updateGradingForActiveTab() {
+  tabs.forEach(t => { if (t.isVideo && t.id !== activeTabId) setGradingVisible(t, false); });
+  const tab = getTab(activeTabId);
+  if (!tab || !tab.isVideo) { if (gradingRAF) { cancelAnimationFrame(gradingRAF); gradingRAF = null; } return; }
+  setGradingVisible(tab, isGradingNeeded());
+}
+
+function refreshEnhanceLabels() {
+  document.getElementById('brightVal').textContent = settings.bright + '%';
+  document.getElementById('contrastVal').textContent = settings.contrast + '%';
+  document.getElementById('satVal').textContent = settings.sat + '%';
+  document.getElementById('vibranceVal').textContent = settings.vibrance + '%';
+  document.getElementById('selRangeVal').textContent = settings.selRange + '\u00b0';
+  document.getElementById('selSatVal').textContent = settings.selSat + '%';
+  document.getElementById('aiEnhanceVal').textContent = settings.aiEnhance;
+  document.getElementById('sharpVal').textContent = settings.sharp;
+  document.getElementById('volVal').textContent = settings.volBoost + '%';
+  document.getElementById('denoiseVal').textContent = settings.denoise;
+  document.getElementById('detailVal').textContent = settings.detail;
+  document.getElementById('exposureVal').textContent = settings.exposure;
+  document.getElementById('gammaVal').textContent = settings.gamma + '%';
+  document.getElementById('shadowsVal').textContent = settings.shadows;
+  document.getElementById('highlightsVal').textContent = settings.highlights;
+}
+function applyEnhanceSettingsToUI() {
+  document.getElementById('bright').value = settings.bright;
+  document.getElementById('contrast').value = settings.contrast;
+  document.getElementById('sat').value = settings.sat;
+  document.getElementById('vibrance').value = settings.vibrance;
+  document.getElementById('selHue').value = settings.selHue;
+  document.getElementById('selRange').value = settings.selRange;
+  document.getElementById('selSat').value = settings.selSat;
+  document.getElementById('aiEnhance').value = settings.aiEnhance;
+  document.getElementById('sharp').value = settings.sharp;
+  document.getElementById('volBoost').value = settings.volBoost;
+  document.getElementById('denoise').value = settings.denoise;
+  document.getElementById('detail').value = settings.detail;
+  document.getElementById('exposure').value = settings.exposure;
+  document.getElementById('gamma').value = settings.gamma;
+  document.getElementById('shadows').value = settings.shadows;
+  document.getElementById('highlights').value = settings.highlights;
+  applyFiltersToAllVideoTabs();
+  tabs.forEach(t => { if (t.isVideo) { updateVolumeGain(t, settings.volBoost); t.el.loop = settings.loop; } });
+  document.getElementById('loopBtn').textContent = 'Loop: ' + (settings.loop ? 'On' : 'Off');
+  document.getElementById('loopBtn').classList.toggle('active-toggle', settings.loop);
+  updateSelSwatch();
+  updateGradingForActiveTab();
+  refreshEnhanceLabels();
+}
+function updateSelSwatch() {
+  const sw = document.getElementById('selSwatch');
+  if (sw) sw.style.background = 'hsl(' + settings.selHue + ',90%,50%)';
+}
+function refreshPlaybackUIForTab(tab) {
+  document.getElementById('muteBtn').classList.toggle('active-toggle', !!tab.el.muted);
+  document.getElementById('muteBtn').textContent = tab.el.muted ? 'Unmute' : 'Mute';
+  document.querySelectorAll('.speed-row button').forEach(b => {
+    b.classList.toggle('active-toggle', Number(b.dataset.speed) === (tab.el.playbackRate || 1));
+  });
+}
+
+/* ================= Core playback: custom transport, seek, aspect, lock, gestures ================= */
+function formatTime(sec) {
+  if (!isFinite(sec) || sec < 0) sec = 0;
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return m + ':' + (s < 10 ? '0' : '') + s;
+}
+
+function bindVideoElementEvents(tab) {
+  const el = tab.el;
+  el.addEventListener('play', () => { if (tab.id === activeTabId) setPlayPauseIcon(true); });
+  el.addEventListener('pause', () => { if (tab.id === activeTabId) setPlayPauseIcon(false); });
+  el.addEventListener('loadedmetadata', () => { if (tab.id === activeTabId) refreshTransportUI(tab); });
+  el.addEventListener('timeupdate', () => {
+    if (tab.id !== activeTabId || seekDragging) return;
+    document.getElementById('curTime').textContent = formatTime(el.currentTime);
+    const seekBar = document.getElementById('seekBar');
+    if (el.duration) seekBar.value = (el.currentTime / el.duration) * 100;
+  });
+  el.addEventListener('ended', () => {
+    if (tab.id !== activeTabId) return;
+    const videoTabs = tabs.filter(t => t.isVideo);
+    const idx = videoTabs.indexOf(tab);
+    if (!settings.loop && idx >= 0 && idx < videoTabs.length - 1) activateTab(videoTabs[idx + 1].id) && videoTabs[idx + 1].el.play().catch(()=>{});
+  });
+}
+
+function setPlayPauseIcon(isPlaying) {
+  document.getElementById('playPauseBtn').innerHTML = isPlaying ? '&#10073;&#10073;' : '&#9654;';
+}
+
+function refreshTransportUI(tab) {
+  if (!tab || !tab.isVideo) return;
+  setPlayPauseIcon(!tab.el.paused && !tab.el.ended);
+  document.getElementById('curTime').textContent = formatTime(tab.el.currentTime);
+  document.getElementById('durTime').textContent = formatTime(tab.el.duration || 0);
+  const seekBar = document.getElementById('seekBar');
+  seekBar.value = tab.el.duration ? (tab.el.currentTime / tab.el.duration) * 100 : 0;
+  const videoTabs = tabs.filter(t => t.isVideo);
+  const idx = videoTabs.indexOf(tab);
+  document.getElementById('prevBtn').disabled = idx <= 0;
+  document.getElementById('nextBtn').disabled = idx < 0 || idx >= videoTabs.length - 1;
+}
+
+function applyAspect(tab, mode) {
+  if (!tab || !tab.isVideo) return;
+  tab.aspect = mode;
+  [tab.el, tab.canvas].forEach(el => {
+    if (!el) return;
+    el.style.aspectRatio = '';
+    el.style.width = '100%';
+    el.style.height = '100%';
+    switch (mode) {
+      case 'stretch': el.style.objectFit = 'fill'; break;
+      case 'crop': el.style.objectFit = 'cover'; break;
+      case 'native': el.style.objectFit = 'none'; break;
+      case '16:9': el.style.objectFit = 'contain'; el.style.aspectRatio = '16/9'; el.style.height = 'auto'; break;
+      case '4:3': el.style.objectFit = 'contain'; el.style.aspectRatio = '4/3'; el.style.height = 'auto'; break;
+      default: el.style.objectFit = 'contain'; break;
+    }
+  });
+  document.querySelectorAll('#aspectMenu button').forEach(b => b.classList.toggle('active-toggle', b.dataset.aspect === mode));
+}
+
+function closeFloatMenus() {
+  document.getElementById('aspectMenu').classList.remove('visible');
+  document.getElementById('orientMenu').classList.remove('visible');
+}
+
+/* ---- Full-screen "player mode": hides browser chrome for an app-like feel ---- */
+function enterPlayerMode() {
+  playerMode = true;
+  document.querySelector('.app').classList.add('player-mode');
+  document.getElementById('exitPlayerBtn').style.display = isLocked ? 'none' : 'flex';
+  try { history.pushState({ novaPlayerMode: true }, ''); } catch (e) {}
+  try {
+    const el = document.documentElement;
+    (el.requestFullscreen || el.webkitRequestFullscreen || function(){}).call(el);
+  } catch (e) {}
+}
+function exitPlayerModeFn(fromPopstate) {
+  playerMode = false;
+  document.querySelector('.app').classList.remove('player-mode');
+  document.getElementById('exitPlayerBtn').style.display = 'none';
+  if (!fromPopstate && history.state && history.state.novaPlayerMode) {
+    try { history.back(); } catch (e) {}
+  }
+  try {
+    if (document.fullscreenElement) (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+  } catch (e) {}
+}
+window.addEventListener('popstate', () => { if (playerMode) exitPlayerModeFn(true); });
+document.getElementById('exitPlayerBtn').addEventListener('click', () => exitPlayerModeFn());
+document.getElementById('stage').addEventListener('click', (e) => {
+  const tab = getTab(activeTabId);
+  if (!tab || !tab.isVideo || playerMode || isLocked) return;
+  if (e.target.closest('button, input, select, .video-controlbar, .float-menu')) return;
+  enterPlayerMode();
+});
+
+async function applyOrientMode(mode) {
+  orientMode = mode;
+  document.querySelectorAll('#orientMenu button').forEach(b => b.classList.toggle('active-toggle', b.dataset.orient === mode));
+  try {
+    if (mode === 'auto') {
+      if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
+    } else if (screen.orientation && screen.orientation.lock) {
+      await screen.orientation.lock(mode === 'landscape' ? 'landscape' : 'portrait');
+    } else {
+      throw new Error('unsupported');
+    }
+  } catch (e) {
+    const status = document.getElementById('status');
+    status.style.display = 'block';
+    status.textContent = 'Orientation lock needs fullscreen / isn\'t supported by this browser — try the fullscreen button first.';
+  }
+}
+
+/* ---- Lock / Kids Lock ---- */
+function engageLock(kids) {
+  isLocked = true;
+  isKidsLock = !!kids;
+  document.getElementById('lockOverlay').classList.add('visible');
+  document.getElementById('quickControls').style.display = 'none';
+  document.getElementById('exitPlayerBtn').style.display = 'none';
+  document.getElementById('videoControlbar').classList.remove('visible');
+  document.getElementById('kidsBadge').classList.toggle('visible', isKidsLock);
+  document.getElementById('lockLabel').textContent = isKidsLock ? 'Kids Lock active' : 'Tap to unlock';
+  document.getElementById('lockSublabel').style.display = isKidsLock ? 'block' : 'none';
+  closeFloatMenus();
+}
+function disengageLock() {
+  isLocked = false; isKidsLock = false;
+  document.getElementById('lockOverlay').classList.remove('visible');
+  document.getElementById('kidsBadge').classList.remove('visible');
+  resetRing();
+  const tab = getTab(activeTabId);
+  if (tab && tab.isVideo) {
+    document.getElementById('quickControls').style.display = 'flex';
+    document.getElementById('videoControlbar').classList.add('visible');
+    if (playerMode) document.getElementById('exitPlayerBtn').style.display = 'flex';
+  }
+}
+let lockHoldTimer = null, lockHeldLong = false;
+const lockBtnEl = document.getElementById('lockBtn');
+function lockPressStart() { lockHeldLong = false; lockHoldTimer = setTimeout(() => { lockHeldLong = true; engageLock(true); }, 550); }
+function lockPressEnd() { clearTimeout(lockHoldTimer); if (!lockHeldLong) engageLock(false); }
+lockBtnEl.addEventListener('touchstart', lockPressStart, { passive: true });
+lockBtnEl.addEventListener('touchend', lockPressEnd);
+lockBtnEl.addEventListener('mousedown', lockPressStart);
+lockBtnEl.addEventListener('mouseup', lockPressEnd);
+lockBtnEl.addEventListener('mouseleave', () => clearTimeout(lockHoldTimer));
+
+/* Redesigned unlock: simple tap for normal lock, hold-to-fill ring for Kids Lock */
+const lockCard = document.getElementById('lockCard');
+const ringFill = document.getElementById('ringFill');
+const RING_CIRC = 175.9;
+let kidsHoldTimer = null;
+
+function resetRing() {
+  ringFill.classList.remove('charging');
+  ringFill.classList.add('resetting');
+  ringFill.style.strokeDashoffset = RING_CIRC;
+  lockCard.classList.remove('pressed');
+}
+function startUnlockPress() {
+  const tab = getTab(activeTabId);
+  if (!isKidsLock) {
+    lockCard.classList.add('pressed');
+    return;
+  }
+  ringFill.classList.remove('resetting');
+  ringFill.classList.add('charging');
+  ringFill.style.strokeDashoffset = 0;
+  document.getElementById('lockLabel').textContent = 'Keep holding...';
+  kidsHoldTimer = setTimeout(() => {
+    disengageLock();
+    document.getElementById('lockLabel').textContent = 'Tap to unlock';
+  }, 1800);
+}
+function endUnlockPress() {
+  lockCard.classList.remove('pressed');
+  if (!isKidsLock) { disengageLock(); return; }
+  clearTimeout(kidsHoldTimer);
+  if (isKidsLock) {
+    resetRing();
+    document.getElementById('lockLabel').textContent = 'Kids Lock active';
+  }
+}
+lockCard.addEventListener('touchstart', startUnlockPress, { passive: true });
+lockCard.addEventListener('touchend', endUnlockPress);
+lockCard.addEventListener('mousedown', startUnlockPress);
+lockCard.addEventListener('mouseup', endUnlockPress);
+lockCard.addEventListener('mouseleave', () => { if (isKidsLock) endUnlockPress(); });
+
+/* ---- Transport buttons ---- */
+function togglePlayPauseForActiveTab() {
+  const t = getTab(activeTabId);
+  if (!t || !t.isVideo || isLocked) return;
+  if (t.el.paused) { t.el.play().catch(() => {}); ensureAudioGraphIfBoosted(t); } else t.el.pause();
+}
+document.getElementById('playPauseBtn').addEventListener('click', togglePlayPauseForActiveTab);
+document.getElementById('prevBtn').addEventListener('click', () => {
+  const videoTabs = tabs.filter(t => t.isVideo);
+  const idx = videoTabs.indexOf(getTab(activeTabId));
+  if (idx > 0) activateTab(videoTabs[idx - 1].id);
+});
+document.getElementById('nextBtn').addEventListener('click', () => {
+  const videoTabs = tabs.filter(t => t.isVideo);
+  const idx = videoTabs.indexOf(getTab(activeTabId));
+  if (idx >= 0 && idx < videoTabs.length - 1) activateTab(videoTabs[idx + 1].id);
+});
+let seekDragging = false;
+const seekBarEl = document.getElementById('seekBar');
+seekBarEl.addEventListener('input', () => {
+  seekDragging = true;
+  const t = getTab(activeTabId);
+  if (t && t.isVideo && t.el.duration) {
+    document.getElementById('curTime').textContent = formatTime((seekBarEl.value / 100) * t.el.duration);
+  }
+});
+seekBarEl.addEventListener('change', () => {
+  const t = getTab(activeTabId);
+  if (t && t.isVideo && t.el.duration) t.el.currentTime = (seekBarEl.value / 100) * t.el.duration;
+  seekDragging = false;
+});
+
+/* ---- Aspect / orientation menus ---- */
+document.getElementById('aspectBtn').addEventListener('click', () => {
+  const willOpen = !document.getElementById('aspectMenu').classList.contains('visible');
+  closeFloatMenus();
+  if (willOpen) document.getElementById('aspectMenu').classList.add('visible');
+});
+document.getElementById('orientBtn').addEventListener('click', () => {
+  const willOpen = !document.getElementById('orientMenu').classList.contains('visible');
+  closeFloatMenus();
+  if (willOpen) document.getElementById('orientMenu').classList.add('visible');
+});
+document.querySelectorAll('#aspectMenu button').forEach(b => {
+  b.addEventListener('click', () => { const t = getTab(activeTabId); if (t) applyAspect(t, b.dataset.aspect); closeFloatMenus(); });
+});
+document.querySelectorAll('#orientMenu button').forEach(b => {
+  b.addEventListener('click', () => { applyOrientMode(b.dataset.orient); closeFloatMenus(); });
+});
+
+/* ---- Gesture layer: volume / brightness / seek / pinch-zoom ---- */
+(function() {
+  const stage = document.getElementById('stage');
+  const indicator = document.getElementById('gestureIndicator');
+  const indicatorText = document.getElementById('gestureText');
+  const indicatorFill = document.getElementById('gestureBarFill');
+  let mode = null; // 'volume' | 'brightness' | 'seek' | 'pinch'
+  let startX = 0, startY = 0, startTime = 0, startVolume = 1, startBrightness = 1;
+  let pinchStartDist = 0, pinchStartScale = 1;
+  const THRESHOLD = 14;
+  let lastTapTime = 0, lastTapSide = null, tapResetTimer = null, indicatorHideTimer = null;
+
+  function dist(t0, t1) {
+    return Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+  }
+  function showIndicator(text, pct) {
+    indicator.classList.add('visible');
+    indicatorText.textContent = text;
+    indicatorFill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  }
+  function hideIndicator() { indicator.classList.remove('visible'); }
+
+  function isInteractiveTarget(target) {
+    return !!target.closest('button, input, select, .video-controlbar, .float-menu, .lock-overlay');
+  }
+
+  /* Double-tap left/right half of the video = skip -10s / +10s (YouTube-style) */
+  function handleDoubleTapCheck(clientX) {
+    const tab = getTab(activeTabId);
+    if (!tab || !tab.isVideo || isLocked) return false;
+    const side = clientX > window.innerWidth / 2 ? 'right' : 'left';
+    const now = Date.now();
+    if (lastTapSide === side && (now - lastTapTime) < 320) {
+      clearTimeout(tapResetTimer);
+      lastTapTime = 0; lastTapSide = null;
+      const delta = side === 'right' ? 10 : -10;
+      const dur = tab.el.duration || 1e9;
+      const newTime = Math.max(0, Math.min(dur, (tab.el.currentTime || 0) + delta));
+      tab.el.currentTime = newTime;
+      showIndicator(side === 'right' ? '\u23E9 +10s' : '\u23EA \u221210s', 50);
+      clearTimeout(indicatorHideTimer);
+      indicatorHideTimer = setTimeout(hideIndicator, 500);
+      return true;
+    }
+    lastTapTime = now; lastTapSide = side;
+    clearTimeout(tapResetTimer);
+    tapResetTimer = setTimeout(() => {
+      lastTapTime = 0; lastTapSide = null;
+      togglePlayPauseForActiveTab();
+    }, 320);
+    return false;
+  }
+
+  stage.addEventListener('dblclick', (e) => {
+    if (isInteractiveTarget(e.target)) return;
+    lastTapSide = e.clientX > window.innerWidth / 2 ? 'right' : 'left';
+    lastTapTime = Date.now();
+    handleDoubleTapCheck(e.clientX);
+  });
+
+  stage.addEventListener('touchstart', (e) => {
+    const tab = getTab(activeTabId);
+    if (!tab || !tab.isVideo || isLocked) { mode = null; return; }
+    if (isInteractiveTarget(e.target)) { mode = null; return; }
+    closeFloatMenus();
+    if (e.touches.length === 2) {
+      mode = 'pinch';
+      pinchStartDist = dist(e.touches[0], e.touches[1]);
+      pinchStartScale = tab.zoomScale || 1;
+      return;
+    }
+    if (e.touches.length !== 1) { mode = null; return; }
+    startX = e.touches[0].clientX; startY = e.touches[0].clientY;
+    startTime = tab.el.currentTime || 0;
+    startVolume = tab.el.volume;
+    startBrightness = tab.gestureBrightness || 1;
+    mode = 'pending';
+  }, { passive: true });
+
+  stage.addEventListener('touchmove', (e) => {
+    const tab = getTab(activeTabId);
+    if (!tab || !tab.isVideo || isLocked || !mode) return;
+
+    if (mode === 'pinch' && e.touches.length === 2) {
+      const d = dist(e.touches[0], e.touches[1]);
+      const scale = Math.max(1, Math.min(3, pinchStartScale * (d / pinchStartDist)));
+      tab.zoomScale = scale;
+      applyTabTransform(tab);
+      showIndicator('Zoom ' + scale.toFixed(1) + 'x', (scale - 1) / 2 * 100);
+      return;
+    }
+    if (e.touches.length !== 1) return;
+    const dx = e.touches[0].clientX - startX;
+    const dy = e.touches[0].clientY - startY;
+
+    if (mode === 'pending') {
+      if (Math.abs(dx) > THRESHOLD && Math.abs(dx) > Math.abs(dy)) mode = 'seek';
+      else if (Math.abs(dy) > THRESHOLD && Math.abs(dy) > Math.abs(dx)) {
+        mode = (startX > window.innerWidth / 2) ? 'volume' : 'brightness';
+      } else return;
+    }
+
+    if (mode === 'seek' && tab.el.duration) {
+      const deltaSec = (dx / stage.clientWidth) * 90;
+      const newTime = Math.max(0, Math.min(tab.el.duration, startTime + deltaSec));
+      tab.el.currentTime = newTime;
+      showIndicator((deltaSec >= 0 ? '+' : '') + Math.round(deltaSec) + 's  ' + formatTime(newTime), (newTime / tab.el.duration) * 100);
+    } else if (mode === 'volume') {
+      const delta = -dy / stage.clientHeight;
+      const v = Math.max(0, Math.min(1, startVolume + delta));
+      tab.el.volume = v;
+      showIndicator('\u{1F50A} ' + Math.round(v * 100) + '%', v * 100);
+    } else if (mode === 'brightness') {
+      const delta = -dy / stage.clientHeight * 1.4;
+      const b = Math.max(0.3, Math.min(2, startBrightness + delta));
+      tab.gestureBrightness = b;
+      applyFiltersToTab(tab);
+      showIndicator('\u{1F506} ' + Math.round(b * 100) + '%', (b / 2) * 100);
+    }
+  }, { passive: true });
+
+  stage.addEventListener('touchend', (e) => {
+    const tab = getTab(activeTabId);
+    let didDoubleTap = false;
+    if (mode === 'pending' && tab && tab.isVideo && !isLocked && e.changedTouches && e.changedTouches.length === 1 && !isInteractiveTarget(e.target)) {
+      didDoubleTap = handleDoubleTapCheck(e.changedTouches[0].clientX);
+    }
+    mode = null;
+    if (!didDoubleTap) hideIndicator();
+  });
+  stage.addEventListener('touchcancel', () => { mode = null; hideIndicator(); });
+})();
+
+/* ================= Wire up: navigation ================= */
+document.getElementById('goBtn').addEventListener('click', () => loadUrl(activeTabId, document.getElementById('urlInput').value, true));
+document.getElementById('urlInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); loadUrl(activeTabId, document.getElementById('urlInput').value, true); document.getElementById('urlInput').blur(); }
+});
+document.getElementById('urlInput').addEventListener('search', () => {
+  loadUrl(activeTabId, document.getElementById('urlInput').value, true);
+  document.getElementById('urlInput').blur();
+});
+document.getElementById('backBtn').addEventListener('click', () => {
+  const tab = getTab(activeTabId);
+  if (tab && tab.historyIndex > 0) {
+    tab.historyIndex--;
+    const url = tab.history[tab.historyIndex];
+    tab.el.src = url;
+    document.getElementById('urlInput').value = tab.isVideo ? '' : url;
+    updateNavButtons(); updateBookmarkStar();
+  }
+});
+document.getElementById('fwdBtn').addEventListener('click', () => {
+  const tab = getTab(activeTabId);
+  if (tab && tab.historyIndex < tab.history.length - 1) {
+    tab.historyIndex++;
+    const url = tab.history[tab.historyIndex];
+    tab.el.src = url;
+    document.getElementById('urlInput').value = tab.isVideo ? '' : url;
+    updateNavButtons(); updateBookmarkStar();
+  }
+});
+document.getElementById('reloadBtn').addEventListener('click', () => {
+  const tab = getTab(activeTabId);
+  if (tab && tab.historyIndex >= 0) tab.el.src = tab.history[tab.historyIndex];
+});
+document.getElementById('bookmarkBtn').addEventListener('click', () => {
+  const tab = getTab(activeTabId);
+  const url = tab && tab.historyIndex >= 0 ? tab.history[tab.historyIndex] : null;
+  if (!url) return;
+  if (bookmarks.includes(url)) bookmarks = bookmarks.filter(b => b !== url);
+  else bookmarks.push(url);
+  saveBookmarks(); updateBookmarkStar();
+});
+document.getElementById('urlCopyBtn').addEventListener('click', async () => {
+  const tab = getTab(activeTabId);
+  const url = tab && tab.historyIndex >= 0 ? tab.history[tab.historyIndex] : document.getElementById('urlInput').value;
+  if (!url) return;
+  const btn = document.getElementById('urlCopyBtn');
+  try {
+    await navigator.clipboard.writeText(url);
+  } catch (e) {
+    // Clipboard API blocked — fall back to a manual select+copy via a temp input
+    const tmp = document.createElement('input');
+    tmp.value = url;
+    document.body.appendChild(tmp);
+    tmp.select();
+    try { document.execCommand('copy'); } catch (e2) {}
+    document.body.removeChild(tmp);
+  }
+  btn.innerHTML = '&#10003;';
+  btn.classList.add('copied');
+  setTimeout(() => { btn.innerHTML = '&#128203;'; btn.classList.remove('copied'); }, 1200);
+});
+document.getElementById('urlExternalBtn').addEventListener('click', () => {
+  const tab = getTab(activeTabId);
+  const url = tab && tab.historyIndex >= 0 ? tab.history[tab.historyIndex] : document.getElementById('urlInput').value;
+  if (!url) return;
+  window.open(resolveUrl(url) || url, '_blank');
+});
+document.getElementById('historyBtn').addEventListener('click', () => {
+  const panel = document.getElementById('historyPanel');
+  const willOpen = !panel.classList.contains('open');
+  closePanels();
+  if (willOpen) { renderHistoryPanel(); panel.classList.add('open'); }
+});
+document.getElementById('bookmarksBtn').addEventListener('click', () => {
+  const panel = document.getElementById('bookmarksPanel');
+  const willOpen = !panel.classList.contains('open');
+  closePanels();
+  if (willOpen) { renderBookmarksPanel(); panel.classList.add('open'); }
+});
+document.getElementById('downloadsBtn').addEventListener('click', () => {
+  const panel = document.getElementById('downloadsPanel');
+  const willOpen = !panel.classList.contains('open');
+  closePanels();
+  if (willOpen) { renderDownloadsPanel(); panel.classList.add('open'); }
+});
+document.getElementById('fullscreenBtn').addEventListener('click', () => {
+  const container = document.getElementById('stage');
+  if (!document.fullscreenElement) (container.requestFullscreen || container.webkitRequestFullscreen || function(){}).call(container);
+  else (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+});
+document.getElementById('fullscreenBtnPlayer').addEventListener('click', () => {
+  const container = document.getElementById('stage');
+  if (!document.fullscreenElement) (container.requestFullscreen || container.webkitRequestFullscreen || function(){}).call(container);
+  else (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+});
+document.addEventListener('fullscreenchange', () => {
+  const isFs = !!document.fullscreenElement;
+  document.getElementById('fullscreenBtn').classList.toggle('active-toggle', isFs);
+  document.getElementById('fullscreenBtnPlayer').classList.toggle('active-toggle', isFs);
+  if (!isFs && playerMode) exitPlayerModeFn();
+});
+document.addEventListener('webkitfullscreenchange', () => {
+  const isFs = !!document.webkitFullscreenElement;
+  document.getElementById('fullscreenBtn').classList.toggle('active-toggle', isFs);
+  document.getElementById('fullscreenBtnPlayer').classList.toggle('active-toggle', isFs);
+  if (!isFs && playerMode) exitPlayerModeFn();
+});
+document.getElementById('immersiveBtn').addEventListener('click', () => {
+  document.querySelector('.app').classList.add('immersive-mode');
+});
+document.getElementById('exitImmersiveBtn').addEventListener('click', () => {
+  document.querySelector('.app').classList.remove('immersive-mode');
+});
+document.getElementById('desktopBtn').addEventListener('click', () => {
+  const tab = getTab(activeTabId);
+  if (!tab || tab.isVideo) return;
+  tab.desktopMode = !tab.desktopMode;
+  applyDesktopMode(tab);
+  document.getElementById('desktopBtn').classList.toggle('active-toggle', tab.desktopMode);
+  if (tab.historyIndex >= 0) tab.el.src = tab.history[tab.historyIndex];
+});
+
+/* ================= Wire up: open local video ================= */
+/* ================= Open video from a page link ================= */
+const CORS_PROXIES = [
+  url => url, // try direct fetch first (works when the site allows CORS)
+  url => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
+  url => 'https://corsproxy.io/?url=' + encodeURIComponent(url),
+  url => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url),
+  url => 'https://thingproxy.freeboard.io/fetch/' + url,
+  url => 'https://proxy.cors.sh/' + url
+];
+const PROXY_TIMEOUT_MS = 7000;
+let lastExtractFailReason = '';
+
+// fetch with a hard timeout, so one dead/slow proxy doesn't stall the whole chain
+async function fetchWithTimeout(url, opts, ms) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, Object.assign({}, opts, { signal: ctrl.signal }));
+  } finally {
+    clearTimeout(t);
+  }
+}
+const SEARCH_ENGINE_PATTERNS = [
+  /(^|\.)bing\.com\/search/i,
+  /(^|\.)google\.[a-z.]+\/search/i,
+  /duckduckgo\.com\//i,
+  /search\.brave\.com\/search/i,
+  /ecosia\.org\/search/i,
+  /startpage\.com\/sp\/search/i,
+  /search\.yahoo\.com\/search/i,
+  /wikipedia\.org\/w\/index\.php\?search/i
+];
+function isSearchResultsPage(url) {
+  return SEARCH_ENGINE_PATTERNS.some(re => re.test(url));
+}
+
+function findVideoUrlsInHtml(html, baseUrl) {
+  const abs = (u) => { try { return new URL(u, baseUrl).href; } catch (e) { return null; } };
+  const candidates = [];
+
+  // Un-escape JSON-style escaped slashes (common inside inline <script> config blobs)
+  const unescaped = html.replace(/\\\//g, '/');
+
+  // 1) <video src="...">, <source src="...">
+  const tagRe = /<(?:video|source)[^>]+src=["']([^"']+)["']/gi;
+  let m;
+  while ((m = tagRe.exec(unescaped))) candidates.push(m[1]);
+
+  // 2) og:video / og:video:url / og:video:secure_url meta tags
+  const metaRe = /<meta[^>]+(?:property|name)=["']og:video(?::secure_url|:url)?["'][^>]+content=["']([^"']+)["']/gi;
+  while ((m = metaRe.exec(unescaped))) candidates.push(m[1]);
+  const metaRe2 = /<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']og:video(?::secure_url|:url)?["']/gi;
+  while ((m = metaRe2.exec(unescaped))) candidates.push(m[1]);
+
+  // 3) twitter:player:stream
+  const twRe = /<meta[^>]+name=["']twitter:player:stream["'][^>]+content=["']([^"']+)["']/gi;
+  while ((m = twRe.exec(unescaped))) candidates.push(m[1]);
+
+  // 4) JSON-LD contentUrl (schema.org VideoObject, used by many news/blog sites)
+  const jsonLdRe = /"contentUrl"\s*:\s*"([^"]+)"/gi;
+  while ((m = jsonLdRe.exec(unescaped))) candidates.push(m[1]);
+
+  // 5) Common JS player config keys: "file":"...", "src":"...", "url":"...", "videoUrl":"..."
+  const cfgRe = /"(?:file|src|url|videoUrl|video_url|streamUrl|playbackUrl|hls|mp4)"\s*:\s*"(https?:\/\/[^"]+?\.(?:mp4|webm|m3u8|mov|m4v)[^"]*)"/gi;
+  while ((m = cfgRe.exec(unescaped))) candidates.push(m[1]);
+
+  // 6) Raw .mp4 / .webm / .m3u8 / .mov links anywhere in the HTML/JS, incl. protocol-relative //host/...
+  const rawRe = /["'](https?:)?(\/\/[^"'\s]+?\.(?:mp4|webm|m3u8|mov|m4v)(?:\?[^"'\s]*)?)["']/gi;
+  while ((m = rawRe.exec(unescaped))) candidates.push((m[1] || 'https:') + m[2]);
+  const rawRe2 = /["'](https?:\/\/[^"'\s]+?\.(?:mp4|webm|m3u8|mov|m4v)(?:\?[^"'\s]*)?)["']/gi;
+  while ((m = rawRe2.exec(unescaped))) candidates.push(m[1]);
+
+  const seen = new Set();
+  const resolved = candidates
+    .map(c => abs(c))
+    .filter(Boolean)
+    .filter(u => /\.(mp4|webm|m3u8|mov|m4v)/i.test(u))
+    .filter(u => { if (seen.has(u)) return false; seen.add(u); return true; });
+
+  // Prefer mp4/webm over m3u8 (m3u8 needs HLS support the plain <video> tag may lack)
+  resolved.sort((a, b) => {
+    const score = (u) => /\.(mp4|webm|mov|m4v)/i.test(u) ? 0 : 1;
+    return score(a) - score(b);
+  });
+
+  // Attach a human-friendly quality label when the URL hints at a resolution (e.g. 1080p, 720, _hd)
+  return resolved.map(u => {
+    const resMatch = u.match(/(2160|1440|1080|720|480|360|240)p?/i);
+    const label = resMatch ? resMatch[1] + 'p' : (/\.m3u8/i.test(u) ? 'Stream (HLS)' : 'Video file');
+    return { url: u, label };
+  });
+}
+
+async function extractVideoCandidatesFromPage(pageUrl) {
+  const statusEl = document.getElementById('extractStatus');
+  statusEl.textContent = 'Loading page…';
+  statusEl.className = 'extract-status';
+
+  // Fire all proxy routes in parallel instead of waiting for each one to
+  // fail before trying the next — whichever responds first with a usable
+  // result wins, so this is as fast as the single fastest available route
+  // instead of the sum of all the slow/dead ones.
+  let anyFetchSucceeded = false;
+  let lastHttpStatus = null;
+  let settledCount = 0;
+
+  const attempt = (proxyFn, i) => new Promise((resolve) => {
+    (async () => {
+      try {
+        const fetchUrl = proxyFn(pageUrl);
+        const res = await fetchWithTimeout(fetchUrl, { method: 'GET', mode: 'cors' }, PROXY_TIMEOUT_MS);
+        lastHttpStatus = res.status;
+        if (!res.ok) { resolve(null); return; }
+        const html = await res.text();
+        if (!html || html.length < 50) { resolve(null); return; }
+        anyFetchSucceeded = true;
+        const found = findVideoUrlsInHtml(html, pageUrl);
+        resolve(found.length ? found : null);
+      } catch (e) {
+        resolve(null);
+      } finally {
+        settledCount++;
+        if (settledCount < CORS_PROXIES.length) {
+          statusEl.textContent = 'Checking ' + (CORS_PROXIES.length - settledCount) + ' more route(s)…';
+        }
+      }
+    })();
+  });
+
+  const promises = CORS_PROXIES.map((fn, i) => attempt(fn, i));
+
+  // Resolve as soon as ANY route returns actual video candidates, without
+  // waiting for the slower ones still in flight.
+  return new Promise((resolveAll) => {
+    let pending = promises.length;
+    let doneAlready = false;
+    promises.forEach(p => {
+      p.then(result => {
+        pending--;
+        if (doneAlready) return;
+        if (result && result.length) {
+          doneAlready = true;
+          resolveAll(result);
+        } else if (pending === 0) {
+          doneAlready = true;
+          lastExtractFailReason = anyFetchSucceeded
+            ? "This page's video is loaded by JavaScript after the page opens, so it isn't in the raw page source — that's why it can't be found this way."
+            : "Couldn't reach this page from here through any of the available routes" + (lastHttpStatus ? ' (last response: ' + lastHttpStatus + ')' : '') + ". The site, your network, or the proxy services may be blocking the request. Try again in a moment.";
+          resolveAll([]);
+        }
+      });
+    });
+  });
+}
+
+async function extractVideoFromPage(pageUrl) {
+  const list = await extractVideoCandidatesFromPage(pageUrl);
+  return list.length ? list[0].url : null;
+}
+
+function openExtractOverlay() {
+  document.getElementById('extractOverlay').classList.add('visible');
+  document.getElementById('extractUrlInput').style.display = '';
+  document.getElementById('extractStatus').textContent = '';
+  document.getElementById('extractStatus').className = 'extract-status';
+  document.getElementById('qualityList').innerHTML = '';
+  const input = document.getElementById('extractUrlInput');
+  input.value = '';
+  setTimeout(() => input.focus(), 50);
+}
+function closeExtractOverlay() {
+  document.getElementById('extractOverlay').classList.remove('visible');
+}
+document.getElementById('extractVideoBtn').addEventListener('click', openExtractOverlay);
+document.getElementById('extractCancelBtn').addEventListener('click', closeExtractOverlay);
+document.getElementById('extractOverlay').addEventListener('click', (e) => { if (e.target.id === 'extractOverlay') closeExtractOverlay(); });
+
+function renderQualityList(candidates, onPick) {
+  const list = document.getElementById('qualityList');
+  list.innerHTML = '';
+  if (candidates.length < 2) return false;
+  candidates.forEach(c => {
+    const btn = document.createElement('button');
+    btn.innerHTML = '<span>' + c.label + '</span><span class="badge">Open ▸</span>';
+    btn.addEventListener('click', () => onPick(c.url));
+    list.appendChild(btn);
+  });
+  return true;
+}
+
+// Single shared flow used by BOTH "Get video" (current page) and the
+// paste-a-link Extract overlay, so they always behave identically — no
+// separate code paths to drift apart or break independently.
+async function resolveAndOpenVideo(pageUrl, statusEl) {
+  if (VIDEO_EXT_RE.test(pageUrl)) {
+    createTab(pageUrl, true, {});
+    return { outcome: 'opened' };
+  }
+  if (isSearchResultsPage(pageUrl)) {
+    return { outcome: 'search-results', hostname: new URL(pageUrl).hostname };
+  }
+  if (statusEl) { statusEl.textContent = 'Looking for a video on that page…'; statusEl.className = 'extract-status'; }
+  const candidates = await extractVideoCandidatesFromPage(pageUrl);
+  if (!candidates.length) return { outcome: 'not-found' };
+  if (candidates.length === 1) {
+    createTab(candidates[0].url, true, {});
+    return { outcome: 'opened' };
+  }
+  return { outcome: 'multiple', candidates };
+}
+
+document.getElementById('grabVideoBtn').addEventListener('click', async () => {
+  const tab = getTab(activeTabId);
+  if (!tab || tab.isVideo || tab.historyIndex < 0) return;
+  const pageUrl = tab.history[tab.historyIndex];
+  const btn = document.getElementById('grabVideoBtn');
+  const originalLabel = btn.innerHTML;
+
+  btn.classList.add('working');
+  btn.innerHTML = '&#8987; Searching…';
+  try {
+    const result = await resolveAndOpenVideo(pageUrl, document.getElementById('extractStatus'));
+    if (result.outcome === 'search-results') {
+      document.getElementById('extractOverlay').classList.add('visible');
+      document.getElementById('qualityList').innerHTML = '';
+      document.getElementById('extractUrlInput').style.display = '';
+      document.getElementById('extractUrlInput').value = '';
+      document.getElementById('extractStatus').textContent = "This is still a search results page (" + result.hostname + "), not the actual video page. Open the site you tapped on first, then use Get video from there — or long-press the link on the search results and choose Copy Link, then paste it below.\n\nPage tried: " + pageUrl;
+      document.getElementById('extractStatus').className = 'extract-status error';
+    } else if (result.outcome === 'not-found') {
+      btn.innerHTML = '&#10060; Not found';
+      document.getElementById('extractOverlay').classList.add('visible');
+      document.getElementById('extractUrlInput').style.display = 'none';
+      document.getElementById('extractStatus').textContent = (lastExtractFailReason || "Couldn't find a playable video on this page.") + "\n\nPage tried: " + pageUrl;
+      document.getElementById('extractStatus').className = 'extract-status error';
+    } else if (result.outcome === 'multiple') {
+      document.getElementById('extractOverlay').classList.add('visible');
+      document.getElementById('extractUrlInput').style.display = 'none';
+      document.getElementById('extractStatus').textContent = 'Found ' + result.candidates.length + ' versions — pick one:';
+      document.getElementById('extractStatus').className = 'extract-status success';
+      renderQualityList(result.candidates, (url) => { closeExtractOverlay(); createTab(url, true, {}); });
+    }
+    // 'opened' needs no extra UI — the new video tab is already showing.
+  } catch (e) {
+    btn.innerHTML = '&#10060; Failed';
+    document.getElementById('extractOverlay').classList.add('visible');
+    document.getElementById('extractUrlInput').style.display = 'none';
+    document.getElementById('extractStatus').textContent = "Something went wrong reading this page (" + (e && e.message ? e.message : 'unknown error') + ").\n\nPage tried: " + pageUrl;
+    document.getElementById('extractStatus').className = 'extract-status error';
+  } finally {
+    // Always restore the button, no matter which branch ran above — this is
+    // the fix: previously the direct-video-link path returned early and
+    // skipped this, leaving the button stuck on "Searching…" and unclickable
+    // for the rest of the session.
+    setTimeout(() => { btn.innerHTML = originalLabel; btn.classList.remove('working'); }, btn.innerHTML === originalLabel ? 0 : 1200);
+  }
+});
+
+async function runExtraction() {
+  const raw = document.getElementById('extractUrlInput').value.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim();
+  const statusEl = document.getElementById('extractStatus');
+  const goBtn = document.getElementById('extractGoBtn');
+  document.getElementById('qualityList').innerHTML = '';
+  if (!raw) { statusEl.textContent = 'Please paste a link first.'; statusEl.className = 'extract-status error'; return; }
+  let pageUrl = raw.replace(/\s+/g, '');
+  if (!/^https?:\/\//i.test(pageUrl)) pageUrl = 'https://' + pageUrl;
+
+  goBtn.disabled = true;
+  try {
+    const result = await resolveAndOpenVideo(pageUrl, statusEl);
+    if (result.outcome === 'opened') {
+      statusEl.textContent = 'Found it — opening…';
+      statusEl.className = 'extract-status success';
+      setTimeout(() => closeExtractOverlay(), 400);
+    } else if (result.outcome === 'search-results') {
+      statusEl.textContent = "This is a search results page (" + result.hostname + "), not an actual video page — there's no video here to find. Open the site you want first, then paste that page's link instead.";
+      statusEl.className = 'extract-status error';
+    } else if (result.outcome === 'multiple') {
+      statusEl.textContent = 'Found ' + result.candidates.length + ' versions — pick one:';
+      statusEl.className = 'extract-status success';
+      renderQualityList(result.candidates, (url) => { closeExtractOverlay(); createTab(url, true, {}); });
+    } else {
+      statusEl.textContent = lastExtractFailReason || "Couldn't find a playable video on that page. It may be protected (YouTube/Instagram/Facebook/Netflix etc.) or the site blocks this kind of access. Try pasting a direct video link instead.";
+      statusEl.className = 'extract-status error';
+    }
+  } catch (e) {
+    statusEl.textContent = 'Something went wrong reading that page. Try again or paste a direct video link.';
+    statusEl.className = 'extract-status error';
+  } finally {
+    goBtn.disabled = false;
+  }
+}
+document.getElementById('extractGoBtn').addEventListener('click', runExtraction);
+document.getElementById('extractUrlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') runExtraction(); });
+
+document.getElementById('openFileBtn').addEventListener('click', () => document.getElementById('fileInput').click());
+document.getElementById('fileInput').addEventListener('change', () => {
+  const file = document.getElementById('fileInput').files[0];
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  createTab(null, true, { objectUrl: url, title: file.name, isLocalFile: true });
+  document.getElementById('fileInput').value = '';
+});
+
+/* ================= Wire up: enhance sheet ================= */
+function toggleEnhanceSheet() {
+  const tab = getTab(activeTabId);
+  if (!tab || !tab.isVideo) return;
+  const sheet = document.getElementById('enhanceSheet');
+  sheet.classList.toggle('open');
+  const isOpen = sheet.classList.contains('open');
+  document.getElementById('enhanceBtn').classList.toggle('active-toggle', isOpen);
+  document.getElementById('enhanceBtnPlayer').classList.toggle('active-toggle', isOpen);
+  refreshPlaybackUIForTab(tab);
+}
+document.getElementById('enhanceBtn').addEventListener('click', toggleEnhanceSheet);
+document.getElementById('enhanceBtnPlayer').addEventListener('click', toggleEnhanceSheet);
+document.querySelectorAll('.enhance-tabs button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.enhance-tabs button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.enhance-body').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('etab-' + btn.dataset.etab).classList.add('active');
+  });
+});
+
+document.getElementById('bright').addEventListener('input', e => { settings.bright = Number(e.target.value); applyFiltersToAllVideoTabs(); refreshEnhanceLabels(); saveEnhanceSettings(); });
+document.getElementById('contrast').addEventListener('input', e => { settings.contrast = Number(e.target.value); applyFiltersToAllVideoTabs(); refreshEnhanceLabels(); saveEnhanceSettings(); });
+document.getElementById('sat').addEventListener('input', e => { settings.sat = Number(e.target.value); applyFiltersToAllVideoTabs(); refreshEnhanceLabels(); saveEnhanceSettings(); });
+document.getElementById('vibrance').addEventListener('input', e => { settings.vibrance = Number(e.target.value); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings(); });
+document.getElementById('selHue').addEventListener('input', e => { settings.selHue = Number(e.target.value); updateSelSwatch(); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings(); });
+document.getElementById('selRange').addEventListener('input', e => { settings.selRange = Number(e.target.value); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings(); });
+document.getElementById('selSat').addEventListener('input', e => { settings.selSat = Number(e.target.value); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings(); });
+document.getElementById('aiEnhance').addEventListener('input', e => { settings.aiEnhance = Number(e.target.value); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings(); });
+document.querySelectorAll('.reset-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const key = btn.dataset.key;
+    settings[key] = Number(btn.dataset.default);
+    applyEnhanceSettingsToUI();
+    saveEnhanceSettings();
+  });
+});
+document.getElementById('sharp').addEventListener('input', e => { settings.sharp = Number(e.target.value); applyFiltersToAllVideoTabs(); refreshEnhanceLabels(); saveEnhanceSettings(); });
+document.getElementById('volBoost').addEventListener('input', e => {
+  settings.volBoost = Number(e.target.value);
+  const tab = getTab(activeTabId);
+  tabs.forEach(t => { if (t.isVideo) updateVolumeGain(t, settings.volBoost); });
+  refreshEnhanceLabels(); saveEnhanceSettings();
+});
+document.getElementById('denoise').addEventListener('input', e => { settings.denoise = Number(e.target.value); applyFiltersToAllVideoTabs(); refreshEnhanceLabels(); saveEnhanceSettings(); });
+document.getElementById('detail').addEventListener('input', e => { settings.detail = Number(e.target.value); applyFiltersToAllVideoTabs(); refreshEnhanceLabels(); saveEnhanceSettings(); });
+document.getElementById('exposure').addEventListener('input', e => { settings.exposure = Number(e.target.value); applyFiltersToAllVideoTabs(); refreshEnhanceLabels(); saveEnhanceSettings(); });
+document.getElementById('gamma').addEventListener('input', e => { settings.gamma = Number(e.target.value); applyFiltersToAllVideoTabs(); refreshEnhanceLabels(); saveEnhanceSettings(); });
+document.getElementById('shadows').addEventListener('input', e => { settings.shadows = Number(e.target.value); applyFiltersToAllVideoTabs(); refreshEnhanceLabels(); saveEnhanceSettings(); });
+document.getElementById('highlights').addEventListener('input', e => { settings.highlights = Number(e.target.value); applyFiltersToAllVideoTabs(); refreshEnhanceLabels(); saveEnhanceSettings(); });
+
+document.getElementById('autoEnhanceBtn').addEventListener('click', () => {
+  settings.contrast = 112; settings.sat = 115; settings.sharp = 30;
+  settings.denoise = 20; settings.detail = 25; settings.exposure = 8;
+  settings.gamma = 105; settings.shadows = 15; settings.highlights = 10;
+  applyEnhanceSettingsToUI(); saveEnhanceSettings();
+});
+
+document.querySelectorAll('.speed-row button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tab = getTab(activeTabId);
+    if (!tab || !tab.isVideo) return;
+    tab.el.playbackRate = Number(btn.dataset.speed);
+    document.querySelectorAll('.speed-row button').forEach(b => b.classList.remove('active-toggle'));
+    btn.classList.add('active-toggle');
+  });
+});
+document.getElementById('loopBtn').addEventListener('click', () => {
+  settings.loop = !settings.loop;
+  tabs.forEach(t => { if (t.isVideo) t.el.loop = settings.loop; });
+  document.getElementById('loopBtn').textContent = 'Loop: ' + (settings.loop ? 'On' : 'Off');
+  document.getElementById('loopBtn').classList.toggle('active-toggle', settings.loop);
+  saveEnhanceSettings();
+});
+document.getElementById('muteBtn').addEventListener('click', () => {
+  const tab = getTab(activeTabId);
+  if (!tab || !tab.isVideo) return;
+  tab.el.muted = !tab.el.muted;
+  document.getElementById('muteBtn').classList.toggle('active-toggle', tab.el.muted);
+  document.getElementById('muteBtn').textContent = tab.el.muted ? 'Unmute' : 'Mute';
+});
+
+document.getElementById('rewindBtn').addEventListener('click', () => { const t = getTab(activeTabId); if (t && t.isVideo) t.el.currentTime = Math.max(0, t.el.currentTime - 10); });
+document.getElementById('forwardBtn').addEventListener('click', () => { const t = getTab(activeTabId); if (t && t.isVideo) t.el.currentTime = Math.min(t.el.duration || 1e9, t.el.currentTime + 10); });
+document.getElementById('rotateBtn').addEventListener('click', () => { const t = getTab(activeTabId); if (t && t.isVideo) { t.rotation = (t.rotation + 90) % 360; applyTabTransform(t); } });
+document.getElementById('flipBtn').addEventListener('click', () => { const t = getTab(activeTabId); if (t && t.isVideo) { t.flipped = !t.flipped; applyTabTransform(t); } });
+document.getElementById('pipBtn').addEventListener('click', async () => {
+  const t = getTab(activeTabId);
+  if (!t || !t.isVideo) return;
+  try {
+    if (document.pictureInPictureElement) await document.exitPictureInPicture();
+    else await t.el.requestPictureInPicture();
+  } catch (e) { alert('Picture-in-picture is not supported here.'); }
+});
+
+/* ================= Fast download & play (parallel-chunk downloader) ================= */
+let fastLoadAbort = null;
+function updateFastLoadProgress(pct) {
+  document.getElementById('fastLoadBarFill').style.width = pct + '%';
+  document.getElementById('fastLoadPct').textContent = Math.round(pct) + '%';
+}
+// Plain single-stream download through a CORS proxy — used when the video
+// host itself has no CORS headers, so direct fetch/HEAD/Range requests get
+// blocked by the browser before they even leave the page. Proxies generally
+// don't pass Range requests through reliably, so this is one sequential
+// stream rather than parallel chunks.
+async function proxyDownload(url, signal, title) {
+  const proxies = [
+    u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
+    u => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u),
+    u => 'https://corsproxy.io/?url=' + encodeURIComponent(u),
+    u => 'https://thingproxy.freeboard.io/fetch/' + u
+  ];
+  let lastErr = null;
+  for (let i = 0; i < proxies.length; i++) {
+    try {
+      if (title) title.textContent = i === 0 ? 'Direct download blocked — routing through a relay…' : 'Trying another relay (' + (i + 1) + '/' + proxies.length + ')…';
+      const res = await fetchWithTimeout(proxies[i](url), { signal }, 20000);
+      if (!res.ok || !res.body) { lastErr = new Error('HTTP ' + res.status); continue; }
+      const total = Number(res.headers.get('content-length') || 0);
+      const reader = res.body.getReader();
+      const bytes = [];
+      let received = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes.push(value);
+        received += value.length;
+        if (total) updateFastLoadProgress(Math.min(99, (received / total) * 100));
+      }
+      const blob = new Blob(bytes);
+      if (blob.size < 1000) { lastErr = new Error('Empty/invalid response'); continue; } // relay likely returned an error page, not the video
+      return blob;
+    } catch (e) {
+      if (e.name === 'AbortError') throw e;
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('All relays failed');
+}
+
+async function fastDownloadAndPlay(tab) {
+  const url = tab.el.currentSrc || tab.el.src;
+  if (!url || /^blob:/i.test(url)) return; // already local/fast
+  const overlay = document.getElementById('fastLoadOverlay');
+  const title = document.getElementById('fastLoadTitle');
+  overlay.classList.add('visible');
+  updateFastLoadProgress(0);
+  fastLoadAbort = new AbortController();
+  const signal = fastLoadAbort.signal;
+
+  try {
+    let blob;
+    try {
+      // Try a direct connection first — fastest path when the host allows CORS.
+      const head = await fetchWithTimeout(url, { method: 'HEAD', signal }, 8000);
+      const len = Number(head.headers.get('content-length') || 0);
+      const acceptsRanges = (head.headers.get('accept-ranges') || '').toLowerCase().includes('bytes');
+
+      if (len > 0 && acceptsRanges) {
+        // Split the file into parallel chunks — like a download manager — so the
+        // full connection speed gets used instead of a single slow stream.
+        const CHUNKS = 6;
+        const chunkSize = Math.ceil(len / CHUNKS);
+        const ranges = [];
+        for (let i = 0; i < CHUNKS; i++) {
+          const start = i * chunkSize;
+          const end = Math.min(start + chunkSize - 1, len - 1);
+          if (start > end) break;
+          ranges.push([start, end]);
+        }
+        const loaded = new Array(ranges.length).fill(0);
+        const reportProgress = () => {
+          const total = loaded.reduce((a, b) => a + b, 0);
+          updateFastLoadProgress(Math.min(99, (total / len) * 100));
+        };
+        const parts = await Promise.all(ranges.map(async ([start, end], idx) => {
+          const res = await fetch(url, { headers: { Range: 'bytes=' + start + '-' + end }, signal });
+          if (!res.body) { const buf = await res.arrayBuffer(); loaded[idx] = buf.byteLength; reportProgress(); return new Blob([buf]); }
+          const reader = res.body.getReader();
+          const bytes = [];
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            bytes.push(value);
+            loaded[idx] += value.length;
+            reportProgress();
+          }
+          return new Blob(bytes);
+        }));
+        blob = new Blob(parts);
+      } else {
+        // Server doesn't support ranges — fall back to one fast sequential download.
+        title.textContent = 'Downloading (server does not support parallel chunks)…';
+        const res = await fetch(url, { signal });
+        const total = Number(res.headers.get('content-length') || 0);
+        const reader = res.body.getReader();
+        const bytes = [];
+        let received = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          bytes.push(value);
+          received += value.length;
+          if (total) updateFastLoadProgress(Math.min(99, (received / total) * 100));
+        }
+        blob = new Blob(bytes);
+      }
+    } catch (directErr) {
+      if (directErr.name === 'AbortError') throw directErr;
+      // Direct connection failed — almost always the video host blocking
+      // cross-origin requests (no Access-Control-Allow-Origin header).
+      // Fall back to routing the download through a CORS relay.
+      updateFastLoadProgress(0);
+      blob = await proxyDownload(url, signal, title);
+    }
+
+    updateFastLoadProgress(100);
+    const objectUrl = URL.createObjectURL(blob);
+    const wasTime = tab.el.currentTime || 0;
+    const wasPlaying = !tab.el.paused;
+    tab.el.src = objectUrl;
+    tab.el.load();
+    tab.el.addEventListener('loadedmetadata', function onMeta() {
+      tab.el.removeEventListener('loadedmetadata', onMeta);
+      tab.el.currentTime = wasTime;
+      if (wasPlaying) { tab.el.play().catch(() => {}); ensureAudioGraphIfBoosted(tab); }
+    });
+    overlay.classList.remove('visible');
+  } catch (e) {
+    if (e.name !== 'AbortError') {
+      alert("Couldn't download this video for fast playback. It may block downloads, or your network dropped the connection.");
+    }
+    overlay.classList.remove('visible');
+  }
+  fastLoadAbort = null;
+}
+document.getElementById('fastLoadBtn').addEventListener('click', () => {
+  const t = getTab(activeTabId);
+  if (!t || !t.isVideo) return;
+  if (t.isLocalFile) {
+    // A file picked from the device already plays instantly with no
+    // buffering — there's nothing to "download", so this button does
+    // nothing here instead of showing a confusing failure.
+    return;
+  }
+  fastDownloadAndPlay(t);
+});
+document.getElementById('fastLoadCancelBtn').addEventListener('click', () => {
+  if (fastLoadAbort) fastLoadAbort.abort();
+  document.getElementById('fastLoadOverlay').classList.remove('visible');
+});
+
+document.getElementById('shotBtn').addEventListener('click', () => {
+  const t = getTab(activeTabId);
+  if (!t || !t.isVideo) return;
+  const canvas = document.createElement('canvas');
+  canvas.width = t.el.videoWidth; canvas.height = t.el.videoHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.filter = 'brightness(' + settings.bright/100 + ') contrast(' + settings.contrast/100 + ') saturate(' + settings.sat/100 + ')';
+  ctx.drawImage(t.el, 0, 0, canvas.width, canvas.height);
+  const link = document.createElement('a');
+  link.download = 'frame-' + Date.now() + '.png';
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+});
+
+function applyPresetValues(vals) { Object.assign(settings, vals); applyEnhanceSettingsToUI(); saveEnhanceSettings(); }
+document.querySelectorAll('.presets button[data-preset]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const table = {
+      reset:    { bright:100, contrast:100, sat:100, sharp:0, denoise:0, detail:0, exposure:0, gamma:100, shadows:0, highlights:0, vibrance:100, selHue:0, selRange:30, selSat:100, aiEnhance:0 },
+      clear:    { bright:105, contrast:115, sat:105, sharp:35, denoise:15, detail:20, exposure:5, gamma:105, shadows:10, highlights:5 },
+      warm:     { bright:105, contrast:105, sat:120, sharp:15, denoise:10, detail:10, exposure:5, gamma:100, shadows:5, highlights:0 },
+      vivid:    { bright:100, contrast:120, sat:150, sharp:25, denoise:5, detail:20, exposure:0, gamma:110, shadows:0, highlights:15 },
+      lowlight: { bright:140, contrast:125, sat:110, sharp:20, denoise:35, detail:15, exposure:25, gamma:110, shadows:40, highlights:5 }
+    };
+    applyPresetValues(table[btn.dataset.preset]);
+  });
+});
+document.getElementById('saveCustomBtn').addEventListener('click', () => {
+  const name = prompt('Name this preset:', 'My Preset');
+  if (!name) return;
+  customPresets[name] = { bright: settings.bright, contrast: settings.contrast, sat: settings.sat, sharp: settings.sharp,
+    denoise: settings.denoise, detail: settings.detail, exposure: settings.exposure, gamma: settings.gamma,
+    shadows: settings.shadows, highlights: settings.highlights,
+    vibrance: settings.vibrance, selHue: settings.selHue, selRange: settings.selRange, selSat: settings.selSat, aiEnhance: settings.aiEnhance };
+  saveCustomPresets(); renderCustomPresets();
+});
+function renderCustomPresets() {
+  const row = document.getElementById('customPresetRow');
+  row.innerHTML = '';
+  Object.keys(customPresets).forEach(name => {
+    const btn = document.createElement('button');
+    btn.className = 'custom'; btn.textContent = name;
+    btn.addEventListener('click', () => applyPresetValues(customPresets[name]));
+    row.appendChild(btn);
+  });
+}
+
+/* ================= Pull-to-refresh / edge swipe ================= */
+(function() {
+  const container = document.getElementById('stage');
+  const indicator = document.getElementById('refreshIndicator');
+  let startX = 0, startY = 0, tracking = false;
+  container.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
+    startX = e.touches[0].clientX; startY = e.touches[0].clientY; tracking = true;
+  }, { passive: true });
+  container.addEventListener('touchmove', (e) => {
+    if (!tracking) return;
+    const dx = e.touches[0].clientX - startX, dy = e.touches[0].clientY - startY;
+    if (dy > 40 && Math.abs(dy) > Math.abs(dx)) {
+      indicator.style.transform = 'translate(-50%, ' + Math.min(dy - 40, 40) + 'px) rotate(' + dy + 'deg)';
+    }
+  }, { passive: true });
+  container.addEventListener('touchend', (e) => {
+    if (!tracking) return;
+    tracking = false;
+    const dx = e.changedTouches[0].clientX - startX, dy = e.changedTouches[0].clientY - startY;
+    indicator.style.transform = 'translate(-50%, -100%)';
+    const tab = getTab(activeTabId);
+    if (tab && tab.isVideo) return;
+    if (dy > 90 && Math.abs(dy) > Math.abs(dx)) document.getElementById('reloadBtn').click();
+    else if (Math.abs(dx) > 90 && Math.abs(dx) > Math.abs(dy)) {
+      if (dx > 0) document.getElementById('backBtn').click();
+      else document.getElementById('fwdBtn').click();
+    }
+  }, { passive: true });
+})();
+
+/* ================= Boot ================= */
+// Prevent this page itself from ever being redirected/opened elsewhere.
+window.open = function () { return null; };
+
+loadPersistedData().then(async () => {
+  applyEnhanceSettingsToUI();
+  renderCustomPresets();
+  const restored = await restoreSession();
+  if (!restored) createTab();
+});
+</script>
+</body>
+</html>
