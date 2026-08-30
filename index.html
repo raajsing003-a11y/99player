@@ -937,7 +937,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '4.9';
+const NOVA_VERSION = '5.0';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -4055,7 +4055,7 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
   // this phase, so more concurrent fetches can be sustained before mobile
   // WebView memory/socket limits become the bottleneck instead of the
   // network.
-  const CONCURRENCY = 96;
+  const CONCURRENCY = 128;
   let nextIndex = 0;
   async function worker() {
     while (nextIndex < segments.length) {
@@ -4459,13 +4459,24 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
     // range-capable servers down the slow single-connection path below,
     // which is exactly what caps throughput to a fraction of the real
     // connection speed regardless of how fast the network actually is. So
-    // when we know the size but the header didn't confirm ranges, actually
-    // test it with a tiny real range request instead of guessing from a
-    // header that many servers just omit.
-    if (len > 0 && !acceptsRanges) {
+    // whenever ranges aren't already confirmed, actually test with a tiny
+    // real range request instead of guessing from a header that many
+    // servers just omit. This also covers the case where HEAD didn't return
+    // a size at all (some hosts block/strip it on HEAD but still return the
+    // full size via Content-Range on an actual ranged GET) — parsing that
+    // header recovers `len` too, so this still unlocks the fast parallel
+    // path even when content-length was never available up front.
+    if (!acceptsRanges) {
       try {
         const probe = await fetchWithTimeout(url, { headers: { Range: 'bytes=0-1023' }, signal: watchdog.signal }, 8000);
-        if (probe.status === 206) acceptsRanges = true;
+        if (probe.status === 206) {
+          acceptsRanges = true;
+          if (!len) {
+            const cr = probe.headers.get('content-range') || '';
+            const m = /\/(\d+)\s*$/.exec(cr);
+            if (m) len = Number(m[1]);
+          }
+        }
         watchdog.poke();
       } catch (probeErr) {
         if (signal && signal.aborted) throw probeErr;
@@ -4537,7 +4548,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // growing the moment anything fails, so a server/network that can't
       // sustain this many connections backs the pool off on its own instead
       // of forcing it and risking a broken download.
-      const MAX_WORKERS = 200;
+      const MAX_WORKERS = 256;
       const fetchPiece = async (idx, attemptsLeft) => {
         const [start, end] = pieces[idx];
         try {
@@ -4589,18 +4600,18 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
         allWorkerPromises.push(p);
         return p;
       }
-      const START_WORKERS = 64;
+      const START_WORKERS = 80;
       for (let i = 0; i < Math.min(START_WORKERS, pieces.length); i++) launchWorker();
-      // Ramp: every 60ms, if nothing has failed recently and there's still
-      // unclaimed work, add up to 3 more workers — up to MAX_WORKERS. Stops
+      // Ramp: every 50ms, if nothing has failed recently and there's still
+      // unclaimed work, add up to 4 more workers — up to MAX_WORKERS. Stops
       // ramping permanently the moment any real failure is seen (server
       // pushing back), so a connection/server that can't sustain this many
       // requests backs off on its own instead of forcing it and breaking the
       // download.
       const ramp = setInterval(() => {
         if (rampBlocked || firstFatalError || nextPiece >= pieces.length || activeWorkers >= MAX_WORKERS) { clearInterval(ramp); return; }
-        for (let i = 0; i < 3 && activeWorkers < MAX_WORKERS && nextPiece < pieces.length && !rampBlocked; i++) launchWorker();
-      }, 60);
+        for (let i = 0; i < 4 && activeWorkers < MAX_WORKERS && nextPiece < pieces.length && !rampBlocked; i++) launchWorker();
+      }, 50);
       // Wait for the whole pool to actually drain — poll instead of a single
       // Promise.all call, since the set of promises to wait for keeps
       // growing for as long as the ramp is still adding workers.
