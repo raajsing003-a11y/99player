@@ -46,6 +46,49 @@
   }
   .app.player-mode .exit-player-btn { display:flex; }
 
+  .player-folder-btn {
+    position:absolute; top:10px; left:62px; z-index:10;
+    width:44px; height:44px; border-radius:50%; border:none; background:rgba(0,0,0,0.75);
+    color:#fff; font-size:18px; cursor:pointer; display:none;
+    align-items:center; justify-content:center; backdrop-filter:blur(6px);
+    box-shadow:0 2px 8px rgba(0,0,0,0.4);
+  }
+  .player-folder-btn.visible { display:flex; }
+
+  .folder-overlay {
+    position:fixed; inset:0; z-index:60; background:rgba(0,0,0,0.72);
+    display:none; align-items:flex-end; justify-content:center;
+    backdrop-filter:blur(2px);
+  }
+  .folder-overlay.visible { display:flex; }
+  .folder-card {
+    width:100%; max-width:520px; max-height:78vh; background:#1e1e1e;
+    border-radius:18px 18px 0 0; padding:14px 6px 18px 6px;
+    display:flex; flex-direction:column; box-shadow:0 -4px 24px rgba(0,0,0,0.5);
+  }
+  .folder-card-head {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:2px 12px 10px 12px; border-bottom:1px solid #2a2a2a; margin-bottom:6px;
+  }
+  .folder-card-head span { font-size:15px; font-weight:600; color:#fff; }
+  .folder-card-head button {
+    background:none; border:none; color:#aaa; font-size:20px; padding:4px 8px; cursor:pointer;
+  }
+  .folder-list { overflow-y:auto; padding:0 6px; }
+  .folder-row {
+    display:flex; align-items:center; gap:10px; padding:11px 8px;
+    border-bottom:1px solid #272727; cursor:pointer;
+  }
+  .folder-row:last-child { border-bottom:none; }
+  .folder-row .fr-icon {
+    flex-shrink:0; width:34px; height:34px; border-radius:9px; background:#2f2f2f;
+    display:flex; align-items:center; justify-content:center; font-size:15px;
+  }
+  .folder-row .fr-text { flex:1; min-width:0; }
+  .folder-row .fr-title { font-size:13.5px; color:#eee; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .folder-row .fr-meta { font-size:11px; color:#888; margin-top:2px; }
+  .folder-row .fr-del { background:none; border:none; color:#e57373; font-size:16px; padding:6px; flex-shrink:0; }
+
   .exit-immersive-btn {
     position:absolute; top:10px; left:10px; z-index:6;
     width:32px; height:32px; border-radius:50%; border:none; background:rgba(0,0,0,0.55);
@@ -535,7 +578,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 2.3</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 2.4</div>
   </div>
 
   <div class="toolbar">
@@ -608,8 +651,18 @@
     </div>
 
     <button class="exit-player-btn" id="exitPlayerBtn" title="Back to browser">&#8592;</button>
+    <button class="player-folder-btn" id="playerFolderBtn" title="Downloaded videos">&#128193;</button>
     <button class="exit-immersive-btn" id="exitImmersiveBtn" title="Show toolbar">&#8593;</button>
     <button class="grab-video-btn" id="grabVideoBtn" title="Paste a video link">&#128279; Paste link</button>
+    <div class="folder-overlay" id="folderOverlay">
+      <div class="folder-card">
+        <div class="folder-card-head">
+          <span>Downloaded videos</span>
+          <button id="folderOverlayClose">&#10005;</button>
+        </div>
+        <div class="folder-list" id="folderList"></div>
+      </div>
+    </div>
     <div class="mini-toast" id="miniToast"></div>
     <div class="fastload-overlay" id="fastLoadOverlay">
       <div class="fastload-card">
@@ -839,7 +892,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '2.3';
+const NOVA_VERSION = '2.4';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -1001,8 +1054,15 @@ function openOfflineDB() {
   });
   return offlineDBPromise;
 }
+// Saves a video for offline playback. Returns { ok, error } instead of
+// swallowing failures — video blobs are large (tens to hundreds of MB), and
+// IndexedDB storage quota gets hit far more often than for small data. Before
+// this, a quota failure here was silent: the download would finish, the
+// player would keep playing fine (it's already showing the in-memory blob),
+// but nothing ever showed up in the offline list — which looks exactly like
+// "it downloaded but never actually saved".
 async function saveOfflineVideo(entry) {
-  try {
+  const tryPut = async () => {
     const db = await openOfflineDB();
     await new Promise((resolve, reject) => {
       const tx = db.transaction('videos', 'readwrite');
@@ -1010,7 +1070,28 @@ async function saveOfflineVideo(entry) {
       tx.oncomplete = resolve;
       tx.onerror = () => reject(tx.error);
     });
-  } catch (e) {}
+  };
+  try {
+    await tryPut();
+    return { ok: true };
+  } catch (e) {
+    const isQuota = e && (e.name === 'QuotaExceededError' || /quota/i.test(e.message || ''));
+    if (isQuota) {
+      // Out of space — free up room by dropping the oldest saved videos
+      // (largest wins are usually the ones just watched, not the oldest) and
+      // try again once before giving up, instead of just failing silently.
+      try {
+        const existing = await listOfflineVideos();
+        const oldest = existing.sort((a, b) => a.time - b.time).slice(0, Math.max(1, Math.ceil(existing.length * 0.3)));
+        for (const item of oldest) await deleteOfflineVideo(item.id);
+        await tryPut();
+        return { ok: true, freedSpace: true };
+      } catch (e2) {
+        return { ok: false, error: 'storage-full' };
+      }
+    }
+    return { ok: false, error: 'unknown' };
+  }
 }
 async function listOfflineVideos() {
   try {
@@ -1082,6 +1163,48 @@ function playOfflineVideo(item) {
   const objectUrl = URL.createObjectURL(item.blob);
   createTab(null, true, { isLocalFile: true, title: item.title || item.url, objectUrl });
 }
+
+/* ---- Quick "video folder" access from inside the player itself ---- */
+async function renderFolderOverlay() {
+  const list = document.getElementById('folderList');
+  list.innerHTML = '<div class="panel-empty">Loading…</div>';
+  const items = await listOfflineVideos();
+  list.innerHTML = '';
+  if (items.length === 0) {
+    list.innerHTML = '<div class="panel-empty">No downloaded videos yet. Use the lightning (fast download &amp; play) button to save one here.</div>';
+    return;
+  }
+  items.forEach(item => {
+    const row = document.createElement('div');
+    row.className = 'folder-row';
+    const meta = new Date(item.time).toLocaleString() + (item.size ? ' · ' + formatBytes(item.size) : '');
+    const titleText = maskMode ? maskLabel() : escapeHtml(item.title || item.url);
+    row.innerHTML = '<span class="fr-icon">&#127916;</span>' +
+      '<span class="fr-text"><div class="fr-title">' + titleText + '</div><div class="fr-meta">' + meta + '</div></span>' +
+      '<button class="fr-del" title="Remove">&#10005;</button>';
+    row.querySelector('.fr-text').addEventListener('click', () => {
+      closeFolderOverlay();
+      playOfflineVideo(item);
+      enterPlayerMode(); // press once, land straight in the fullscreen player
+    });
+    row.querySelector('.fr-del').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await deleteOfflineVideo(item.id);
+      renderFolderOverlay();
+    });
+    list.appendChild(row);
+  });
+}
+function openFolderOverlay() {
+  document.getElementById('folderOverlay').classList.add('visible');
+  renderFolderOverlay();
+}
+function closeFolderOverlay() {
+  document.getElementById('folderOverlay').classList.remove('visible');
+}
+document.getElementById('playerFolderBtn').addEventListener('click', openFolderOverlay);
+document.getElementById('folderOverlayClose').addEventListener('click', closeFolderOverlay);
+document.getElementById('folderOverlay').addEventListener('click', (e) => { if (e.target.id === 'folderOverlay') closeFolderOverlay(); });
 async function saveEnhanceSettings() { try { await window.storage.set('novabrowser:enhancesettings', JSON.stringify(settings)); } catch (e) {} }
 async function saveCustomPresets() { try { await window.storage.set('novabrowser:custompresets', JSON.stringify(customPresets)); } catch (e) {} }
 
@@ -1226,6 +1349,7 @@ function activateTab(id) {
   // out, even for a video that was just pasted/opened and never tapped into
   // fullscreen.
   document.getElementById('exitPlayerBtn').style.display = (tab && tab.isVideo && !isLocked) ? 'flex' : 'none';
+  document.getElementById('playerFolderBtn').classList.toggle('visible', !!(tab && tab.isVideo && !isLocked));
   closeFloatMenus();
   if (tab && tab.isVideo) {
     applyFiltersToTab(tab);
@@ -1325,6 +1449,7 @@ function loadUrl(tabId, rawUrl, isNewNav) {
     document.getElementById('quickControls').style.display = (tab.isVideo && !isLocked) ? 'flex' : 'none';
     document.getElementById('videoControlbar').classList.toggle('visible', !!(tab.isVideo && !isLocked));
     document.getElementById('exitPlayerBtn').style.display = (tab.isVideo && !isLocked) ? 'flex' : 'none';
+    document.getElementById('playerFolderBtn').classList.toggle('visible', !!(tab.isVideo && !isLocked));
     if (tab.isVideo) { refreshTransportUI(tab); }
   }
   updateBookmarkStar();
@@ -1864,6 +1989,7 @@ function enterPlayerMode() {
   playerMode = true;
   document.querySelector('.app').classList.add('player-mode');
   document.getElementById('exitPlayerBtn').style.display = isLocked ? 'none' : 'flex';
+  document.getElementById('playerFolderBtn').classList.toggle('visible', !isLocked);
   try { history.pushState({ novaPlayerMode: true }, ''); } catch (e) {}
   try {
     const el = document.documentElement;
@@ -1879,6 +2005,7 @@ function exitPlayerModeFn(fromPopstate) {
   // full "player mode". Only recompute from current state.
   const activeTab = getTab(activeTabId);
   document.getElementById('exitPlayerBtn').style.display = (activeTab && activeTab.isVideo && !isLocked) ? 'flex' : 'none';
+  document.getElementById('playerFolderBtn').classList.toggle('visible', !!(activeTab && activeTab.isVideo && !isLocked));
   if (!fromPopstate && history.state && history.state.novaPlayerMode) {
     suppressNextPopstate = true;
     try { history.back(); } catch (e) { suppressNextPopstate = false; }
@@ -1968,6 +2095,7 @@ function engageLock(kids) {
   document.getElementById('lockOverlay').classList.add('visible');
   document.getElementById('quickControls').style.display = 'none';
   document.getElementById('exitPlayerBtn').style.display = 'none';
+  document.getElementById('playerFolderBtn').classList.remove('visible');
   document.getElementById('videoControlbar').classList.remove('visible');
   document.getElementById('kidsBadge').classList.toggle('visible', isKidsLock);
   document.getElementById('lockLabel').textContent = isKidsLock ? 'Kids Lock active' : 'Tap to unlock';
@@ -1984,6 +2112,7 @@ function disengageLock() {
     document.getElementById('quickControls').style.display = 'flex';
     document.getElementById('videoControlbar').classList.add('visible');
     document.getElementById('exitPlayerBtn').style.display = 'flex';
+    document.getElementById('playerFolderBtn').classList.add('visible');
   }
 }
 let lockHoldTimer = null, lockHeldLong = false;
@@ -2787,18 +2916,17 @@ async function extractVideoCandidatesFast(pageUrl) {
     return found.length ? found : null;
   };
 
-  // Known-good route for this domain from a previous visit — try it alone
-  // first. One request instead of racing every proxy, so a domain you've
-  // already opened before comes back noticeably faster the next time.
+  // Known-good route for this domain from a previous visit — remembered so a
+  // domain you've opened before is as fast as possible next time. The
+  // fastest thing to do with it is NOT to wait on it alone (network time
+  // sitting idle is wasted time) — it's to fire it off immediately, in
+  // parallel with every other fast proxy, and just take whichever answers
+  // first. The remembered route usually wins anyway (it's already proven to
+  // work for this domain), so this keeps the "instant on repeat domain"
+  // feel while never being slower than a fresh race if it doesn't.
   const domain = getDomain(pageUrl);
   const remembered = getDomainPattern(domain, 'extract');
-  if (remembered != null && CORS_PROXIES[remembered]) {
-    if (statusEl) statusEl.textContent = 'Using saved fast route for ' + domain + '…';
-    try {
-      const found = await runOne(CORS_PROXIES[remembered](pageUrl));
-      if (found) return found; // still works — done, skipped the race entirely
-    } catch (e) { /* remembered route stopped working — fall through and re-learn below */ }
-  }
+  if (statusEl) statusEl.textContent = (remembered != null) ? ('Using saved fast route for ' + domain + '…') : 'Loading page…';
 
   const attempt = (proxyFn) => new Promise((resolve) => {
     (async () => {
@@ -2818,26 +2946,36 @@ async function extractVideoCandidatesFast(pageUrl) {
       }
     })();
   });
-  const promises = FAST_CORS_PROXIES.map((fn, idx) => attempt(fn).then(result => ({ result, idx })));
+
+  // Put the remembered index first so it starts dispatching a beat earlier
+  // than the rest (negligible on its own, but free) — order otherwise
+  // doesn't matter since every entry fires immediately regardless.
+  let order = FAST_CORS_PROXIES.map((fn, idx) => idx);
+  if (remembered != null && CORS_PROXIES[remembered] && order.includes(remembered)) {
+    order = [remembered, ...order.filter(i => i !== remembered)];
+  }
+
   return new Promise((resolveAll) => {
-    let pending = promises.length;
+    let pending = order.length;
     let doneAlready = false;
-    promises.forEach(p => {
-      p.then(({ result, idx }) => {
-        pending--;
-        if (doneAlready) return;
-        if (result && result.length) {
-          doneAlready = true;
-          // FAST_CORS_PROXIES mirrors the first entries of CORS_PROXIES in the
-          // same order, so this index is valid there too — remember it for
-          // next time this domain is opened.
-          recordDomainPattern(domain, 'extract', idx);
-          resolveAll(result);
-        } else if (pending === 0) {
-          doneAlready = true;
-          resolveAll([]);
-        }
-      });
+    order.forEach(idx => {
+      attempt(FAST_CORS_PROXIES[idx])
+        .then(result => {
+          pending--;
+          if (doneAlready) return;
+          if (result && result.length) {
+            doneAlready = true;
+            // FAST_CORS_PROXIES mirrors the first entries of CORS_PROXIES in
+            // the same order, so this index is valid there too — remember it
+            // (re-confirming it if it was already the saved route) so the
+            // next video from this same domain opens this fast again.
+            recordDomainPattern(domain, 'extract', idx);
+            resolveAll(result);
+          } else if (pending === 0) {
+            doneAlready = true;
+            resolveAll([]);
+          }
+        });
     });
   });
 }
@@ -3459,7 +3597,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
     if (onStatus) onStatus('Using saved relay route for ' + streamDomain + '…');
     return await proxyDownload(url, signal, onStatus ? { set textContent(v) { onStatus(v); } } : null, onProgress);
   }
-  const watchdog = createStallWatchdog(signal, 25000);
+  const watchdog = createStallWatchdog(signal, 35000);
   try {
     // HEAD is blocked by CORS on plenty of video hosts even when GET works
     // fine — don't let a failed HEAD knock us straight to the (unreliable)
@@ -3509,7 +3647,14 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       let nextPiece = 0;
       let activeWorkers = 0;
       let rampBlocked = false;
-      const MAX_WORKERS = 48;
+      // 48 concurrent connections was too aggressive for phones — mobile
+      // WebViews have tighter memory/socket limits than desktop, and pushing
+      // that many parallel pieces at once was a plausible cause of downloads
+      // silently dying partway through (the whole page/WebView getting
+      // killed under memory pressure looks identical to "it just stopped").
+      // A gentler ceiling still saturates a normal connection but leaves
+      // headroom instead of maxing the device out.
+      const MAX_WORKERS = 16;
       const fetchPiece = async (idx, attemptsLeft) => {
         const [start, end] = pieces[idx];
         try {
@@ -3547,7 +3692,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
         activeWorkers--;
       }
       const workerPromises = [];
-      const START_WORKERS = 8;
+      const START_WORKERS = 6;
       for (let i = 0; i < Math.min(START_WORKERS, pieces.length); i++) workerPromises.push(worker());
       // Ramp: every 800ms, if nothing has failed recently and there's still
       // unclaimed work, add another worker — up to MAX_WORKERS. Stops ramping
@@ -3690,8 +3835,15 @@ async function fastDownloadAndPlay(tab) {
       return;
     }
     swapTabToBlob(tab, URL.createObjectURL(blob), blob, url);
-    saveOfflineVideo({ id: 'v' + Date.now() + Math.random().toString(36).slice(2), url, title: guessFilenameFromUrl(url), time: Date.now(), size: blob.size, blob });
+    const saveResult = await saveOfflineVideo({ id: 'v' + Date.now() + Math.random().toString(36).slice(2), url, title: guessFilenameFromUrl(url), time: Date.now(), size: blob.size, blob });
     overlay.classList.remove('visible');
+    if (!saveResult.ok) {
+      alert(saveResult.error === 'storage-full'
+        ? "Video is playing, but there wasn't enough free storage on this device to save a copy for offline playback — even after clearing older downloads. Try removing a few videos from Downloads and use the lightning button again."
+        : "Video is playing, but it couldn't be saved for offline playback this time. You can try the lightning button again.");
+    } else if (saveResult.freedSpace) {
+      showMiniToast('Saved (freed space from older downloads)');
+    }
   } catch (e) {
     if (e.name !== 'AbortError') {
       alert("Couldn't download this video for fast playback. It may block downloads, or your network dropped the connection.");
