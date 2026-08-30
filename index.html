@@ -535,7 +535,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 2.1</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 2.3</div>
   </div>
 
   <div class="toolbar">
@@ -839,7 +839,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '2.1';
+const NOVA_VERSION = '2.3';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -1068,6 +1068,17 @@ async function renderOfflinePanel() {
   });
 }
 function playOfflineVideo(item) {
+  // Mobile browsers (Chrome/Android WebView included) have no native decoder
+  // for raw MPEG-TS (.ts) blobs — only fMP4-based HLS survives being saved
+  // and replayed this way. A .ts-based save would otherwise sit here
+  // forever as a silent black screen (0:00/0:00, no error), which is
+  // confusing since the file genuinely did download fine — it just can't be
+  // decoded this way. Catch it up front and say so plainly instead.
+  const probe = document.createElement('video');
+  if (item.blob && item.blob.type && probe.canPlayType(item.blob.type) === '') {
+    alert("This saved video can't be played back — it was downloaded from a stream format (MPEG-TS) that phone browsers can't decode directly from a saved file. It still downloaded correctly, but this particular one can't be replayed. You can remove it with the X to free up the space.");
+    return;
+  }
   const objectUrl = URL.createObjectURL(item.blob);
   createTab(null, true, { isLocalFile: true, title: item.title || item.url, objectUrl });
 }
@@ -3605,27 +3616,37 @@ function swapTabToBlob(tab, objectUrl, blob, sourceUrl) {
   // it after the download finishes, without re-downloading anything.
   if (blob) { tab._savedBlob = blob; tab._savedFilename = guessFilenameFromUrl(sourceUrl || tab.history[tab.historyIndex] || ''); }
   const wasTime = tab.el.currentTime || 0;
+  const wasMuted = tab.el.muted;
   tab.el.src = objectUrl;
   tab.el.load();
   tab.el.addEventListener('loadedmetadata', function onMeta() {
     tab.el.removeEventListener('loadedmetadata', onMeta);
     tab.el.currentTime = wasTime;
-    // Always try to resume playback once the download finishes and we
-    // switch over to the local copy — not just when the stream happened to
-    // be mid-play already. Without this, a video that was still buffering
-    // (or never actually started, e.g. autoplay was blocked on first open)
-    // stayed paused-and-blank forever after the swap, which looked like the
-    // video had vanished even though the download genuinely completed.
+    // The background download finishes on its own timer, not in direct
+    // response to a tap — so calling play() here on an unmuted element hits
+    // the browser's autoplay-without-gesture block and gets silently
+    // rejected, leaving the video paused and black even though the swap
+    // itself worked. Muted autoplay is always allowed, and once playback has
+    // actually started the browser lets us unmute right after — so mute
+    // first, start playing, then restore the original sound state a moment
+    // later. If the person had it muted already, nothing changes for them.
+    tab.el.muted = true;
     const playPromise = tab.el.play();
-    if (playPromise && playPromise.catch) {
-      playPromise.then(() => { if (tab.id === activeTabId) ensureAudioGraphIfBoosted(tab); }).catch(() => {
-        // Autoplay blocked by the browser (no user gesture in this context) —
-        // still nudge the element so at least a real frame renders instead
-        // of a black stage; the user can tap play to actually resume.
+    const restoreSound = () => { tab.el.muted = wasMuted; if (tab.id === activeTabId) refreshTransportUI(tab); };
+    if (playPromise && playPromise.then) {
+      playPromise.then(() => {
+        if (tab.id === activeTabId) ensureAudioGraphIfBoosted(tab);
+        setTimeout(restoreSound, 150);
+      }).catch(() => {
+        // Even muted autoplay got blocked (rare) — still nudge the element so
+        // at least a real frame renders instead of a black stage, and put the
+        // sound state back the way it was; the user can tap play to resume.
         try { tab.el.currentTime = wasTime; } catch (e) {}
+        tab.el.muted = wasMuted;
       });
     } else {
       ensureAudioGraphIfBoosted(tab);
+      restoreSound();
     }
   });
 }
@@ -3657,6 +3678,17 @@ async function fastDownloadAndPlay(tab) {
   try {
     const blob = await downloadVideoBlob(url, signal, updateFastLoadProgress, (t) => { title.textContent = t; });
     updateFastLoadProgress(100);
+    const probe = document.createElement('video');
+    if (blob.type && probe.canPlayType(blob.type) === '') {
+      // Downloaded fine, but this is a raw MPEG-TS blob — phones can't
+      // decode that natively. Swapping the player to it would just turn the
+      // screen black, so leave the video streaming normally instead and say
+      // why, rather than silently breaking playback.
+      overlay.classList.remove('visible');
+      alert("Downloaded successfully, but this video's stream format (MPEG-TS) can't be played back from a saved file on phone browsers — it'll keep playing normally as a live stream instead.");
+      fastLoadAbort = null;
+      return;
+    }
     swapTabToBlob(tab, URL.createObjectURL(blob), blob, url);
     saveOfflineVideo({ id: 'v' + Date.now() + Math.random().toString(36).slice(2), url, title: guessFilenameFromUrl(url), time: Date.now(), size: blob.size, blob });
     overlay.classList.remove('visible');
@@ -3734,6 +3766,13 @@ async function autoDownloadInBackground(tab, url) {
     // Discard the result if the tab moved on to a different video/page
     // while this was downloading in the background.
     if (tab.history[tab.historyIndex] !== url) return;
+    // Same MPEG-TS check as the manual fast-download — a raw .ts blob can't
+    // be decoded by the phone's <video> element, so swapping to it would
+    // silently turn the screen black. This path runs quietly in the
+    // background by design, so just leave the video streaming normally and
+    // don't save an offline copy that would never play back either.
+    const probe = document.createElement('video');
+    if (blob.type && probe.canPlayType(blob.type) === '') { updateAutoDlIndicator(tab); return; }
     tab._autoDLPct = 100;
     updateAutoDlIndicator(tab);
     swapTabToBlob(tab, URL.createObjectURL(blob), blob, url);
