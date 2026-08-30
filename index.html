@@ -610,7 +610,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 4.0</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 6.0</div>
   </div>
 
   <div class="toolbar">
@@ -937,7 +937,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '5.4';
+const NOVA_VERSION = '6.0';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -3667,7 +3667,7 @@ async function remuxTsPartsToMp4(parts, onStatus, onProgress) {
   await ensureMuxJs();
   return new Promise((resolve, reject) => {
     try {
-      const transmuxer = new muxjs.mp4.Transmuxer();
+      const transmuxer = new muxjs.mp4.Transmuxer({ keepOriginalTimestamps: true });
       let initSegment = null;
       const mediaChunks = [];
       transmuxer.on('data', (segment) => {
@@ -3737,7 +3737,19 @@ async function fetchHlsPlaylistSegments(mediaPlaylistUrl, signal) {
   }
   if (!segments.length) throw new Error('No segments found in playlist');
   const isFmp4Guess = /\.m4s(\?|$)/i.test(segments[0]) || /#EXT-X-MAP/.test(text);
-  return { segments, isFmp4Guess, playlistUrl, text };
+  // fMP4/CMAF segments (.m4s) carry only sample data — the actual moov box
+  // (track timescales, codec config, sample descriptions) lives in a
+  // separate init segment referenced by #EXT-X-MAP:URI="...". That tag
+  // starts with '#' so the segment-line loop above skips right past it —
+  // meaning the init segment was never being fetched or included at all.
+  // A player handed raw .m4s data with no init segment either fails to
+  // decode one of the two tracks or falls back to guessed/default timing
+  // for it, which shows up exactly as "audio and video don't line up" even
+  // though every media segment downloaded correctly. Fetch it here so
+  // callers can prepend it to the saved file.
+  const mapMatch = text.match(/#EXT-X-MAP:[^\r\n]*URI="([^"]+)"/);
+  const initSegmentUrl = mapMatch ? new URL(mapMatch[1], playlistUrl).href : null;
+  return { segments, isFmp4Guess, playlistUrl, text, initSegmentUrl };
 }
 
 // Plays a raw-TS/fMP4 HLS stream (the kind that needs the manual
@@ -3850,7 +3862,7 @@ async function playHlsProgressive(tab, url) {
   const status = document.getElementById('status');
   const setStatus = (msg) => { if (tab.id === activeTabId) { status.style.display = 'block'; status.textContent = msg; } };
   setStatus('Preparing stream…');
-  const { segments, isFmp4Guess, text } = await fetchHlsPlaylistSegments(url, null);
+  const { segments, isFmp4Guess, text, initSegmentUrl } = await fetchHlsPlaylistSegments(url, null);
   if (tab.history[tab.historyIndex] !== url) return;
 
   if (!('MediaSource' in window)) {
@@ -3896,6 +3908,18 @@ async function playHlsProgressive(tab, url) {
   });
   if (!sourceBuffer) return loadVideoViaBlobFallback(tab, url, true);
 
+  let initFmp4Buf = null;
+  if (isFmp4Guess && initSegmentUrl) {
+    // Same init-segment (moov box) requirement as the full-download path —
+    // without pushing this into the SourceBuffer before any media segment,
+    // the browser has no track timescale/codec info to go on, which is
+    // exactly what produces audio/video that won't line up.
+    try {
+      const r = await fetchWithTimeout(initSegmentUrl, {}, 15000);
+      if (r.ok) { initFmp4Buf = await r.arrayBuffer(); enqueue(initFmp4Buf); }
+    } catch (e) {}
+  }
+
   let firstChunkAppended = false;
   let initSegment = null, mediaChunks = [];
   let transmuxer = null;
@@ -3903,7 +3927,7 @@ async function playHlsProgressive(tab, url) {
   const muxDonePromise = new Promise((res) => { muxResolve = res; });
   if (!isFmp4Guess) {
     await ensureMuxJs();
-    transmuxer = new muxjs.mp4.Transmuxer();
+    transmuxer = new muxjs.mp4.Transmuxer({ keepOriginalTimestamps: true });
     transmuxer.on('data', (segment) => {
       if (segment.initSegment && !initSegment) { initSegment = segment.initSegment; enqueue(initSegment.buffer.slice(0)); }
       if (segment.data && segment.data.length) {
@@ -3984,7 +4008,7 @@ async function playHlsProgressive(tab, url) {
   // Build the same completed file for offline saving, reusing what was
   // already downloaded/converted instead of fetching everything again.
   if (failedSegments === 0) {
-    const blob = isFmp4Guess ? new Blob(parts, { type: 'video/mp4' })
+    const blob = isFmp4Guess ? new Blob(initFmp4Buf ? [initFmp4Buf, ...parts] : parts, { type: 'video/mp4' })
       : (initSegment && mediaChunks.length ? new Blob([initSegment, ...mediaChunks], { type: 'video/mp4' }) : null);
     if (blob) {
       tab._savedBlob = blob;
@@ -4001,7 +4025,7 @@ async function playHlsProgressive(tab, url) {
 // why HLS sources previously "failed" to download or saved a useless
 // few-KB text file instead of a video.
 async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
-  const { segments, isFmp4Guess, playlistUrl, text } = await fetchHlsPlaylistSegments(mediaPlaylistUrl, signal);
+  const { segments, isFmp4Guess, playlistUrl, text, initSegmentUrl } = await fetchHlsPlaylistSegments(mediaPlaylistUrl, signal);
   // Kick off the remux library fetch now, in parallel with the segment
   // downloads below, instead of waiting until segments finish and only then
   // starting it — that sequential fetch (a few hundred KB over the network)
@@ -4079,25 +4103,33 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
     // instead of silently saving a video that will stutter or fail to play.
     throw new Error(failedSegments + ' of ' + segments.length + ' segments could not be downloaded after retrying — the source may have removed or expired part of this stream.');
   }
-  if (isFmp4Guess) return new Blob(parts, { type: 'video/mp4' });
+  if (isFmp4Guess) {
+    // Prepend the init segment (moov box) so the saved file actually has
+    // correct track timescales/codec config instead of just raw sample
+    // data — without it players guess, and audio/video end up misaligned.
+    let initBuf = null;
+    if (initSegmentUrl) { try { initBuf = await fetchSegment(initSegmentUrl); } catch (e) {} }
+    return new Blob(initBuf ? [initBuf, ...parts] : parts, { type: 'video/mp4' });
+  }
 
   // Download is 100% complete — now run the conversion pass, from scratch,
-  // over every downloaded segment in order. Using mux.js's default
-  // (normalized) timestamps here — NOT keepOriginalTimestamps — is what
-  // actually keeps audio and video merged together in sync: the raw
-  // source PTS for the audio and video tracks inside a TS stream almost
-  // never start at exactly the same point (that's normal for HLS/TS
-  // muxing), and mux.js's default behavior is to align both tracks onto
-  // one shared, zero-based timeline when it builds the MP4 — which is
-  // exactly the "merge them together" behavior needed. Forcing the raw
-  // source timestamps skips that alignment and lets whatever tiny
-  // audio/video offset already existed in the source stream show up as a
-  // constant mismatch in the saved file instead.
+  // over every downloaded segment in order. keepOriginalTimestamps:true is
+  // what actually keeps audio and video in sync here: mux.js's default
+  // ("normalized") mode recomputes each track's timeline independently from
+  // its own frame durations every time it's fed a new segment, and small
+  // per-segment rounding differences between the audio and video tracks
+  // then accumulate across dozens/hundreds of segments into a growing,
+  // very noticeable offset by the end of a long video — which matches
+  // exactly what shows up here: fine near the start, badly out of sync by
+  // the time the full download finishes. keepOriginalTimestamps preserves
+  // the source stream's own shared PTS clock instead of letting each track
+  // drift on its own recomputed timeline, so the original audio/video
+  // alignment authored into the stream is kept intact end to end.
   let muxResolve, muxReject;
   const muxDonePromise = new Promise((res, rej) => { muxResolve = res; muxReject = rej; });
   try {
     await ensureMuxJs();
-    transmuxer = new muxjs.mp4.Transmuxer();
+    transmuxer = new muxjs.mp4.Transmuxer({ keepOriginalTimestamps: true });
     transmuxer.on('data', (segment) => {
       if (segment.initSegment && !initSegment) initSegment = segment.initSegment;
       if (segment.data && segment.data.length) mediaChunks.push(segment.data);
@@ -4519,7 +4551,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // tail" that drags out near the very end). 768KB is close to the
       // sweet spot before per-request overhead (headers, TLS, connection
       // setup) starts eating into the gains from finer-grained balancing.
-      const PIECE_SIZE = 256 * 1024;
+      const PIECE_SIZE = 512 * 1024;
       const pieceCount = Math.max(1, Math.ceil(len / PIECE_SIZE));
       const pieces = [];
       for (let i = 0; i < pieceCount; i++) {
@@ -4563,7 +4595,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // growing the moment anything fails, so a server/network that can't
       // sustain this many connections backs the pool off on its own instead
       // of forcing it and risking a broken download.
-      const MAX_WORKERS = 384;
+      const MAX_WORKERS = 128;
       const fetchPiece = async (idx, attemptsLeft) => {
         const [start, end] = pieces[idx];
         try {
@@ -4575,7 +4607,14 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
           // the background auto-download used to feel slower than pressing
           // the lightning button (where nothing else was competing for
           // bandwidth at that moment). This puts both on equal footing.
-          const res = await fetch(url, { headers: { Range: 'bytes=' + start + '-' + end }, signal: watchdog.signal, priority: 'high' });
+          // Note: intentionally NOT using priority:'high' here — that made
+          // the background downloader starve the live <video>/hls.js
+          // stream of bandwidth, which showed up as video frames
+          // stuttering/dropping while audio kept playing normally (audio
+          // buffers are tiny and rarely starved) — i.e. audio/video going
+          // out of sync during playback. Default priority lets the browser
+          // balance the two instead of always favoring the download.
+          const res = await fetch(url, { headers: { Range: 'bytes=' + start + '-' + end }, signal: watchdog.signal });
           if (!res.ok) throw new Error('HTTP ' + res.status);
           if (!res.body) { const buf = await res.arrayBuffer(); loaded[idx] = buf.byteLength; watchdog.poke(); reportProgress(); return new Blob([buf]); }
           const reader = res.body.getReader();
@@ -4623,7 +4662,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
         allWorkerPromises.push(p);
         return p;
       }
-      const START_WORKERS = 128;
+      const START_WORKERS = 48;
       for (let i = 0; i < Math.min(START_WORKERS, pieces.length); i++) launchWorker();
       // Ramp: every 50ms, if nothing has failed recently and there's still
       // unclaimed work, add up to 4 more workers — up to MAX_WORKERS. Stops
@@ -4633,8 +4672,8 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // download.
       const ramp = setInterval(() => {
         if (rampBlocked || firstFatalError || nextPiece >= pieces.length || activeWorkers >= MAX_WORKERS) { clearInterval(ramp); return; }
-        for (let i = 0; i < 16 && activeWorkers < MAX_WORKERS && nextPiece < pieces.length && !rampBlocked; i++) launchWorker();
-      }, 20);
+        for (let i = 0; i < 4 && activeWorkers < MAX_WORKERS && nextPiece < pieces.length && !rampBlocked; i++) launchWorker();
+      }, 80);
       // Wait for the whole pool to actually drain — poll instead of a single
       // Promise.all call, since the set of promises to wait for keeps
       // growing for as long as the ramp is still adding workers.
@@ -4656,7 +4695,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       result = new Blob(partBlobs);
     } else {
       if (onStatus) onStatus('Downloading (server does not support parallel chunks)…');
-      const res = await fetch(url, { signal: watchdog.signal, priority: 'high' });
+      const res = await fetch(url, { signal: watchdog.signal });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       // Cross-origin responses often don't expose content-length even when
       // the HEAD request above got one — fall back to that so the progress
