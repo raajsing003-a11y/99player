@@ -3850,9 +3850,10 @@ async function playHlsProgressive(tab, url) {
     }
     throw new Error('Segment failed: ' + u);
   };
-  const CONCURRENCY = 6; // lower than the full-download path — segments must
-  // be fed to the transmuxer/SourceBuffer strictly in order, so downloading
-  // far ahead of what can actually be appended just wastes memory.
+  const CONCURRENCY = 12; // higher than before — segments must still be fed
+  // to the transmuxer/SourceBuffer strictly in order, but downloading a
+  // bit further ahead than what's been appended just costs a little memory
+  // (segments are small), not correctness, so it's worth it for speed.
   let nextIndex = 0;
   async function handleSegmentDone(idx) {
     completed++;
@@ -3991,13 +3992,14 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
     }
   }
 
-  // Worker-pool concurrency for fetching .ts/.m4s segments in parallel — 5 was
-  // conservative and left bandwidth on the table on fast connections; segments
-  // are small (a few hundred KB - a couple MB each) so a higher pool keeps
-  // many in flight at once without any single request being large enough to
-  // matter individually. Kept below the point (48+) that risked overwhelming
-  // mobile WebView memory/socket limits on the direct-download path.
-  const CONCURRENCY = 32;
+  // Worker-pool concurrency for fetching .ts/.m4s segments in parallel.
+  // Segments are small (a few hundred KB - a couple MB each) so a high pool
+  // keeps many in flight without any single request being large enough to
+  // matter individually. 48 is the practical ceiling before mobile WebView
+  // memory/socket limits start being the actual bottleneck instead of the
+  // network — going higher stops helping and starts risking the download
+  // dying mid-way, which is slower overall than settling here.
+  const CONCURRENCY = 48;
   let nextIndex = 0;
   async function worker() {
     while (nextIndex < segments.length) {
@@ -4390,7 +4392,13 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // THIS server on THIS connection, rather than a number picked in
       // advance that might be too conservative on a fast line or too
       // aggressive against a strict server.
-      const PIECE_SIZE = 1.25 * 1024 * 1024;
+      // Smaller pieces mean more of them for a given file, which keeps the
+      // work-stealing queue more evenly balanced — fewer big leftover pieces
+      // are still in flight after everything else has finished (the "long
+      // tail" that drags out near the very end). 768KB is close to the
+      // sweet spot before per-request overhead (headers, TLS, connection
+      // setup) starts eating into the gains from finer-grained balancing.
+      const PIECE_SIZE = 768 * 1024;
       const pieceCount = Math.max(1, Math.ceil(len / PIECE_SIZE));
       const pieces = [];
       for (let i = 0; i < pieceCount; i++) {
@@ -4409,18 +4417,16 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       let activeWorkers = 0;
       let rampBlocked = false;
       let firstFatalError = null;
-      // 48 concurrent connections was too aggressive for phones — mobile
-      // WebViews have tighter memory/socket limits than desktop, and pushing
-      // that many parallel pieces at once was a plausible cause of downloads
-      // silently dying partway through (the whole page/WebView getting
-      // killed under memory pressure looks identical to "it just stopped").
-      // 32 gives real headroom above the previous 24 while staying clear of
-      // that failure zone — the ramp below only ever ADDS workers when every
-      // recent piece has succeeded cleanly, and permanently stops growing
-      // the moment anything fails, so a server/network that can't sustain
-      // this many connections backs the pool off on its own instead of
-      // forcing it and risking a broken download.
-      const MAX_WORKERS = 32;
+      // Mobile WebViews have tighter memory/socket limits than desktop, and
+      // pushing too many parallel pieces at once risks downloads silently
+      // dying partway through (the whole page/WebView getting killed under
+      // memory pressure looks identical to "it just stopped"). 64 is the
+      // practical ceiling for that — the ramp below only ever ADDS workers
+      // when every recent piece has succeeded cleanly, and permanently stops
+      // growing the moment anything fails, so a server/network that can't
+      // sustain this many connections backs the pool off on its own instead
+      // of forcing it and risking a broken download.
+      const MAX_WORKERS = 64;
       const fetchPiece = async (idx, attemptsLeft) => {
         const [start, end] = pieces[idx];
         try {
@@ -4471,17 +4477,20 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
         allWorkerPromises.push(p);
         return p;
       }
-      const START_WORKERS = 10;
+      const START_WORKERS = 24;
       for (let i = 0; i < Math.min(START_WORKERS, pieces.length); i++) launchWorker();
-      // Ramp: every 350ms, if nothing has failed recently and there's still
+      // Ramp: every 120ms, if nothing has failed recently and there's still
       // unclaimed work, add another worker — up to MAX_WORKERS. Stops ramping
       // permanently once any real failure is seen (server pushing back).
       // One worker per tick (not a burst) keeps memory growth gradual on
-      // phones instead of spiking allocations all at once.
+      // phones instead of spiking allocations all at once. Starting from 24
+      // and ticking every 120ms gets to full concurrency almost immediately
+      // on connections that can sustain it, while the per-tick growth (not a
+      // single burst to 64) still protects against a memory spike.
       const ramp = setInterval(() => {
         if (rampBlocked || firstFatalError || nextPiece >= pieces.length || activeWorkers >= MAX_WORKERS) { clearInterval(ramp); return; }
         launchWorker();
-      }, 350);
+      }, 120);
       // Wait for the whole pool to actually drain — poll instead of a single
       // Promise.all call, since the set of promises to wait for keeps
       // growing for as long as the ramp is still adding workers.
