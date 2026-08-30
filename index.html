@@ -535,7 +535,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 1.5</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 1.6</div>
   </div>
 
   <div class="toolbar">
@@ -638,6 +638,7 @@
 
     <div class="quick-controls" id="quickControls" style="display:none;">
       <button id="enhanceBtnPlayer" title="Video enhancer"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"/></svg></button>
+      <button id="pasteLinkBtnPlayer" title="Open another video from a link">&#128279;</button>
       <button id="rotateBtn" title="Rotate">&#8635;</button>
       <button id="flipBtn" title="Flip horizontal">&#8646;</button>
       <button id="pipBtn" title="Picture in picture">&#9635;</button>
@@ -687,6 +688,7 @@
         <span id="curTime">0:00</span>
         <input type="range" id="seekBar" min="0" max="100" value="0" step="0.1">
         <span id="durTime">0:00</span>
+        <span id="qualityLabel" title="Current playing resolution" style="font-size:11px;opacity:.75;padding:2px 6px;border:1px solid currentColor;border-radius:4px;white-space:nowrap;"></span>
       </div>
       <div class="transport-row">
         <button class="tiny" id="prevBtn" title="Previous video">&#9198;</button>
@@ -837,7 +839,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '1.5';
+const NOVA_VERSION = '1.6';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -1724,7 +1726,8 @@ function bindVideoElementEvents(tab) {
   const el = tab.el;
   el.addEventListener('play', () => { if (tab.id === activeTabId) setPlayPauseIcon(true); });
   el.addEventListener('pause', () => { if (tab.id === activeTabId) setPlayPauseIcon(false); });
-  el.addEventListener('loadedmetadata', () => { if (tab.id === activeTabId) refreshTransportUI(tab); });
+  el.addEventListener('loadedmetadata', () => { if (tab.id === activeTabId) { refreshTransportUI(tab); updateQualityLabel(tab); } });
+  el.addEventListener('resize', () => { if (tab.id === activeTabId) updateQualityLabel(tab); });
   el.addEventListener('timeupdate', () => {
     if (tab.id !== activeTabId || seekDragging) return;
     document.getElementById('curTime').textContent = formatTime(el.currentTime);
@@ -1743,11 +1746,36 @@ function setPlayPauseIcon(isPlaying) {
   document.getElementById('playPauseBtn').innerHTML = isPlaying ? '&#10073;&#10073;' : '&#9654;';
 }
 
+// Maps the video element's actual decoded pixel height to the nearest
+// familiar quality label (360p/480p/720p/1080p/1440p/4K). This reflects
+// whatever resolution is really playing right now — for an adaptive HLS
+// stream the browser can switch renditions mid-playback, so this is kept
+// in sync via the 'resize' event (fires whenever videoWidth/videoHeight
+// actually change), not just once at load.
+function resolutionToLabel(w, h) {
+  if (!w || !h) return '';
+  const longSide = Math.max(w, h);
+  const buckets = [
+    [426, '240p'], [640, '360p'], [854, '480p'], [1280, '720p'],
+    [1920, '1080p'], [2560, '1440p'], [3840, '4K']
+  ];
+  for (const [threshold, label] of buckets) {
+    if (longSide <= threshold + 40) return label + ' (' + w + '\u00d7' + h + ')';
+  }
+  return '4K+ (' + w + '\u00d7' + h + ')';
+}
+function updateQualityLabel(tab) {
+  if (!tab || tab.id !== activeTabId) return;
+  const el = tab.el;
+  document.getElementById('qualityLabel').textContent = resolutionToLabel(el.videoWidth, el.videoHeight);
+}
+
 function refreshTransportUI(tab) {
   if (!tab || !tab.isVideo) return;
   setPlayPauseIcon(!tab.el.paused && !tab.el.ended);
   document.getElementById('curTime').textContent = formatTime(tab.el.currentTime);
   document.getElementById('durTime').textContent = formatTime(tab.el.duration || 0);
+  updateQualityLabel(tab);
   const seekBar = document.getElementById('seekBar');
   seekBar.value = tab.el.duration ? (tab.el.currentTime / tab.el.duration) * 100 : 0;
   const videoTabs = tabs.filter(t => t.isVideo);
@@ -3156,6 +3184,7 @@ function toggleEnhanceSheet() {
 }
 document.getElementById('enhanceBtn').addEventListener('click', toggleEnhanceSheet);
 document.getElementById('enhanceBtnPlayer').addEventListener('click', toggleEnhanceSheet);
+document.getElementById('pasteLinkBtnPlayer').addEventListener('click', openExtractOverlay);
 document.querySelectorAll('.enhance-tabs button').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.enhance-tabs button').forEach(b => b.classList.remove('active'));
