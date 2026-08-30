@@ -937,7 +937,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '4.5';
+const NOVA_VERSION = '4.6';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -3282,16 +3282,27 @@ async function extractVideoCandidatesFast(pageUrl) {
   };
 
   // Known-good route for this domain from a previous visit — remembered so a
-  // domain you've opened before is as fast as possible next time. The
-  // fastest thing to do with it is NOT to wait on it alone (network time
-  // sitting idle is wasted time) — it's to fire it off immediately, in
-  // parallel with every other fast proxy, and just take whichever answers
-  // first. The remembered route usually wins anyway (it's already proven to
-  // work for this domain), so this keeps the "instant on repeat domain"
-  // feel while never being slower than a fresh race if it doesn't.
+  // domain you've opened before is as fast as possible next time. When we
+  // have one, try ONLY that route first, alone, instead of firing it
+  // alongside every other proxy: a solo request has the connection's full
+  // share of bandwidth to itself instead of splitting it with a handful of
+  // parallel requests that are almost certainly going to lose anyway (the
+  // remembered route already proved itself for this exact domain). Only if
+  // that solo attempt fails or is slow does this fall through to the full
+  // race below, so a domain that's still working the same way as last time
+  // gets the quickest possible single round trip.
   const domain = getDomain(pageUrl);
   const remembered = getDomainPattern(domain, 'extract');
   if (statusEl) statusEl.textContent = (remembered != null) ? ('Using saved fast route for ' + domain + '…') : 'Loading page…';
+  if (remembered != null && CORS_PROXIES[remembered] && FAST_CORS_PROXIES[remembered]) {
+    try {
+      const solo = await runOne(FAST_CORS_PROXIES[remembered](pageUrl));
+      if (solo && solo.length) {
+        recordDomainPattern(domain, 'extract', remembered);
+        return solo;
+      }
+    } catch (e) {}
+  }
 
   const attempt = (proxyFn) => new Promise((resolve) => {
     (async () => {
