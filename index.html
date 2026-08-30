@@ -937,7 +937,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '5.0';
+const NOVA_VERSION = '5.1';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -3667,7 +3667,7 @@ async function remuxTsPartsToMp4(parts, onStatus, onProgress) {
   await ensureMuxJs();
   return new Promise((resolve, reject) => {
     try {
-      const transmuxer = new muxjs.mp4.Transmuxer({ keepOriginalTimestamps: true });
+      const transmuxer = new muxjs.mp4.Transmuxer();
       let initSegment = null;
       const mediaChunks = [];
       transmuxer.on('data', (segment) => {
@@ -3903,7 +3903,7 @@ async function playHlsProgressive(tab, url) {
   const muxDonePromise = new Promise((res) => { muxResolve = res; });
   if (!isFmp4Guess) {
     await ensureMuxJs();
-    transmuxer = new muxjs.mp4.Transmuxer({ keepOriginalTimestamps: true });
+    transmuxer = new muxjs.mp4.Transmuxer();
     transmuxer.on('data', (segment) => {
       if (segment.initSegment && !initSegment) { initSegment = segment.initSegment; enqueue(initSegment.buffer.slice(0)); }
       if (segment.data && segment.data.length) {
@@ -4082,18 +4082,22 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
   if (isFmp4Guess) return new Blob(parts, { type: 'video/mp4' });
 
   // Download is 100% complete — now run the conversion pass, from scratch,
-  // over every downloaded segment in order.
-  // keepOriginalTimestamps: true keeps every frame's real source timestamp
-  // instead of letting mux.js recompute a running timeline as it mixes
-  // audio and video — without it, small per-segment rounding differences
-  // between the audio and video timestamps mux.js derives on its own
-  // compound over a long video, which is what caused audio to drift further
-  // out of sync the longer offline-saved playback ran.
+  // over every downloaded segment in order. Using mux.js's default
+  // (normalized) timestamps here — NOT keepOriginalTimestamps — is what
+  // actually keeps audio and video merged together in sync: the raw
+  // source PTS for the audio and video tracks inside a TS stream almost
+  // never start at exactly the same point (that's normal for HLS/TS
+  // muxing), and mux.js's default behavior is to align both tracks onto
+  // one shared, zero-based timeline when it builds the MP4 — which is
+  // exactly the "merge them together" behavior needed. Forcing the raw
+  // source timestamps skips that alignment and lets whatever tiny
+  // audio/video offset already existed in the source stream show up as a
+  // constant mismatch in the saved file instead.
   let muxResolve, muxReject;
   const muxDonePromise = new Promise((res, rej) => { muxResolve = res; muxReject = rej; });
   try {
     await ensureMuxJs();
-    transmuxer = new muxjs.mp4.Transmuxer({ keepOriginalTimestamps: true });
+    transmuxer = new muxjs.mp4.Transmuxer();
     transmuxer.on('data', (segment) => {
       if (segment.initSegment && !initSegment) initSegment = segment.initSegment;
       if (segment.data && segment.data.length) mediaChunks.push(segment.data);
