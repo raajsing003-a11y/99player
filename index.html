@@ -2406,6 +2406,7 @@ function findVideoUrlsInHtml(html, baseUrl) {
   const abs = (u) => { try { return new URL(u, baseUrl).href; } catch (e) { return null; } };
   const candidates = [];
   const iframeCandidates = [];
+  const seen = new Set();
 
   // Un-escape JSON-style escaped slashes AND unicode escapes (\u002F, \u0026, etc. —
   // very common when a video URL is embedded inside a JSON blob inside a <script> tag),
