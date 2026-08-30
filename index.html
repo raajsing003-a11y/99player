@@ -1489,13 +1489,22 @@ function updateGrabVideoBtn() {
   btn.classList.toggle('visible', onBrowsedPage);
 }
 
-// Hold playback off until at least MIN_BUFFER_PCT of the video is buffered.
+// Hold playback off until enough of the video is buffered to play smoothly.
 // Only used for videos that can't be opened directly and go through a
 // conversion/extraction path first (HLS via hls.js, or the blob-download
 // fallback) — plain direct video links keep playing immediately via normal
 // browser streaming, untouched. Falls back to just playing (after a short
 // grace period) if the browser never reports a usable duration/buffered
 // range, so a single video can't get stuck forever.
+// Previously this waited for 20% of the *entire* video's duration to be
+// buffered — fine for a short clip, but on anything more than a couple of
+// minutes long that meant sitting on "Buffering…" for a long time before a
+// single frame played, even though a few seconds of buffer is already
+// enough to start smoothly. Now it waits for whichever is smaller: a few
+// seconds of real buffer, or (for very short clips) that same 20% — so
+// short videos keep the same safety margin they always had, and long ones
+// start playing in seconds instead of minutes.
+const MIN_BUFFER_SECONDS = 2.5;
 const MIN_BUFFER_PCT = 20;
 function playWhenBuffered(tab) {
   const el = tab.el;
@@ -1513,16 +1522,17 @@ function playWhenBuffered(tab) {
   const check = () => {
     if (done || !el.duration || !isFinite(el.duration) || !el.buffered.length) return;
     const bufferedEnd = el.buffered.end(el.buffered.length - 1);
-    const pct = (bufferedEnd / el.duration) * 100;
+    const neededSeconds = Math.min(MIN_BUFFER_SECONDS, el.duration * (MIN_BUFFER_PCT / 100));
+    const pct = neededSeconds > 0 ? (bufferedEnd / neededSeconds) * 100 : 100;
     if (tab.id === activeTabId) {
       status.style.display = 'block';
       status.textContent = 'Buffering ' + Math.min(100, Math.round(pct)) + '%\u2026';
     }
-    if (pct >= MIN_BUFFER_PCT) finish();
+    if (bufferedEnd >= neededSeconds) finish();
   };
   // Safety net: don't block playback indefinitely if duration/buffered info
   // never becomes usable (e.g. some streams never expose it reliably).
-  const fallbackTimer = setTimeout(finish, 8000);
+  const fallbackTimer = setTimeout(finish, 5000);
   el.addEventListener('progress', check);
   el.addEventListener('canplaythrough', finish);
   check();
@@ -3760,7 +3770,30 @@ async function loadVideoViaHlsJs(tab, url) {
   if (tab.history[tab.historyIndex] !== url) return; // navigated away while loading the library
   if (!window.Hls.isSupported()) return loadVideoViaBlobFallback(tab, url);
   if (tab._hls) { try { tab._hls.destroy(); } catch (e) {} tab._hls = null; }
-  const hls = new window.Hls({ maxBufferLength: 30 });
+  const hls = new window.Hls({
+    maxBufferLength: 30,
+    // Runs segment parsing/demuxing on a worker thread instead of the main
+    // thread — on phones this is what keeps the UI (scrolling, taps, the
+    // seek bar) responsive while a stream is actively decoding, and it
+    // also lets fetching/parsing overlap instead of blocking each other.
+    enableWorker: true,
+    // Old buffered-but-already-played video was being kept around
+    // indefinitely by default, growing memory use on long streams for no
+    // playback benefit — trimming it keeps things smooth deep into a long
+    // video instead of slowly eating more memory the longer it plays.
+    backBufferLength: 30,
+    // Default ABR is conservative about dropping quality, which shows up
+    // as repeated stalls/rebuffering on a weak connection before it finally
+    // steps down. A slightly faster bandwidth-drop reaction switches to a
+    // lower rendition sooner on a bad link, trading a bit of resolution for
+    // fewer stalls — smoother playback is the actual goal, not top quality.
+    abrBandWidthFactor: 0.9,
+    abrBandWidthUpFactor: 0.7,
+    // Starts fetching the next fragment while the current one is still
+    // being parsed instead of fetch-then-parse-then-fetch — overlapping
+    // the two fills the buffer noticeably faster on higher-latency links.
+    startFragPrefetch: true
+  });
   tab._hls = hls;
   let fellBack = false;
   hls.on(window.Hls.Events.ERROR, (event, data) => {
@@ -5290,10 +5323,10 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
         allWorkerPromises.push(p);
         return p;
       }
-      const START_WORKERS = 96;
+      const START_WORKERS = 128;
       for (let i = 0; i < Math.min(START_WORKERS, pieces.length); i++) launchWorker();
       // Ramp: every 40ms, if nothing has failed recently and there's still
-      // unclaimed work, add up to 8 more workers — up to MAX_WORKERS. Stops
+      // unclaimed work, add up to 16 more workers — up to MAX_WORKERS. Stops
       // ramping permanently the moment any real failure is seen (server
       // pushing back), so a connection/server that can't sustain this many
       // requests backs off on its own instead of forcing it and breaking the
@@ -5303,7 +5336,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // request is succeeding cleanly.
       const ramp = setInterval(() => {
         if (rampBlocked || firstFatalError || nextPiece >= pieces.length || activeWorkers >= MAX_WORKERS) { clearInterval(ramp); return; }
-        for (let i = 0; i < 8 && activeWorkers < MAX_WORKERS && nextPiece < pieces.length && !rampBlocked; i++) launchWorker();
+        for (let i = 0; i < 16 && activeWorkers < MAX_WORKERS && nextPiece < pieces.length && !rampBlocked; i++) launchWorker();
       }, 40);
       // Wait for the whole pool to actually drain — poll instead of a single
       // Promise.all call, since the set of promises to wait for keeps
