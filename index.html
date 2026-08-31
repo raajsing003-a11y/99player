@@ -2590,6 +2590,18 @@ function enterPlayerMode() {
     const el = document.documentElement;
     (el.requestFullscreen || el.webkitRequestFullscreen || function(){}).call(el);
   } catch (e) {}
+  // Belt-and-braces alongside the fullscreenchange handler's resume logic:
+  // some browsers restrict/deny the fullscreen request outright (no error,
+  // no fullscreenchange event ever fires), and others pause the video
+  // during the transition without the event firing in time. Either way,
+  // check shortly after and nudge playback/audio back on if it stalled.
+  const tab = getTab(activeTabId);
+  if (tab && tab.isVideo) {
+    setTimeout(() => {
+      if (tab.el.paused) tab.el.play().catch(() => {});
+      if (tab.audioCtx && tab.audioCtx.state === 'suspended') tab.audioCtx.resume().catch(() => {});
+    }, 150);
+  }
 }
 let suppressNextPopstate = false;
 function exitPlayerModeFn(fromPopstate) {
@@ -3017,10 +3029,10 @@ document.querySelectorAll('#orientMenu button').forEach(b => {
       showIndicator('\u{1F50A} ' + Math.round(v * 100) + '%', v * 100);
     } else if (mode === 'brightness') {
       const delta = -dy / stage.clientHeight * 1.4;
-      const b = Math.max(0.3, Math.min(2, startBrightness + delta));
+      const b = Math.max(0.3, Math.min(1.3, startBrightness + delta));
       tab.gestureBrightness = b;
       applyFiltersToTab(tab);
-      showIndicator('\u{1F506} ' + Math.round(b * 100) + '%', (b / 2) * 100);
+      showIndicator('\u{1F506} ' + Math.round(b * 100) + '%', (b / 1.3) * 100);
     }
   }, { passive: true });
 
@@ -3191,6 +3203,18 @@ document.addEventListener('fullscreenchange', () => {
   document.getElementById('fullscreenBtn').classList.toggle('active-toggle', isFs);
   document.getElementById('fullscreenBtnPlayer').classList.toggle('active-toggle', isFs);
   if (!isFs && playerMode) exitPlayerModeFn();
+  // Some Android/Chromium-based browsers silently pause (and can even
+  // suspend the audio track of) a playing <video> during the fullscreen
+  // transition itself, then never resume it — the result is a frozen
+  // black frame with no video or audio until the person backs out of
+  // fullscreen entirely. Force a resume once the transition settles.
+  if (isFs) {
+    const tab = getTab(activeTabId);
+    if (tab && tab.isVideo) {
+      if (tab.el.paused) setTimeout(() => { tab.el.play().catch(() => {}); }, 60);
+      if (tab.audioCtx && tab.audioCtx.state === 'suspended') tab.audioCtx.resume().catch(() => {});
+    }
+  }
   // Re-sync the grading canvas after the fullscreen transition settles —
   // covers devices where the GPU surface swap around rotate+fullscreen
   // leaves the canvas stale even without a formal context-loss event.
@@ -3201,6 +3225,13 @@ document.addEventListener('webkitfullscreenchange', () => {
   document.getElementById('fullscreenBtn').classList.toggle('active-toggle', isFs);
   document.getElementById('fullscreenBtnPlayer').classList.toggle('active-toggle', isFs);
   if (!isFs && playerMode) exitPlayerModeFn();
+  if (isFs) {
+    const tab = getTab(activeTabId);
+    if (tab && tab.isVideo) {
+      if (tab.el.paused) setTimeout(() => { tab.el.play().catch(() => {}); }, 60);
+      if (tab.audioCtx && tab.audioCtx.state === 'suspended') tab.audioCtx.resume().catch(() => {});
+    }
+  }
 });
 /* ---- Home screen shortcuts & bottom nav ---- */
 document.querySelectorAll('.home-shortcut[data-target]').forEach(btn => {
