@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nova Browser</title>
+<title>Nova Browser 12</title>
 <meta name="description" content="A private in-app browser with fast video download and offline playback.">
 <meta name="theme-color" content="#121212">
 <meta name="mobile-web-app-capable" content="yes">
@@ -610,7 +610,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 9.5</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 12</div>
   </div>
 
   <div class="toolbar">
@@ -896,6 +896,7 @@
       <div class="row-buttons">
         <button id="loopBtn">Loop: Off</button>
         <button id="muteBtn">Mute</button>
+        <button id="autoDlToggleBtn" title="When on, videos download in the background for smooth offline playback. When off, videos just stream online and nothing is saved automatically.">Auto-DL: On</button>
       </div>
     </div>
 
@@ -937,7 +938,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '9.5';
+const NOVA_VERSION = '13';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -950,7 +951,7 @@ const DOWNLOAD_EXT_RE = /\.(pdf|zip|rar|7z|docx?|xlsx?|pptx?|csv|json|txt|png|jp
 
 let settings = { bright: 100, contrast: 100, sat: 100, sharp: 0, volBoost: 100, loop: false,
   denoise: 0, detail: 0, exposure: 0, gamma: 100, shadows: 0, highlights: 0,
-  vibrance: 100, selHue: 0, selRange: 30, selSat: 100, aiEnhance: 0 };
+  vibrance: 100, selHue: 0, selRange: 30, selSat: 100, aiEnhance: 0, autoDownload: true };
 let customPresets = {};
 const sharpMatrix = document.getElementById('sharpenMatrix');
 
@@ -1358,6 +1359,11 @@ function createTab(initialUrl, isVideo, opts) {
     el.playsInline = true;
     el.loop = settings.loop;
     el.preload = 'auto';
+    // Tells the browser's own network scheduler to give this video's
+    // fetches priority over other in-flight requests on the page — lets
+    // streaming actually claim the connection's full available bandwidth
+    // instead of competing evenly with background/lower-priority traffic.
+    try { el.setAttribute('fetchpriority', 'high'); } catch (e) {}
   } else {
     el = document.createElement('iframe');
     el.allowFullscreen = true;
@@ -1489,14 +1495,23 @@ function updateGrabVideoBtn() {
   btn.classList.toggle('visible', onBrowsedPage);
 }
 
-// Hold playback off until at least MIN_BUFFER_PCT of the video is buffered.
+// Hold playback off until enough of the video is buffered to play smoothly.
 // Only used for videos that can't be opened directly and go through a
 // conversion/extraction path first (HLS via hls.js, or the blob-download
 // fallback) — plain direct video links keep playing immediately via normal
 // browser streaming, untouched. Falls back to just playing (after a short
 // grace period) if the browser never reports a usable duration/buffered
 // range, so a single video can't get stuck forever.
-const MIN_BUFFER_PCT = 20;
+// Previously this waited for 20% of the *entire* video's duration to be
+// buffered — fine for a short clip, but on anything more than a couple of
+// minutes long that meant sitting on "Buffering…" for a long time before a
+// single frame played, even though a few seconds of buffer is already
+// enough to start smoothly. Now it waits for whichever is smaller: a few
+// seconds of real buffer, or (for very short clips) that same 20% — so
+// short videos keep the same safety margin they always had, and long ones
+// start playing in seconds instead of minutes.
+const MIN_BUFFER_SECONDS = 1;
+const MIN_BUFFER_PCT = 15;
 function playWhenBuffered(tab) {
   const el = tab.el;
   const status = document.getElementById('status');
@@ -1513,21 +1528,43 @@ function playWhenBuffered(tab) {
   const check = () => {
     if (done || !el.duration || !isFinite(el.duration) || !el.buffered.length) return;
     const bufferedEnd = el.buffered.end(el.buffered.length - 1);
-    const pct = (bufferedEnd / el.duration) * 100;
+    const neededSeconds = Math.min(MIN_BUFFER_SECONDS, el.duration * (MIN_BUFFER_PCT / 100));
+    const pct = neededSeconds > 0 ? (bufferedEnd / neededSeconds) * 100 : 100;
     if (tab.id === activeTabId) {
       status.style.display = 'block';
       status.textContent = 'Buffering ' + Math.min(100, Math.round(pct)) + '%\u2026';
     }
-    if (pct >= MIN_BUFFER_PCT) finish();
+    if (bufferedEnd >= neededSeconds) finish();
   };
   // Safety net: don't block playback indefinitely if duration/buffered info
   // never becomes usable (e.g. some streams never expose it reliably).
-  const fallbackTimer = setTimeout(finish, 8000);
+  const fallbackTimer = setTimeout(finish, 2500);
   el.addEventListener('progress', check);
   el.addEventListener('canplaythrough', finish);
   check();
 }
 
+// Warms up the connection to a video's server (DNS lookup + TCP + TLS
+// handshake) the moment we know the URL, instead of only starting that
+// setup once the <video> element itself makes the request. That handshake
+// can easily be a few hundred ms on a fresh connection — doing it early,
+// in parallel with everything else happening right after a tap, means
+// actual video bytes start arriving sooner once playback begins.
+const _preconnectedOrigins = new Set();
+function preconnectToOrigin(url) {
+  try {
+    const origin = new URL(url).origin;
+    if (_preconnectedOrigins.has(origin)) return;
+    _preconnectedOrigins.add(origin);
+    ['preconnect', 'dns-prefetch'].forEach(rel => {
+      const link = document.createElement('link');
+      link.rel = rel;
+      link.href = origin;
+      if (rel === 'preconnect') link.crossOrigin = 'anonymous';
+      document.head.appendChild(link);
+    });
+  } catch (e) {}
+}
 function loadUrl(tabId, rawUrl, isNewNav) {
   const tab = getTab(tabId);
   if (!tab) return;
@@ -1535,6 +1572,7 @@ function loadUrl(tabId, rawUrl, isNewNav) {
   if (!url) return;
 
   const looksLikeVideo = VIDEO_EXT_RE.test(url);
+  if (looksLikeVideo) preconnectToOrigin(url);
   if (looksLikeVideo && !tab.isVideo) {
     const newEl = document.createElement('video');
     newEl.id = tab.el.id;
@@ -1542,6 +1580,7 @@ function loadUrl(tabId, rawUrl, isNewNav) {
     newEl.playsInline = true;
     newEl.loop = settings.loop;
     newEl.preload = 'auto';
+    try { newEl.setAttribute('fetchpriority', 'high'); } catch (e) {}
     newEl.className = tab.el.className;
     tab.el.replaceWith(newEl);
     tab.el = newEl;
@@ -1596,11 +1635,10 @@ function loadUrl(tabId, rawUrl, isNewNav) {
       updateVolumeGain(tab, settings.volBoost);
       applyFiltersToTab(tab);
       updateAutoDlIndicator(tab);
-      // Auto-start the same download the lightning button triggers, in
-      // silent/badge mode — the small progress badge over the video, no
-      // full-screen overlay — so it downloads through the exact same
-      // pipeline whether it starts on its own here or from a manual tap.
-      fastDownloadAndPlay(tab, true);
+      // No download here — a link that plays fine online has no need to be
+      // downloaded at all. If it turns out this link actually CAN'T play
+      // online, the 'error' listener below either auto-downloads it (Auto-DL
+      // on) or tells the person to tap the lightning button (Auto-DL off).
     }
   } else {
     tab.el.src = url;
@@ -2006,6 +2044,27 @@ function initGradingGL(tab) {
   if (tab.gl) return tab.gl.ok ? tab.gl : null;
   const gl = tab.canvas.getContext('webgl', { premultipliedAlpha: false }) || tab.canvas.getContext('experimental-webgl');
   if (!gl) { tab.gl = { ok: false }; return null; }
+  // Android tears down and recreates the GPU surface when the screen
+  // rotates while in fullscreen, which frequently kills the WebGL context
+  // outright. Without handling this, the canvas (which sits visually on
+  // top of the <video> while grading is active) just goes permanently
+  // black — the video keeps playing underneath, invisible. Listen for the
+  // loss/restore events and rebuild the context instead of leaving it dead.
+  if (!tab._glLossBound) {
+    tab._glLossBound = true;
+    tab.canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      if (gradingRAF) { cancelAnimationFrame(gradingRAF); gradingRAF = null; }
+      tab.gl = null;
+    }, false);
+    tab.canvas.addEventListener('webglcontextrestored', () => {
+      tab.gl = null;
+      const wasActive = tab.canvas.classList.contains('active-frame');
+      const g = initGradingGL(tab);
+      if (g && wasActive && tab.id === activeTabId) startGradingLoop(tab);
+      else if (!g) setGradingVisible(tab, false);
+    }, false);
+  }
   const vs = compileShader(gl, gl.VERTEX_SHADER, VERT_SRC);
   const fs = compileShader(gl, gl.FRAGMENT_SHADER, FRAG_SRC);
   const prog = gl.createProgram();
@@ -2160,6 +2219,8 @@ function applyEnhanceSettingsToUI() {
   tabs.forEach(t => { if (t.isVideo) { updateVolumeGain(t, settings.volBoost); t.el.loop = settings.loop; } });
   document.getElementById('loopBtn').textContent = 'Loop: ' + (settings.loop ? 'On' : 'Off');
   document.getElementById('loopBtn').classList.toggle('active-toggle', settings.loop);
+  document.getElementById('autoDlToggleBtn').textContent = 'Auto-DL: ' + (settings.autoDownload ? 'On' : 'Off');
+  document.getElementById('autoDlToggleBtn').classList.toggle('active-toggle', settings.autoDownload);
   updateSelSwatch();
   updateGradingForActiveTab();
   refreshEnhanceLabels();
@@ -2217,9 +2278,22 @@ function bindVideoElementEvents(tab) {
     if (!err) return;
     const currentUrl = tab.history[tab.historyIndex];
     const isBlobSrc = el.currentSrc && el.currentSrc.startsWith('blob:');
-    if (!isBlobSrc && !tab._blobFallbackTried && currentUrl) {
-      tab._blobFallbackTried = true;
-      loadVideoViaBlobFallback(tab, currentUrl);
+    // This link can't be streamed/played directly by the browser — it
+    // genuinely needs to be downloaded to play at all, unlike a normal
+    // video that just plays online with nothing saved. If Auto-DL is on,
+    // fetch it automatically; if it's off, tell the person to tap the
+    // lightning button themselves instead of downloading behind their back.
+    if (!isBlobSrc && currentUrl) {
+      if (settings.autoDownload && !tab._blobFallbackTried) {
+        tab._blobFallbackTried = true;
+        fastDownloadAndPlay(tab, true);
+      } else if (!settings.autoDownload) {
+        const msg = 'This video can\u2019t play directly \u2014 tap the \u26a1 lightning button to download and play it.';
+        showMiniToast(msg);
+        const status = document.getElementById('status');
+        status.style.display = 'block';
+        status.textContent = msg;
+      }
       return;
     }
     const MEDIA_ERR_MESSAGES = {
@@ -2961,6 +3035,10 @@ document.addEventListener('fullscreenchange', () => {
   document.getElementById('fullscreenBtn').classList.toggle('active-toggle', isFs);
   document.getElementById('fullscreenBtnPlayer').classList.toggle('active-toggle', isFs);
   if (!isFs && playerMode) exitPlayerModeFn();
+  // Re-sync the grading canvas after the fullscreen transition settles —
+  // covers devices where the GPU surface swap around rotate+fullscreen
+  // leaves the canvas stale even without a formal context-loss event.
+  setTimeout(() => { try { updateGradingForActiveTab(); } catch (e) {} }, 150);
 });
 document.addEventListener('webkitfullscreenchange', () => {
   const isFs = !!document.webkitFullscreenElement;
@@ -3752,7 +3830,82 @@ async function loadVideoViaHlsJs(tab, url) {
   if (tab.history[tab.historyIndex] !== url) return; // navigated away while loading the library
   if (!window.Hls.isSupported()) return loadVideoViaBlobFallback(tab, url);
   if (tab._hls) { try { tab._hls.destroy(); } catch (e) {} tab._hls = null; }
-  const hls = new window.Hls({ maxBufferLength: 30 });
+  const hls = new window.Hls({
+    // How far ahead of playback to keep buffering. Raised from 30s so that
+    // on a fast connection the player keeps pulling in more instead of
+    // pausing fetches once 30s is banked — this is what actually lets it
+    // use the full available speed rather than throttling itself.
+    maxBufferLength: 90,
+    // Hard ceiling maxBufferLength can grow to when the stream's bitrate is
+    // low (hls.js scales the effective target between these based on
+    // bitrate) — keeps the same "buffer as much as the link allows" intent
+    // at any bitrate, not just high-bitrate streams.
+    maxMaxBufferLength: 300,
+    // Default caps how much buffer is kept by total bytes (not just
+    // seconds) — on a high-bitrate stream this can hit the byte ceiling
+    // well before the second ceiling above, quietly throttling how far
+    // ahead it fetches. Raised hard since the goal here is "use all the
+    // bandwidth available", not conserve memory/data.
+    maxBufferSize: 600 * 1000 * 1000,
+    // Never cap the selected rendition to the on-screen video size — some
+    // phones report a small CSS/canvas size that would otherwise lock
+    // playback to a lower-than-max quality even on a fast connection.
+    capLevelToPlayerSize: false,
+    // Runs segment parsing/demuxing on a worker thread instead of the main
+    // thread — on phones this is what keeps the UI (scrolling, taps, the
+    // seek bar) responsive while a stream is actively decoding, and it
+    // also lets fetching/parsing overlap instead of blocking each other.
+    enableWorker: true,
+    // Old buffered-but-already-played video was being kept around
+    // indefinitely by default, growing memory use on long streams for no
+    // playback benefit — trimming it keeps things smooth deep into a long
+    // video instead of slowly eating more memory the longer it plays.
+    backBufferLength: 30,
+    // Default ABR is conservative about dropping quality, which shows up
+    // as repeated stalls/rebuffering on a weak connection before it finally
+    // steps down — keep that quick-to-drop safety net...
+    abrBandWidthFactor: 0.95,
+    // ...but climb back UP to the highest quality the connection can
+    // actually sustain much faster once bandwidth is available. The
+    // default (and the more conservative 0.7 this used to be) holds
+    // playback at a lower rendition long after a fast connection could
+    // support better — this claims the real available speed instead of
+    // leaving it unused.
+    abrBandWidthUpFactor: 2,
+    // hls.js has no real measurement yet for the very first fragment, so it
+    // guesses a conservative ~500kbps and starts there — on an actually
+    // fast connection that means starting at a needlessly low rendition
+    // and stepping up over several fragments. Assume a fast link by
+    // default instead, so it reaches for the top quality immediately and
+    // only steps down if the real measurement says otherwise.
+    abrEwmaDefaultEstimate: 20000000,
+    // Starts fetching the next fragment while the current one is still
+    // being parsed instead of fetch-then-parse-then-fetch — overlapping
+    // the two fills the buffer noticeably faster on higher-latency links.
+    startFragPrefetch: true,
+    // Always start at the top-quality rendition instead of the lowest/mid
+    // "safe" default — matches "use max data, don't save bandwidth".
+    startLevel: -1,
+    testBandwidth: false,
+    // Default fragment timeout (20s) means a single slow/stuck request can
+    // sit there for a long time before hls.js gives up and retries a fresh
+    // connection — on a fast link a stuck request is almost always dead,
+    // not just slow, so failing over quickly gets a working fragment
+    // sooner instead of waiting it out.
+    fragLoadingTimeOut: 8000,
+    manifestLoadingTimeOut: 6000,
+    levelLoadingTimeOut: 6000,
+    // Retry backoff starts much lower so a dropped/stalled request is
+    // retried almost immediately rather than waiting out a multi-second
+    // backoff first.
+    fragLoadingRetryDelay: 200,
+    manifestLoadingRetryDelay: 200,
+    levelLoadingRetryDelay: 200,
+    // Nudge playback forward through tiny stalls/gaps instead of sitting
+    // stuck waiting for the exact next byte.
+    nudgeMaxRetry: 10,
+    highBufferWatchdogPeriod: 1
+  });
   tab._hls = hls;
   let fellBack = false;
   hls.on(window.Hls.Events.ERROR, (event, data) => {
@@ -3763,6 +3916,22 @@ async function loadVideoViaHlsJs(tab, url) {
     if (tab.history[tab.historyIndex] === url) loadVideoViaBlobFallback(tab, url);
   });
   hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+    // Lock playback to the single highest-quality rendition and disable
+    // ABR entirely — the ask here is "always full quality, never drops",
+    // not "usually full quality". With autoLevelEnabled left on, hls.js
+    // will still step down on any buffering stall; forcing currentLevel
+    // (rather than just startLevel) pins it permanently regardless of
+    // measured bandwidth.
+    if (hls.levels && hls.levels.length) {
+      let topIdx = 0, topRes = -1;
+      hls.levels.forEach((lvl, i) => {
+        const res = (lvl.width || 0) * (lvl.height || 0) || lvl.bitrate || 0;
+        if (res > topRes) { topRes = res; topIdx = i; }
+      });
+      hls.autoLevelEnabled = false;
+      hls.currentLevel = topIdx;
+      hls.loadLevel = topIdx;
+    }
     tab.el.pause();
     playWhenBuffered(tab);
     ensureAudioGraphIfBoosted(tab);
@@ -3771,10 +3940,11 @@ async function loadVideoViaHlsJs(tab, url) {
   });
   hls.loadSource(url);
   hls.attachMedia(tab.el);
-  // Same auto-start as the direct-link path, so HLS sources also begin
-  // downloading (badge mode) right away.
   updateAutoDlIndicator(tab);
-  fastDownloadAndPlay(tab, true);
+  // No auto-download here — this stream is expected to just play via
+  // hls.js. If it turns out this stream can't actually play (see the
+  // fatal ERROR handler above), that already falls back to a real
+  // download since there's no other way to play it at all.
 }
 
 // Raw MPEG-TS segments (what most real HLS streams actually use) decode fine
@@ -4976,6 +5146,22 @@ document.getElementById('loopBtn').addEventListener('click', () => {
   document.getElementById('loopBtn').classList.toggle('active-toggle', settings.loop);
   saveEnhanceSettings();
 });
+document.getElementById('autoDlToggleBtn').addEventListener('click', () => {
+  settings.autoDownload = !settings.autoDownload;
+  document.getElementById('autoDlToggleBtn').textContent = 'Auto-DL: ' + (settings.autoDownload ? 'On' : 'Off');
+  document.getElementById('autoDlToggleBtn').classList.toggle('active-toggle', settings.autoDownload);
+  if (!settings.autoDownload) {
+    // Take effect immediately, not just for the next video — stop any
+    // silent auto-download already running in the background right now,
+    // so switching this off actually lets the current video keep playing
+    // as a plain online stream instead of finishing the download anyway.
+    tabs.forEach(t => {
+      if (t.isVideo && t._autoDLAbort) { try { t._autoDLAbort.abort(); } catch (e) {} t._autoDLAbort = null; updateAutoDlIndicator(t); }
+    });
+  }
+  saveEnhanceSettings();
+  showMiniToast(settings.autoDownload ? 'Videos will download in the background for offline playback' : 'Videos will just stream online \u2014 nothing downloads automatically');
+});
 document.getElementById('muteBtn').addEventListener('click', () => {
   const tab = getTab(activeTabId);
   if (!tab || !tab.isVideo) return;
@@ -5215,7 +5401,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // the pool off on its own instead of forcing it and risking a broken
       // download. That self-limiting behavior is what makes it safe to set
       // the ceiling itself higher than before.
-      const MAX_WORKERS = 256;
+      const MAX_WORKERS = 384;
       const fetchPiece = async (idx, attemptsLeft) => {
         const [start, end] = pieces[idx];
         try {
@@ -5234,7 +5420,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
           // buffers are tiny and rarely starved) — i.e. audio/video going
           // out of sync during playback. Default priority lets the browser
           // balance the two instead of always favoring the download.
-          const res = await fetch(url, { headers: { Range: 'bytes=' + start + '-' + end }, signal: watchdog.signal });
+          const res = await fetch(url, { headers: { Range: 'bytes=' + start + '-' + end }, signal: watchdog.signal, priority: 'high' });
           if (!res.ok) throw new Error('HTTP ' + res.status);
           if (!res.body) { const buf = await res.arrayBuffer(); loaded[idx] = buf.byteLength; watchdog.poke(); reportProgress(); return new Blob([buf]); }
           const reader = res.body.getReader();
@@ -5282,10 +5468,10 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
         allWorkerPromises.push(p);
         return p;
       }
-      const START_WORKERS = 96;
+      const START_WORKERS = 192;
       for (let i = 0; i < Math.min(START_WORKERS, pieces.length); i++) launchWorker();
-      // Ramp: every 40ms, if nothing has failed recently and there's still
-      // unclaimed work, add up to 8 more workers — up to MAX_WORKERS. Stops
+      // Ramp: every 25ms, if nothing has failed recently and there's still
+      // unclaimed work, add up to 24 more workers — up to MAX_WORKERS. Stops
       // ramping permanently the moment any real failure is seen (server
       // pushing back), so a connection/server that can't sustain this many
       // requests backs off on its own instead of forcing it and breaking the
@@ -5295,8 +5481,8 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // request is succeeding cleanly.
       const ramp = setInterval(() => {
         if (rampBlocked || firstFatalError || nextPiece >= pieces.length || activeWorkers >= MAX_WORKERS) { clearInterval(ramp); return; }
-        for (let i = 0; i < 8 && activeWorkers < MAX_WORKERS && nextPiece < pieces.length && !rampBlocked; i++) launchWorker();
-      }, 40);
+        for (let i = 0; i < 24 && activeWorkers < MAX_WORKERS && nextPiece < pieces.length && !rampBlocked; i++) launchWorker();
+      }, 25);
       // Wait for the whole pool to actually drain — poll instead of a single
       // Promise.all call, since the set of promises to wait for keeps
       // growing for as long as the ramp is still adding workers.
@@ -5340,6 +5526,18 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
     if (!result || result.size < 1000) throw new Error('Empty/invalid response');
     watchdog.cleanup();
     recordDomainPattern(streamDomain, 'streamDirect', true);
+    // Some direct .mp4 links are actually *fragmented* MP4 (moov + a series
+    // of moof/mdat fragments in one file, common from modern CDNs) rather
+    // than a classic single-sample-table file — same "seek always snaps
+    // back to the start" problem already fixed above for HLS-sourced
+    // downloads. Try the same flatten-to-progressive-MP4 rewrite here too.
+    // Safe no-op (returns null, original file kept untouched) for webm/ts
+    // sources or files that are already a normal progressive MP4.
+    try {
+      const wholeBuf = await result.arrayBuffer();
+      const flat = await remuxFragmentedToFlatMp4(wholeBuf, [wholeBuf]);
+      if (flat) return flat;
+    } catch (e) {}
     return result;
   } catch (directErr) {
     watchdog.cleanup();
