@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nova Browser 12</title>
+<title>Nova Browser 1.0</title>
 <meta name="description" content="A private in-app browser with fast video download and offline playback.">
 <meta name="theme-color" content="#121212">
 <meta name="mobile-web-app-capable" content="yes">
@@ -610,7 +610,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 12</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 1.0</div>
   </div>
 
   <div class="toolbar">
@@ -938,7 +938,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '15';
+const NOVA_VERSION = '1.0';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -1236,7 +1236,7 @@ function playOfflineVideo(item) {
   // in the same session the video was downloaded in.
   if (item.blob && item.blob.type === 'video/mp4') {
     item.blob.arrayBuffer().then((buf) => {
-      const times = parseMp4KeyframeTimes(buf, [buf]);
+      const times = parseMp4KeyframeTimes(buf, [buf]) || parseFlatMp4KeyframeSeconds(buf);
       if (times) tab._segmentBoundaries = times;
     }).catch(() => {});
   }
@@ -1390,7 +1390,7 @@ function createTab(initialUrl, isVideo, opts) {
     history: [], historyIndex: -1,
     title: isVideo ? (opts.title || 'Video') : 'New Tab',
     desktopMode: false,
-    rotation: 0, flipped: false, zoomScale: 1,
+    rotation: 0, flipped: false, zoomScale: 1, panX: 0, panY: 0,
     gestureBrightness: 1,
     aspect: 'fit',
     audioCtx: null, gainNode: null, sourceNode: null,
@@ -1586,6 +1586,7 @@ function loadUrl(tabId, rawUrl, isNewNav) {
     tab.el = newEl;
     tab.isVideo = true;
     tab._corsRetried = false;
+    tab._retryStage = 0;
     tab.aspect = tab.aspect || 'fit';
     bindVideoElementEvents(tab);
     applyAspect(tab, tab.aspect);
@@ -1615,6 +1616,7 @@ function loadUrl(tabId, rawUrl, isNewNav) {
     tab._blobFallbackTried = false;
     tab._segmentBoundaries = null;
     tab._corsRetried = false;
+    tab._retryStage = 0;
     // A previous hls.js instance from an earlier video in this same tab
     // must be torn down before attaching a new source — otherwise it keeps
     // fetching the old stream's segments in the background and can fight
@@ -1890,9 +1892,22 @@ function updateSharpen(amount) {
 }
 function applyTabTransform(tab) {
   const flipX = tab.flipped ? -1 : 1;
-  const t = 'rotate(' + tab.rotation + 'deg) scale(' + (tab.zoomScale * flipX) + ', ' + tab.zoomScale + ')';
+  const panX = tab.panX || 0, panY = tab.panY || 0;
+  const t = 'translate(' + panX + 'px, ' + panY + 'px) rotate(' + tab.rotation + 'deg) scale(' + (tab.zoomScale * flipX) + ', ' + tab.zoomScale + ')';
   tab.el.style.transform = t;
   if (tab.canvas) tab.canvas.style.transform = t;
+}
+// Keeps a zoomed/panned video's dragged offset within a sane range so it
+// can't be swiped completely off-screen and "lost" — clamps to roughly how
+// far the extra (scale-1) area actually extends past each edge.
+function clampPan(tab) {
+  const scale = tab.zoomScale || 1;
+  if (scale <= 1.01) { tab.panX = 0; tab.panY = 0; return; }
+  const stage = document.getElementById('stage');
+  const maxX = (scale - 1) / 2 * stage.clientWidth;
+  const maxY = (scale - 1) / 2 * stage.clientHeight;
+  tab.panX = Math.max(-maxX, Math.min(maxX, tab.panX || 0));
+  tab.panY = Math.max(-maxY, Math.min(maxY, tab.panY || 0));
 }
 function computeEffectiveFilters() {
   const exposureFactor = 1 + (settings.exposure / 100);
@@ -1908,10 +1923,27 @@ function computeEffectiveFilters() {
 function applyFiltersToTab(tab) {
   if (!tab || !tab.isVideo) return;
   const f = computeEffectiveFilters();
-  tab.el.style.setProperty('--b', f.effBright * (tab.gestureBrightness || 1));
+  const b = f.effBright * (tab.gestureBrightness || 1);
+  // These CSS custom properties are read by the same `filter:` rule on
+  // BOTH .video.active-frame and .canvas.active-frame (see CSS). But CSS
+  // variables only inherit down through ancestors, not across sibling
+  // elements — so setting them only on the <video> left the grading
+  // <canvas> (a sibling, not a child) permanently stuck on the CSS
+  // filter's fallback defaults. That's why brightness/contrast/
+  // saturation/denoise/sharpen silently stopped applying the moment
+  // vibrance/selective-color/AI-enhance switched the visible layer over
+  // to the canvas. Setting them on both elements keeps every effect
+  // working together regardless of which layer is actually showing.
+  tab.el.style.setProperty('--b', b);
   tab.el.style.setProperty('--c', f.effContrast);
   tab.el.style.setProperty('--s', settings.sat / 100);
   tab.el.style.setProperty('--denoise', f.denoisePx + 'px');
+  if (tab.canvas) {
+    tab.canvas.style.setProperty('--b', b);
+    tab.canvas.style.setProperty('--c', f.effContrast);
+    tab.canvas.style.setProperty('--s', settings.sat / 100);
+    tab.canvas.style.setProperty('--denoise', f.denoisePx + 'px');
+  }
 }
 function applyFiltersToAllVideoTabs() { tabs.forEach(t => { if (t.isVideo) applyFiltersToTab(t); }); }
 
@@ -2329,6 +2361,33 @@ function bindVideoElementEvents(tab) {
     // fetch it automatically; if it's off, tell the person to tap the
     // lightning button themselves instead of downloading behind their back.
     if (!isBlobSrc && currentUrl) {
+      // Privacy-focused browsers (Epic, Brave in aggressive mode, Firefox
+      // strict mode, etc.) strip or restrict the Referer header and/or
+      // apply stricter CORS handling by default. Many video CDNs use
+      // Referer-based hotlink protection and reject the request outright
+      // when that header is missing — Chrome sends it normally, so the
+      // exact same link plays there but errors out here. Before giving up
+      // and falling back to download-first, cycle through a few
+      // crossOrigin/referrerPolicy combinations that commonly route around
+      // this, and only fall back once all of them have failed.
+      const retryStages = [
+        { crossOrigin: null, referrerPolicy: 'unsafe-url' },
+        { crossOrigin: null, referrerPolicy: 'origin' },
+        { crossOrigin: 'anonymous', referrerPolicy: 'unsafe-url' },
+        { crossOrigin: 'use-credentials', referrerPolicy: 'unsafe-url' }
+      ];
+      tab._retryStage = tab._retryStage || 0;
+      if (tab._retryStage < retryStages.length) {
+        const stage = retryStages[tab._retryStage];
+        tab._retryStage++;
+        if (stage.crossOrigin) el.setAttribute('crossorigin', stage.crossOrigin);
+        else el.removeAttribute('crossorigin');
+        try { el.referrerPolicy = stage.referrerPolicy; } catch (e) {}
+        el.src = currentUrl;
+        el.load();
+        el.play().catch(() => {});
+        return;
+      }
       if (settings.autoDownload && !tab._blobFallbackTried) {
         tab._blobFallbackTried = true;
         fastDownloadAndPlay(tab, true);
@@ -2356,9 +2415,19 @@ function bindVideoElementEvents(tab) {
 }
 
 // Feature-detects real native HLS support (Safari/iOS) vs browsers that will
-// silently do nothing with an .m3u8 handed to <video src>.
+// silently do nothing — or, worse, falsely claim they can — with an .m3u8
+// handed to <video src>. canPlayType() alone isn't reliable: several
+// Android/Chromium-based browsers (Epic among them) return a non-empty
+// string for the HLS mime types even though the underlying <video> element
+// has no actual HLS demuxer, so trusting it there sends the stream down the
+// direct <video src> path where it can only fail with SRC_NOT_SUPPORTED.
+// Real native HLS decoding only exists on Safari/iOS, so gate on that first
+// and treat canPlayType as a confirmation, not the sole signal.
 function nativeCanPlayHls() {
   try {
+    const ua = navigator.userAgent || '';
+    const isAppleBrowser = /^((?!chrome|android|crios|fxios|edgios).)*safari/i.test(ua) || /iP(hone|ad|od)/i.test(ua);
+    if (!isAppleBrowser) return false;
     const v = document.createElement('video');
     return v.canPlayType('application/vnd.apple.mpegurl') !== '' ||
            v.canPlayType('application/x-mpegURL') !== '';
@@ -2816,9 +2885,10 @@ document.querySelectorAll('#orientMenu button').forEach(b => {
   const indicator = document.getElementById('gestureIndicator');
   const indicatorText = document.getElementById('gestureText');
   const indicatorFill = document.getElementById('gestureBarFill');
-  let mode = null; // 'volume' | 'brightness' | 'seek' | 'pinch'
+  let mode = null; // 'volume' | 'brightness' | 'seek' | 'pinch' | 'pan'
   let startX = 0, startY = 0, startTime = 0, startVolume = 1, startBrightness = 1;
   let pinchStartDist = 0, pinchStartScale = 1;
+  let panStartX = 0, panStartY = 0;
   const THRESHOLD = 14;
   let lastTapTime = 0, lastTapSide = null, tapResetTimer = null, indicatorHideTimer = null;
 
@@ -2888,6 +2958,15 @@ document.querySelectorAll('#orientMenu button').forEach(b => {
     }
     if (e.touches.length !== 1) { mode = null; return; }
     startX = e.touches[0].clientX; startY = e.touches[0].clientY;
+    // When zoomed in, a single-finger drag should pan the zoomed video
+    // around (any direction) instead of being read as a seek/volume/
+    // brightness swipe — that only makes sense at normal (1x) zoom.
+    if ((tab.zoomScale || 1) > 1.01) {
+      mode = 'pan';
+      panStartX = tab.panX || 0;
+      panStartY = tab.panY || 0;
+      return;
+    }
     startTime = tab.el.currentTime || 0;
     startVolume = tab.el.volume;
     startBrightness = tab.gestureBrightness || 1;
@@ -2902,6 +2981,7 @@ document.querySelectorAll('#orientMenu button').forEach(b => {
       const d = dist(e.touches[0], e.touches[1]);
       const scale = Math.max(1, Math.min(3, pinchStartScale * (d / pinchStartDist)));
       tab.zoomScale = scale;
+      clampPan(tab);
       applyTabTransform(tab);
       showIndicator('Zoom ' + scale.toFixed(1) + 'x', (scale - 1) / 2 * 100);
       return;
@@ -2909,6 +2989,14 @@ document.querySelectorAll('#orientMenu button').forEach(b => {
     if (e.touches.length !== 1) return;
     const dx = e.touches[0].clientX - startX;
     const dy = e.touches[0].clientY - startY;
+
+    if (mode === 'pan') {
+      tab.panX = panStartX + dx;
+      tab.panY = panStartY + dy;
+      clampPan(tab);
+      applyTabTransform(tab);
+      return;
+    }
 
     if (mode === 'pending') {
       if (Math.abs(dx) > THRESHOLD && Math.abs(dx) > Math.abs(dy)) mode = 'seek';
@@ -3898,6 +3986,7 @@ async function loadVideoViaHlsJs(tab, url) {
   if (tab.history[tab.historyIndex] !== url) return; // navigated away while loading the library
   if (!window.Hls.isSupported()) return loadVideoViaBlobFallback(tab, url);
   if (tab._hls) { try { tab._hls.destroy(); } catch (e) {} tab._hls = null; }
+  tab._segmentBoundaries = null;
   const hls = new window.Hls({
     // How far ahead of playback to keep buffering. Raised from 30s so that
     // on a fast connection the player keeps pulling in more instead of
@@ -3982,6 +4071,22 @@ async function loadVideoViaHlsJs(tab, url) {
     try { hls.destroy(); } catch (e) {}
     if (tab._hls === hls) tab._hls = null;
     if (tab.history[tab.historyIndex] === url) loadVideoViaBlobFallback(tab, url);
+  });
+  // Seeking a live stream to an arbitrary time can land the video
+  // mid-GOP: the video track jumps to the nearest keyframe while audio
+  // resumes exactly at the requested time, so the two start from
+  // different points and drift out of sync for the rest of playback (this
+  // is the actual cause of "skipping desyncs audio/video" — it was
+  // already worked around for *downloaded* videos via segment-boundary
+  // snapping in preciseSeek, but never for live playback through hls.js,
+  // which is the path almost everyone actually watches through). Fixed by
+  // feeding hls.js's own real fragment start times into that same
+  // snapping logic, so a live-streamed seek lands on a segment boundary
+  // (always a keyframe in HLS) too, not just a downloaded file's.
+  hls.on(window.Hls.Events.LEVEL_LOADED, (event, data) => {
+    if (data && data.details && Array.isArray(data.details.fragments) && data.details.fragments.length) {
+      tab._segmentBoundaries = data.details.fragments.map(f => f.start).filter(Number.isFinite);
+    }
   });
   hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
     // Lock playback to the single highest-quality rendition and disable
@@ -4149,6 +4254,85 @@ function parseMp4KeyframeTimes(initSegment, mediaChunks) {
     return times.length ? times : null;
   } catch (e) { return null; }
 }
+// Same idea as parseMp4KeyframeTimes above, but for a FLAT/progressive MP4
+// (single moov with a real sample table, no moof/mdat fragments) — the
+// format remuxFragmentedToFlatMp4 produces. A file reopened from the
+// offline folder in a later session is just raw saved bytes with no JS
+// properties attached (see the comment in playOfflineVideo), so even a
+// flat file's own real keyframe times have to be re-derived from its
+// stss/stts here rather than reused from the download that made it.
+function parseFlatMp4KeyframeSeconds(buf) {
+  try {
+    const view = new DataView(buf.buffer || buf, buf.byteOffset || 0, buf.byteLength);
+    const end = buf.byteLength;
+    const moov = mp4bFind(view, 0, end, 'moov');
+    if (!moov) return null;
+    const mvhd = mp4bFind(view, moov.start + moov.headerSize, moov.start + moov.size, 'mvhd');
+    let movieTimescale = 1000;
+    if (mvhd) {
+      const v = view.getUint8(mvhd.start + mvhd.headerSize);
+      movieTimescale = view.getUint32(mvhd.start + mvhd.headerSize + (v === 1 ? 20 : 12)) || 1000;
+    }
+    const traks = mp4bReadBoxes(view, moov.start + moov.headerSize, moov.start + moov.size).filter(b => b.type === 'trak');
+    for (const trak of traks) {
+      const kids = mp4bReadBoxes(view, trak.start + trak.headerSize, trak.start + trak.size);
+      const mdia = kids.find(b => b.type === 'mdia');
+      if (!mdia) continue;
+      const mdiaKids = mp4bReadBoxes(view, mdia.start + mdia.headerSize, mdia.start + mdia.size);
+      const mdhd = mdiaKids.find(b => b.type === 'mdhd');
+      const hdlr = mdiaKids.find(b => b.type === 'hdlr');
+      const minf = mdiaKids.find(b => b.type === 'minf');
+      if (!mdhd || !hdlr || !minf) continue;
+      const handlerType = String.fromCharCode(
+        view.getUint8(hdlr.start + hdlr.headerSize + 8), view.getUint8(hdlr.start + hdlr.headerSize + 9),
+        view.getUint8(hdlr.start + hdlr.headerSize + 10), view.getUint8(hdlr.start + hdlr.headerSize + 11));
+      if (handlerType !== 'vide') continue;
+      const mdhdVer = view.getUint8(mdhd.start + mdhd.headerSize);
+      const timescale = view.getUint32(mdhd.start + mdhd.headerSize + (mdhdVer === 1 ? 20 : 12));
+      if (!timescale) continue;
+      const stbl = mp4bReadBoxes(view, minf.start + minf.headerSize, minf.start + minf.size).find(b => b.type === 'stbl');
+      if (!stbl) continue;
+      const stblKids = mp4bReadBoxes(view, stbl.start + stbl.headerSize, stbl.start + stbl.size);
+      const stts = stblKids.find(b => b.type === 'stts');
+      const stss = stblKids.find(b => b.type === 'stss');
+      if (!stts || !stss) continue; // no stss at all means every sample is a keyframe — snapping buys nothing
+      // Empty-edit offset (see mp4bBuildStbl's edts) — this track's real
+      // content may start a bit into the movie timeline, same correction
+      // that was applied when this file was written.
+      let offsetSeconds = 0;
+      const edts = kids.find(b => b.type === 'edts');
+      if (edts) {
+        const elst = mp4bReadBoxes(view, edts.start + edts.headerSize, edts.start + edts.size).find(b => b.type === 'elst');
+        if (elst) {
+          const count = view.getUint32(elst.start + elst.headerSize + 4);
+          if (count > 0) {
+            const mediaTime = view.getInt32(elst.start + elst.headerSize + 12);
+            if (mediaTime === -1) offsetSeconds = view.getUint32(elst.start + elst.headerSize + 8) / movieTimescale;
+          }
+        }
+      }
+      // stts: version+flags(4) + entry_count(4) + [count(4), duration(4)]...
+      const sttsCount = view.getUint32(stts.start + stts.headerSize + 4);
+      const durations = [];
+      let sp = stts.start + stts.headerSize + 8;
+      for (let i = 0; i < sttsCount; i++) {
+        const runCount = view.getUint32(sp); sp += 4;
+        const dur = view.getUint32(sp); sp += 4;
+        for (let j = 0; j < runCount; j++) durations.push(dur);
+      }
+      // stss: version+flags(4) + entry_count(4) + [sample_number(4)]... (1-based)
+      const stssCount = view.getUint32(stss.start + stss.headerSize + 4);
+      const syncIdxs = [];
+      let yp = stss.start + stss.headerSize + 8;
+      for (let i = 0; i < stssCount; i++) { syncIdxs.push(view.getUint32(yp)); yp += 4; }
+      const cum = [0];
+      for (let i = 0; i < durations.length; i++) cum.push(cum[i] + durations[i] / timescale);
+      const times = syncIdxs.map(idx => (cum[idx - 1] || 0) + offsetSeconds).filter(Number.isFinite);
+      return times.length ? times : null;
+    }
+    return null;
+  } catch (e) { return null; }
+}
 // ================= Fragmented -> flat MP4 remux (fixes "seek always
 // snaps back to 0" on downloaded videos) =================
 // The blob assembled from HLS downloads (whether raw fMP4/CMAF .m4s
@@ -4222,8 +4406,62 @@ function mp4bRunLength(values) {
 // base-data-offset given explicitly in tfhd, or (mux.js/most encoders'
 // default) "default-base-is-moof", where offsets are relative to the
 // moof's own start.
+// Scans just far enough to find the very first tfdt (fragment decode
+// timestamp) seen for a given track, without extracting full sample data —
+// used to find each track's real starting point on the actual stream
+// timeline before any per-track sample tables are built.
+function mp4bFindFirstTfdt(mediaChunks, trackId) {
+  for (let chunkIndex = 0; chunkIndex < mediaChunks.length; chunkIndex++) {
+    const chunkBuf = mediaChunks[chunkIndex];
+    const buf = chunkBuf.buffer ? chunkBuf.buffer.slice(chunkBuf.byteOffset, chunkBuf.byteOffset + chunkBuf.byteLength) : chunkBuf;
+    const view = new DataView(buf);
+    const moofs = mp4bReadBoxes(view, 0, buf.byteLength).filter(b => b.type === 'moof');
+    for (const moof of moofs) {
+      const trafs = mp4bReadBoxes(view, moof.start + moof.headerSize, moof.start + moof.size).filter(b => b.type === 'traf');
+      for (const traf of trafs) {
+        const kids = mp4bReadBoxes(view, traf.start + traf.headerSize, traf.start + traf.size);
+        const tfhd = kids.find(b => b.type === 'tfhd');
+        if (!tfhd) continue;
+        const tid = view.getUint32(tfhd.start + tfhd.headerSize + 4);
+        if (tid !== trackId) continue;
+        const tfdt = mp4bReadTfdt(view, traf);
+        if (tfdt != null) return tfdt;
+      }
+    }
+  }
+  return null;
+}
+// Reads a traf's tfdt (baseMediaDecodeTime) box if present — this is the
+// fragment's own real decode timestamp in the track's timescale, as
+// actually written into the stream, independent of however many sample
+// durations were summed to get there.
+function mp4bReadTfdt(view, traf) {
+  const kids = mp4bReadBoxes(view, traf.start + traf.headerSize, traf.start + traf.size);
+  const tfdt = kids.find(b => b.type === 'tfdt');
+  if (!tfdt) return null;
+  const version = view.getUint8(tfdt.start + tfdt.headerSize);
+  return version === 1
+    ? view.getUint32(tfdt.start + tfdt.headerSize + 4) * 4294967296 + view.getUint32(tfdt.start + tfdt.headerSize + 8)
+    : view.getUint32(tfdt.start + tfdt.headerSize + 4);
+}
 function mp4bExtractTrackSamples(mediaChunks, trackId, defaults) {
   const samples = []; // { size, duration, sync, ctsOffset, chunkIndex, byteOffset }
+  // Audio and video are independent elementary streams, each fragmented by
+  // the encoder/muxer separately — the *nominal* per-sample durations
+  // baked into each fragment's trun rarely sum to EXACTLY the real gap to
+  // the next fragment (a few ms of encoder/mux rounding per segment is
+  // normal). Naively summing nominal durations forever lets that tiny
+  // per-fragment error accumulate independently for audio vs. video —
+  // invisible during plain sequential playback (decoders just keep feeding
+  // frames), but the moment a seek jumps to a nominal timestamp, each
+  // track has drifted from real time by a different amount, which is
+  // exactly the growing audio/video desync-after-seeking bug. Fix: track
+  // each fragment's own real tfdt and snap the running nominal clock back
+  // to it at every fragment boundary, so nominal time never drifts far
+  // from the stream's actual real timeline for either track.
+  let expectedTime = 0;      // running sum of nominal durations so far
+  let trackBaseTfdt = null;  // this track's first-seen tfdt, treated as t=0
+  let lastSample = null;     // used to absorb a correction into the prior sample
   mediaChunks.forEach((chunkBuf, chunkIndex) => {
     const buf = chunkBuf.buffer ? chunkBuf.buffer.slice(chunkBuf.byteOffset, chunkBuf.byteOffset + chunkBuf.byteLength) : chunkBuf;
     const view = new DataView(buf);
@@ -4246,6 +4484,23 @@ function mp4bExtractTrackSamples(mediaChunks, trackId, defaults) {
         if (tfhdFlags & 0x000010) { defaultSize = view.getUint32(p); p += 4; }
         if (tfhdFlags & 0x000020) { defaultFlags = view.getUint32(p); p += 4; }
         const defaultBaseIsMoof = !!(tfhdFlags & 0x020000);
+        // Rebase the running nominal clock to this fragment's real tfdt
+        // (relative to the track's very first tfdt) before adding its
+        // samples — corrects any drift accumulated up through the
+        // previous fragment by nudging that fragment's last sample's
+        // duration, rather than letting the error carry forward forever.
+        const tfdt = mp4bReadTfdt(view, traf);
+        if (tfdt != null) {
+          if (trackBaseTfdt == null) trackBaseTfdt = tfdt;
+          const realTime = tfdt - trackBaseTfdt;
+          const drift = realTime - expectedTime;
+          if (drift !== 0 && lastSample) {
+            lastSample.duration = Math.max(1, lastSample.duration + drift);
+            expectedTime += drift;
+          } else if (drift !== 0) {
+            expectedTime = realTime; // very first fragment — just adopt its real start
+          }
+        }
         const truns = kids.filter(b => b.type === 'trun');
         let runBase = baseDataOffset != null ? baseDataOffset : (defaultBaseIsMoof || baseDataOffset == null ? moof.start : 0);
         for (const trun of truns) {
@@ -4254,15 +4509,35 @@ function mp4bExtractTrackSamples(mediaChunks, trackId, defaults) {
           const sampleCount = view.getUint32(q); q += 4;
           let dataOffset = 0;
           if (flags & 0x000001) { dataOffset = view.getInt32(q); q += 4; }
+          // first-sample-flags-present (0x000004): a single flags value that
+          // applies ONLY to sample 0 of this run (the rest fall back to the
+          // tfhd/trex default). Very common — most fMP4 muxers (including
+          // mux.js and Apple's own HLS segmenter) write a keyframe's flags
+          // this way instead of a full per-sample flags array, to mark just
+          // the first sample of each GOP as sync without repeating flags for
+          // every delta frame. This field sits right here in the trun header,
+          // BEFORE the per-sample array — missing it silently shifted every
+          // duration/size/flags/cts read for the rest of the run by 4 bytes,
+          // which fed wrong sizes into the sample-to-byte-offset walk below
+          // (cursor += size) and corrupted the whole rest of that fragment's
+          // sample table. That's a much bigger problem than a timing nudge:
+          // it desyncs (and can garble) playback from that GOP onward, not
+          // just at a seek.
+          let firstSampleFlags = null;
+          if (flags & 0x000004) { firstSampleFlags = view.getUint32(q); q += 4; }
           let cursor = runBase + dataOffset;
           for (let i = 0; i < sampleCount; i++) {
             let dur = defaultDuration, size = defaultSize, sf = defaultFlags, cts = 0;
             if (flags & 0x000100) { dur = view.getUint32(q); q += 4; }
             if (flags & 0x000200) { size = view.getUint32(q); q += 4; }
             if (flags & 0x000400) { sf = view.getUint32(q); q += 4; }
+            else if (i === 0 && firstSampleFlags != null) { sf = firstSampleFlags; }
             if (flags & 0x000800) { cts = view.getInt32(q); q += 4; }
             const isSync = !((sf >>> 16) & 0x1); // sample_depends_on/is-non-sync bit
-            samples.push({ size, duration: dur, sync: isSync, ctsOffset: cts, chunkIndex, byteOffset: cursor });
+            const sample = { size, duration: dur, sync: isSync, ctsOffset: cts, chunkIndex, byteOffset: cursor };
+            samples.push(sample);
+            lastSample = sample;
+            expectedTime += dur;
             cursor += size;
           }
           runBase = cursor; // next trun in same traf (rare) continues where this one left off
@@ -4290,6 +4565,23 @@ function mp4bReadTrex(view, moov, trackId) {
     };
   }
   return { duration: 0, size: 0, flags: 0, sampleDescIndex: 1 };
+}
+// Returns a copy of a track's original tkhd bytes with the duration field
+// overwritten (movie timescale, ms) — see the trackDefs.push comment above
+// for why the original value can't just be reused. Handles both tkhd
+// versions: v0 has a 32-bit duration at header+20, v1 has a 64-bit duration
+// at header+28 (we only ever need the low 32 bits — real durations never
+// approach 2^32 ms).
+function mp4bPatchTkhdDuration(tkhdBytes, headerSize, version, durationMs) {
+  const out = new Uint8Array(tkhdBytes);
+  const dv = new DataView(out.buffer, out.byteOffset, out.byteLength);
+  if (version === 1) {
+    dv.setUint32(headerSize + 28, 0);
+    dv.setUint32(headerSize + 32, durationMs >>> 0);
+  } else {
+    dv.setUint32(headerSize + 20, durationMs >>> 0);
+  }
+  return out;
 }
 // Builds a flat stbl (sample table) box from an extracted sample list plus
 // the original stsd (codec config) copied verbatim from the init segment.
@@ -4376,14 +4668,108 @@ async function remuxFragmentedToFlatMp4(initSegment, mediaChunks) {
       const trex = mp4bReadTrex(initView, moov, trackId);
       const samples = mp4bExtractTrackSamples(mediaChunks, trackId, trex);
       if (!samples.length) continue;
+      // First real tfdt for this track, in seconds — used below to find
+      // how far ahead/behind this track's true stream start is relative to
+      // the OTHER track(s). Audio commonly starts a handful of frames
+      // before or after video in the original encode; without correcting
+      // for that, both tracks were being independently zeroed to their own
+      // first sample, silently baking in that mismatch as a small constant
+      // sync offset from frame one.
+      const firstTfdt = mp4bFindFirstTfdt(mediaChunks, trackId);
+      // tkhd's own duration field is copied verbatim below, but it's a
+      // leftover from the live/fragmented recording — commonly 0 or a
+      // placeholder, since the true length wasn't known while capturing.
+      // mvhd's duration gets recomputed correctly elsewhere, but this
+      // per-track tkhd duration was left stale. Players use tkhd duration
+      // (not mvhd) to scale a requested seek time into this track's own
+      // timeline, so a stale/placeholder value here made every seek land
+      // at a slightly wrong sample for that track — consistent, baked-in
+      // desync on every single seek, while sequential playback (which never
+      // needs this scaling) stayed perfectly in sync. Stash version/header
+      // info + this track's real duration now so it can be patched into a
+      // corrected tkhd once every track's cross-track startOffsetMs is known.
       trackDefs.push({
         trackId, timescale, isVideo: handlerType === 'vide',
         tkhdBytes: new Uint8Array(initBuf, tkhd.start, tkhd.size),
+        tkhdHeaderSize: tkhd.headerSize, tkhdVersion: tkhdVer,
         hdlrBytes: new Uint8Array(initBuf, hdlr.start, hdlr.size),
-        stsdBytes, samples
+        stsdBytes, samples,
+        trackDurationMs: Math.round(samples.reduce((a, s) => a + s.duration, 0) / timescale * 1000) || 1,
+        firstTfdtSeconds: firstTfdt != null ? firstTfdt / timescale : 0
       });
     }
     if (!trackDefs.length) return null;
+    // Clock-drift correction: video's per-fragment timestamps come from the
+    // frame timer, audio's from the mic's own sample clock — over a long
+    // recording these two hardware clocks drift apart (here: audio's real
+    // total duration came out ~2.2% longer than video's, ~29s over ~21min).
+    // The per-fragment tfdt snapping above faithfully preserves that drift
+    // rather than causing it — it's a real property of the source capture.
+    // Left uncorrected, that drift means a seek anywhere in the file lands
+    // audio and video at genuinely different real-time positions (small
+    // near the start, ~29s apart by the end), while sequential playback
+    // never exposes it since decoders just keep consuming samples in order.
+    // Fix: stretch/compress every audio sample's duration by a constant
+    // factor so audio's total real duration exactly matches video's — the
+    // correction is spread proportionally across the whole track instead of
+    // dumped on one sample, so any seek position stays aligned, not just
+    // the very end.
+    const driftRefTrack = trackDefs.find(t => t.isVideo) || trackDefs[0];
+    const driftRefSeconds = driftRefTrack.samples.reduce((a, s) => a + s.duration, 0) / driftRefTrack.timescale;
+    trackDefs.forEach(t => {
+      if (t === driftRefTrack) return;
+      const ownTicks = t.samples.reduce((a, s) => a + s.duration, 0);
+      const ownSeconds = ownTicks / t.timescale;
+      if (ownSeconds <= 0) return;
+      const targetTicks = Math.round(driftRefSeconds * t.timescale);
+      const scale = targetTicks / ownTicks;
+      if (Math.abs(scale - 1) < 0.0005) return; // negligible, not worth touching
+      let runningScaled = 0;
+      t.samples.forEach((s, i) => {
+        if (i === t.samples.length - 1) {
+          s.duration = Math.max(1, targetTicks - runningScaled); // absorb rounding error on the last sample
+        } else {
+          const scaledDur = Math.max(1, Math.round(s.duration * scale));
+          s.duration = scaledDur;
+          runningScaled += scaledDur;
+        }
+      });
+      t.trackDurationMs = Math.round(t.samples.reduce((a, s) => a + s.duration, 0) / t.timescale * 1000) || 1;
+      t._debugScale = scale; t._debugOwnSecondsBefore = ownSeconds;
+    });
+    // Align every track to ONE shared real-world zero point (the earliest
+    // of all tracks' true starts) instead of each track just being zeroed
+    // to its own first sample — otherwise a track that genuinely starts
+    // later (e.g. audio a few ms after the first video frame) plays from
+    // frame one with no correction for that gap at all.
+    const globalOriginSeconds = Math.min(...trackDefs.map(t => t.firstTfdtSeconds));
+    trackDefs.forEach(t => { t.startOffsetMs = Math.round((t.firstTfdtSeconds - globalOriginSeconds) * 1000); });
+
+    // Even a correctly-built flat MP4 (real sample table, correct edit
+    // lists) isn't enough to guarantee sync ACROSS a seek: plenty of
+    // lightweight decoders (Android WebView's included) seek video to the
+    // nearest keyframe at/before the target but seek audio to the exact
+    // requested time, so the two tracks resume from genuinely different
+    // points — a gap up to one GOP length (commonly 10-15s on real-world
+    // streams). The only real fix is to never ask for a seek target that
+    // falls mid-GOP in the first place: snap the request to a keyframe
+    // ourselves so both tracks are told to start from the same instant.
+    // Compute the video track's real keyframe times, in movie-timeline
+    // seconds (its own sample-table time plus its startOffsetMs edit-list
+    // shift, same units as <video>.currentTime), from the sample data
+    // already built above — cheap, since it's just the running duration
+    // sum up to each sync sample index, no extra parsing needed.
+    let videoKeyframeSeconds = null;
+    const videoTrackDef = trackDefs.find(t => t.isVideo);
+    if (videoTrackDef) {
+      const times = [];
+      let acc = 0;
+      for (const s of videoTrackDef.samples) {
+        if (s.sync) times.push(acc + videoTrackDef.startOffsetMs / 1000);
+        acc += s.duration / videoTrackDef.timescale;
+      }
+      if (times.length) videoKeyframeSeconds = times;
+    }
 
     // Lay out one mdat containing every track's samples back-to-back
     // (track order = trak order), and record each sample's absolute file
@@ -4452,7 +4838,30 @@ async function remuxFragmentedToFlatMp4(initSegment, mediaChunks) {
         mp4bU16(0x55c4), new Uint8Array(2) // language="und", pre_defined
       ]));
       const mdia = mp4bBox('mdia', mdhd, t.hdlrBytes, minf);
-      return mp4bBox('trak', t.tkhdBytes, mdia);
+      // If this track's real start lags behind the other track's (see
+      // startOffsetMs above), encode that as an actual edit list: an
+      // initial "empty edit" that holds the track silent/blank for the gap
+      // before its first real sample plays, expressed in the movie's own
+      // (millisecond) timescale. Without this, both tracks' sample tables
+      // start at movie time 0 regardless of which one's content actually
+      // began later on the real timeline — which is exactly what let a
+      // small, constant audio/video offset slip in from frame one, on top
+      // of the separate growing-drift issue already fixed elsewhere.
+      let edts = null;
+      if (t.startOffsetMs > 0) {
+        const trackDurationMs = Math.round(t.samples.reduce((a, s) => a + s.duration, 0) / t.timescale * 1000) || 1;
+        const emptyEdit = concatUint8([mp4bU32(t.startOffsetMs), mp4bU32(0xFFFFFFFF), mp4bU16(1), mp4bU16(0)]);
+        const playEdit = concatUint8([mp4bU32(trackDurationMs), mp4bU32(0), mp4bU16(1), mp4bU16(0)]);
+        const elst = mp4bBox('elst', new Uint8Array(4), mp4bU32(2), emptyEdit, playEdit);
+        edts = mp4bBox('edts', elst);
+      }
+      // Patch tkhd's duration to this track's real total length (its own
+      // content duration plus any leading startOffsetMs gap) instead of the
+      // stale value copied from the original live recording — see the
+      // trackDefs.push comment above.
+      const patchedTkhd = mp4bPatchTkhdDuration(
+        t.tkhdBytes, t.tkhdHeaderSize, t.tkhdVersion, t.startOffsetMs + t.trackDurationMs);
+      return edts ? mp4bBox('trak', patchedTkhd, edts, mdia) : mp4bBox('trak', patchedTkhd, mdia);
     });
     const moovOut = mp4bBox('moov', mvhd, ...trakBoxes);
 
@@ -4486,7 +4895,13 @@ async function remuxFragmentedToFlatMp4(initSegment, mediaChunks) {
 
     const mdatBody = concatUint8(trackSampleData.map(t => t.bytes));
     const mdat = mp4bBox('mdat', mdatBody);
-    return new Blob([ftypBytes, moovOut, mdat], { type: 'video/mp4' });
+    const flatBlob = new Blob([ftypBytes, moovOut, mdat], { type: 'video/mp4' });
+    // Reuse the same _segmentStarts convention swapTabToBlob/preciseSeek
+    // already read from HLS downloads — so a flat file's own real keyframes
+    // get snapped to on seek exactly like a fragmented one's did, instead
+    // of silently getting no snap protection at all just because it's flat.
+    if (videoKeyframeSeconds) flatBlob._segmentStarts = videoKeyframeSeconds;
+    return flatBlob;
   } catch (e) {
     return null;
   }
@@ -4838,7 +5253,13 @@ async function playHlsProgressive(tab, url) {
     // untouched if the remux can't be done for any reason.
     if (blob && fragInit && fragChunks && fragChunks.length) {
       const flat = await remuxFragmentedToFlatMp4(fragInit, fragChunks);
-      if (flat) blob = flat;
+      // Once flattened, the boundaries captured earlier belonged to the old
+      // fragmented timeline and no longer match — swap in the flat file's
+      // own real keyframe times (or null if none were derivable) instead of
+      // leaving the stale ones in place, which is what caused seeks on the
+      // saved copy to snap to the wrong point and throw audio/video out of
+      // sync.
+      if (flat) { blob = flat; tab._segmentBoundaries = flat._segmentStarts || null; }
     }
     if (blob) {
       tab._savedBlob = blob;
@@ -4947,10 +5368,15 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
       if (flat) return flat;
     }
     const fmp4Blob = new Blob(initBuf ? [initBuf, ...parts] : parts, { type: 'video/mp4' });
-    // fMP4/CMAF segments are individually well-formed (each has its own
-    // moof/mdat with correct sample tables from the init segment), so they
-    // don't suffer the transmux-seek desync below — no boundaries needed.
-    fmp4Blob._segmentStarts = null;
+    // Being individually well-formed per-segment only rules out the
+    // nominal-duration DRIFT problem (each segment carries its own real
+    // tfdt, so no error can accumulate across segments). It says nothing
+    // about the separate, unrelated seek-time problem: a seek can still
+    // land mid-GOP and make video snap to the nearest keyframe while audio
+    // resumes at the exact requested time — same as everywhere else this
+    // is handled. Derive real keyframe times from these segments' own tfdt
+    // boxes instead of leaving boundaries unset.
+    fmp4Blob._segmentStarts = initBuf ? parseMp4KeyframeTimes(initBuf, parts) : null;
     return fmp4Blob;
   }
 
@@ -4999,11 +5425,11 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
     transmuxer.flush();
     await muxDonePromise;
     if (!initSegment || !mediaChunks.length) throw new Error('Remux produced no playable data');
-    // Flat MP4 first — a flat file has a real sample table, so it needs no
-    // keyframe-snap workaround for seeking at all (that hack was only ever
-    // there to work around fragmented playback, see preciseSeek). Only
-    // fall back to the fragmented blob + boundary-snapping if the flat
-    // rewrite fails for some reason.
+    // Flat MP4 first — a flat file has a real sample table AND (as of the
+    // fix above) its own real keyframe times attached for seek-snapping, so
+    // it no longer needs the separate fragmented-blob + EXTINF-based
+    // boundary path below at all. Only fall back to the fragmented blob if
+    // the flat rewrite itself fails for some reason.
     const flat = await remuxFragmentedToFlatMp4(initSegment, mediaChunks);
     if (flat) return flat;
     const muxedBlob = new Blob([initSegment, ...mediaChunks], { type: 'video/mp4' });
