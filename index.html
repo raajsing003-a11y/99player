@@ -938,7 +938,7 @@
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '13';
+const NOVA_VERSION = '15';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -1585,6 +1585,7 @@ function loadUrl(tabId, rawUrl, isNewNav) {
     tab.el.replaceWith(newEl);
     tab.el = newEl;
     tab.isVideo = true;
+    tab._corsRetried = false;
     tab.aspect = tab.aspect || 'fit';
     bindVideoElementEvents(tab);
     applyAspect(tab, tab.aspect);
@@ -1613,6 +1614,7 @@ function loadUrl(tabId, rawUrl, isNewNav) {
     tab._savedFilename = null;
     tab._blobFallbackTried = false;
     tab._segmentBoundaries = null;
+    tab._corsRetried = false;
     // A previous hls.js instance from an earlier video in this same tab
     // must be torn down before attaching a new source — otherwise it keeps
     // fetching the old stream's segments in the background and can fight
@@ -1629,6 +1631,7 @@ function loadUrl(tabId, rawUrl, isNewNav) {
       tab._blobFallbackTried = true;
       loadVideoViaHlsJs(tab, url);
     } else {
+      tab.el.crossOrigin = null;
       tab.el.src = url;
       tab.el.play().catch(() => {});
       ensureAudioGraphIfBoosted(tab);
@@ -2138,11 +2141,18 @@ function drawGradingFrame(tab) {
   try {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, tab.el);
   } catch (e) {
-    // Cross-origin video without CORS headers permanently taints the WebGL
-    // canvas the instant we try to read its pixels — every future frame
-    // will fail the exact same way, it's not transient. Signal the loop to
-    // stop and fall back to plain <video> instead of leaving a black,
-    // never-updating canvas on screen indefinitely.
+    // Cross-origin video without CORS *mode* taints the canvas — and
+    // critically, the <video> element only makes a CORS-mode request if
+    // `crossOrigin` was set before it started loading. It never was, so
+    // this used to fail permanently even for servers that DO send
+    // Access-Control-Allow-Origin and would happily have allowed it.
+    // Try once: reload the same URL with crossOrigin='anonymous', keeping
+    // the current playback position, and see if that server actually
+    // supports it. Only give up for real once that retry has also failed.
+    if (!tab._corsRetried) {
+      retryVideoWithCors(tab);
+      return true; // don't tear down the loop yet — retry is in flight
+    }
     return false;
   }
   gl.uniform2f(g.u_texel, 1 / vw, 1 / vh);
@@ -2153,6 +2163,41 @@ function drawGradingFrame(tab) {
   gl.uniform1f(g.u_selSat, settings.selSat / 100);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   return true;
+}
+function retryVideoWithCors(tab) {
+  tab._corsRetried = true;
+  const url = tab.el.currentSrc || tab.el.src;
+  if (!url) return;
+  const savedTime = tab.el.currentTime || 0;
+  const wasPlaying = !tab.el.paused;
+  const finishReload = () => {
+    tab.el.removeEventListener('loadedmetadata', onLoaded);
+    tab.el.removeEventListener('error', onError);
+    if (savedTime > 0) tab.el.currentTime = savedTime;
+    if (wasPlaying) tab.el.play().catch(() => {});
+    // Reset the GL object so initGradingGL/drawGradingFrame start fresh
+    // against the reloaded element, and re-arm grading if it's still wanted.
+    tab.gl = null;
+    if (tab.id === activeTabId && isGradingNeeded()) setGradingVisible(tab, true);
+  };
+  const onLoaded = () => finishReload();
+  const onError = () => {
+    // This server genuinely doesn't support CORS — revert to the plain
+    // (non-CORS) load so playback itself isn't broken, and let the normal
+    // "effects aren't available for this video" path take over from here.
+    tab.el.removeEventListener('loadedmetadata', onLoaded);
+    tab.el.removeEventListener('error', onError);
+    tab.el.crossOrigin = null;
+    tab.el.src = url;
+    tab.el.load();
+    if (savedTime > 0) tab.el.currentTime = savedTime;
+    if (wasPlaying) tab.el.play().catch(() => {});
+  };
+  tab.el.addEventListener('loadedmetadata', onLoaded);
+  tab.el.addEventListener('error', onError);
+  tab.el.crossOrigin = 'anonymous';
+  tab.el.src = url;
+  tab.el.load();
 }
 function startGradingLoop(tab) {
   if (gradingRAF) cancelAnimationFrame(gradingRAF);
@@ -2791,10 +2836,15 @@ document.querySelectorAll('#orientMenu button').forEach(b => {
     return !!target.closest('button, input, select, .video-controlbar, .float-menu, .lock-overlay');
   }
 
-  /* Double-tap left/right half of the video = skip -10s / +10s (YouTube-style) */
+  /* Double-tap left/right half of the video = skip -10s / +10s (YouTube-style).
+     Intentionally works even while screen-locked (but not during Kids Lock,
+     where all playback control should stay disabled) — the lock overlay
+     sits on top of the stage and normally swallows every touch, which is
+     why this used to silently stop working the moment the screen was
+     locked. */
   function handleDoubleTapCheck(clientX) {
     const tab = getTab(activeTabId);
-    if (!tab || !tab.isVideo || isLocked) return false;
+    if (!tab || !tab.isVideo || isKidsLock) return false;
     const side = clientX > window.innerWidth / 2 ? 'right' : 'left';
     const now = Date.now();
     if (lastTapSide === side && (now - lastTapTime) < 320) {
@@ -2905,6 +2955,24 @@ document.querySelectorAll('#orientMenu button').forEach(b => {
     if (!didDoubleTap) hideIndicator();
   });
   stage.addEventListener('touchcancel', () => { mode = null; hideIndicator(); });
+
+  // The lock overlay (position:absolute, inset:0) sits above the stage and
+  // intercepts every touch while locked — that's what was blocking
+  // double-tap-to-skip. Give it the same double-tap handling directly,
+  // ignoring taps that land on the small unlock card itself so unlocking
+  // still works normally.
+  const lockOverlayEl = document.getElementById('lockOverlay');
+  let lockOverlayDidDoubleTap = false;
+  lockOverlayEl.addEventListener('touchend', (e) => {
+    if (e.target.closest('.lock-card')) return;
+    if (!e.changedTouches || e.changedTouches.length !== 1) return;
+    lockOverlayDidDoubleTap = handleDoubleTapCheck(e.changedTouches[0].clientX);
+    if (lockOverlayDidDoubleTap) e.preventDefault();
+  });
+  lockOverlayEl.addEventListener('dblclick', (e) => {
+    if (e.target.closest('.lock-card')) return;
+    handleDoubleTapCheck(e.clientX);
+  });
 })();
 
 /* ================= Wire up: navigation ================= */
@@ -5356,7 +5424,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // tail" that drags out near the very end). 768KB is close to the
       // sweet spot before per-request overhead (headers, TLS, connection
       // setup) starts eating into the gains from finer-grained balancing.
-      const PIECE_SIZE = 512 * 1024;
+      const PIECE_SIZE = 1024 * 1024;
       const pieceCount = Math.max(1, Math.ceil(len / PIECE_SIZE));
       const pieces = [];
       for (let i = 0; i < pieceCount; i++) {
@@ -5401,7 +5469,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // the pool off on its own instead of forcing it and risking a broken
       // download. That self-limiting behavior is what makes it safe to set
       // the ceiling itself higher than before.
-      const MAX_WORKERS = 384;
+      const MAX_WORKERS = 192;
       const fetchPiece = async (idx, attemptsLeft) => {
         const [start, end] = pieces[idx];
         try {
@@ -5468,21 +5536,24 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
         allWorkerPromises.push(p);
         return p;
       }
-      const START_WORKERS = 192;
+      const START_WORKERS = 96;
       for (let i = 0; i < Math.min(START_WORKERS, pieces.length); i++) launchWorker();
-      // Ramp: every 25ms, if nothing has failed recently and there's still
-      // unclaimed work, add up to 24 more workers — up to MAX_WORKERS. Stops
-      // ramping permanently the moment any real failure is seen (server
-      // pushing back), so a connection/server that can't sustain this many
-      // requests backs off on its own instead of forcing it and breaking the
-      // download. Pushed as high/fast as is still safe — the self-limiting
-      // rampBlocked check is what keeps this from actually overloading a
-      // slower server or network; it only ever grows while every recent
-      // request is succeeding cleanly.
+      // Ramp: every 120ms, if nothing has failed recently and there's still
+      // unclaimed work, add up to 8 more workers — up to MAX_WORKERS. A
+      // slower, steadier ramp (vs. slamming straight to a huge worker
+      // count) matters because most video CDNs rate-limit or briefly
+      // throttle a burst of simultaneous connections from one client —
+      // that server-side throttling is what actually caused download speed
+      // to spike, suddenly drop mid-download, then recover a bit later.
+      // Growing gradually stays under that trigger threshold instead of
+      // repeatedly tripping it. Still stops ramping permanently the moment
+      // any real failure is seen (server pushing back), so a
+      // connection/server that can't sustain this many requests backs off
+      // on its own instead of forcing it and breaking the download.
       const ramp = setInterval(() => {
         if (rampBlocked || firstFatalError || nextPiece >= pieces.length || activeWorkers >= MAX_WORKERS) { clearInterval(ramp); return; }
-        for (let i = 0; i < 24 && activeWorkers < MAX_WORKERS && nextPiece < pieces.length && !rampBlocked; i++) launchWorker();
-      }, 25);
+        for (let i = 0; i < 8 && activeWorkers < MAX_WORKERS && nextPiece < pieces.length && !rampBlocked; i++) launchWorker();
+      }, 120);
       // Wait for the whole pool to actually drain — poll instead of a single
       // Promise.all call, since the set of promises to wait for keeps
       // growing for as long as the ramp is still adding workers.
