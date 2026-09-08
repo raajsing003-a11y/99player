@@ -3963,14 +3963,20 @@ const CORS_PROXIES = [
   // corsproxy.io now requires a paid API key for every request and returns
   // 401 without one — removed so it stops burning a slot/timeout on every extraction.
   url => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url),
-  url => 'https://thingproxy.freeboard.io/fetch/' + url,
-  url => 'https://proxy.cors.sh/' + url,
+  // thingproxy.freeboard.io — dead. Ran on Heroku's free dyno tier, which
+  // Heroku discontinued years ago; every request now 404s. Removed.
+  // yacdn.org — abandoned, no longer resolving/serving. Removed.
+  // proxy.cors.sh — now requires a paid x-cors-api-key header on every
+  // request (401 without one), same situation as corsproxy.io above. Removed.
   url => 'https://api.cors.lol/url=' + url, // free, no key needed as of 2026
-  url => 'https://corsfix.com/' + url, // free for dev/open-source use, no key needed
-  url => 'https://yacdn.org/proxy/' + url,
-  url => 'https://cors.eu.org/' + url,
-  url => 'https://api.allorigins.win/get?url=' + encodeURIComponent(url),
-  url => 'https://test.cors.workers.dev/?' + url,
+  // corsfix's actual proxy endpoint is proxy.corsfix.com/?url=<target> — the
+  // previous corsfix.com/<url> form isn't a real route and always 404s.
+  url => 'https://proxy.corsfix.com/?url=' + encodeURIComponent(url), // free dev tier, no key needed
+  url => 'https://cors.x2u.in/' + url, // free, ~100 req/hour, no key needed
+  // cors.eu.org — unreliable/frequently unreachable. Removed.
+  url => 'https://api.allorigins.win/get?url=' + encodeURIComponent(url), // JSON-wrapped {contents:...} — already unwrapped below
+  url => 'https://whateverorigin.org/get?url=' + encodeURIComponent(url), // same JSON-wrapped format as allorigins, independent host
+  // test.cors.workers.dev isn't a real deployed public service — always 404s. Removed.
   url => url.replace(/^https:/, 'http:') // some blocked-by-HTTPS-mixed-content pages resolve over plain http
 ];
 const PROXY_TIMEOUT_MS = 12000;
@@ -3984,10 +3990,12 @@ const FAST_CORS_PROXIES = [
   url => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
   // corsproxy.io removed — now needs a paid API key, always 401s without one.
   url => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url),
-  url => 'https://thingproxy.freeboard.io/fetch/' + url,
-  url => 'https://proxy.cors.sh/' + url,
+  // thingproxy.freeboard.io removed — dead (Heroku free dyno tier is gone).
+  // proxy.cors.sh removed — now requires a paid x-cors-api-key header.
   url => 'https://api.cors.lol/url=' + url,
-  url => 'https://corsfix.com/' + url
+  url => 'https://proxy.corsfix.com/?url=' + encodeURIComponent(url), // fixed endpoint path (was 404ing)
+  url => 'https://cors.x2u.in/' + url,
+  url => 'https://whateverorigin.org/get?url=' + encodeURIComponent(url) // JSON-wrapped, independent host
 ];
 // Restored from the older version: 4500ms was cutting off proxies that would
 // have succeeded a couple seconds later on slower/heavier pages — 7000ms
@@ -4301,7 +4309,7 @@ async function scanUrlForVideoCandidates(pageUrl, statusEl) {
         let html = await res.text();
         // allorigins' /get endpoint wraps the page in {"contents":"...","status":{...}} JSON
         // instead of returning raw HTML — unwrap it so the regex scan still works.
-        if (fetchUrl.indexOf('allorigins.win/get') !== -1) {
+        if (fetchUrl.indexOf('allorigins.win/get') !== -1 || fetchUrl.indexOf('whateverorigin.org/get') !== -1) {
           try { const parsed = JSON.parse(html); if (parsed && typeof parsed.contents === 'string') html = parsed.contents; } catch (e) {}
         }
         if (!html || html.length < 50) { NovaDebug.warn('extract', 'Route #' + proxyIdx + ' returned an empty/too-short response (' + (html ? html.length : 0) + ' chars)'); resolve(null); return; }
@@ -4358,7 +4366,7 @@ async function extractVideoCandidatesFast(pageUrl) {
     const res = await fetchWithTimeout(fetchUrl, { method: 'GET', mode: 'cors' }, FAST_PROXY_TIMEOUT_MS);
     if (!res.ok) return null;
     let html = await res.text();
-    if (fetchUrl.indexOf('allorigins.win/get') !== -1) {
+    if (fetchUrl.indexOf('allorigins.win/get') !== -1 || fetchUrl.indexOf('whateverorigin.org/get') !== -1) {
       try { const parsed = JSON.parse(html); if (parsed && typeof parsed.contents === 'string') html = parsed.contents; } catch (e) {}
     }
     if (!html || html.length < 50) return null;
@@ -4397,7 +4405,7 @@ async function extractVideoCandidatesFast(pageUrl) {
         NovaDebug.log('extract', '[fast] Route #' + proxyIdx + ' responded', 'status=' + res.status + '  ' + fetchUrl);
         if (!res.ok) { resolve(null); return; }
         let html = await res.text();
-        if (fetchUrl.indexOf('allorigins.win/get') !== -1) {
+        if (fetchUrl.indexOf('allorigins.win/get') !== -1 || fetchUrl.indexOf('whateverorigin.org/get') !== -1) {
           try { const parsed = JSON.parse(html); if (parsed && typeof parsed.contents === 'string') html = parsed.contents; } catch (e) {}
         }
         if (!html || html.length < 50) { resolve(null); return; }
