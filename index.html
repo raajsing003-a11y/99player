@@ -1144,7 +1144,7 @@ const NovaDebug = (function() {
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '1.8';
+const NOVA_VERSION = '2.0';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -3980,9 +3980,11 @@ const CORS_PROXIES = [
   url => 'https://api.allorigins.win/get?url=' + encodeURIComponent(url), // JSON-wrapped {contents:...} — already unwrapped below
   url => 'https://whateverorigin.org/get?url=' + encodeURIComponent(url), // same JSON-wrapped format as allorigins, independent host
   // test.cors.workers.dev isn't a real deployed public service — always 404s. Removed.
+  url => 'https://corsproxy.org/?' + encodeURIComponent(url), // independent free proxy, different host/infra than the others above
+  url => 'https://cors.eu.org/' + url, // separate free proxy host, kept as one more independent route
   url => url.replace(/^https:/, 'http:') // some blocked-by-HTTPS-mixed-content pages resolve over plain http
 ];
-const PROXY_TIMEOUT_MS = 12000;
+const PROXY_TIMEOUT_MS = 30000;
 // Fast-path proxies: the original, smaller/quicker route list used before the
 // extractor grew extra routes, retries and iframe-following. Tried first on every
 // extraction because it resolves in a few seconds for the common case (video
@@ -3998,12 +4000,13 @@ const FAST_CORS_PROXIES = [
   url => 'https://api.cors.lol/url=' + url,
   url => 'https://proxy.corsfix.com/?url=' + encodeURIComponent(url), // fixed endpoint path (was 404ing)
   url => 'https://cors.x2u.in/' + url,
-  url => 'https://whateverorigin.org/get?url=' + encodeURIComponent(url) // JSON-wrapped, independent host
+  url => 'https://whateverorigin.org/get?url=' + encodeURIComponent(url), // JSON-wrapped, independent host
+  url => 'https://corsproxy.org/?' + encodeURIComponent(url) // extra independent route, different host/infra
 ];
 // Restored from the older version: 4500ms was cutting off proxies that would
 // have succeeded a couple seconds later on slower/heavier pages — 7000ms
 // matches the fast-path timeout that was working reliably before.
-const FAST_PROXY_TIMEOUT_MS = 7000;
+const FAST_PROXY_TIMEOUT_MS = 20000;
 let lastExtractFailReason = '';
 
 // fetch with a hard timeout, so one dead/slow proxy doesn't stall the whole chain
