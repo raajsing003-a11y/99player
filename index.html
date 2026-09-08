@@ -59,7 +59,7 @@
     align-items:center; justify-content:center; backdrop-filter:blur(6px);
     box-shadow:0 2px 8px rgba(0,0,0,0.4); flex-shrink:0;
   }
-  .player-folder-btn.visible { display:flex; }
+  .player-folder-btn.visible { display:none !important; }
 
   /* Single row that owns the whole top-left corner — exit / folder / kids-lock
      badge all live here as normal flex children instead of each guessing its
@@ -381,6 +381,7 @@
     box-shadow:0 2px 10px rgba(0,0,0,0.4);
   }
   .auto-dl-indicator.ready { background:rgba(126,201,138,0.85); color:#0a2e10; cursor:pointer; font-weight:600; }
+  #autoDlIndicator, #playerFolderBtn { display:none !important; }
 
   /* Gesture feedback indicator */
   .gesture-indicator {
