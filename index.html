@@ -764,6 +764,7 @@
         <div class="quality-list" id="qualityList"></div>
         <div class="extract-buttons">
           <button id="extractCancelBtn" class="secondary">Cancel</button>
+          <button id="extractDebugBtn" title="Debug — why extraction failed" style="flex:0 0 auto; padding:0 14px;">&#128027;</button>
           <button id="extractGoBtn" class="primary">Find video</button>
         </div>
         <div class="extract-note">Works best on blogs, news sites and pages that host their own video file. Sites like YouTube, Instagram, Facebook or Netflix protect their video streams and can't be opened this way &mdash; paste a direct video link instead.</div>
@@ -778,6 +779,7 @@
         <div class="extract-status" id="directDlStatus"></div>
         <div class="extract-buttons">
           <button id="directDlPlayBtn" class="secondary">&#9654; Play</button>
+          <button id="directDlDebugBtn" title="Debug — why this failed" style="flex:0 0 auto; padding:0 14px;">&#128027;</button>
           <button id="directDlGoBtn" class="primary">&#9889; Download</button>
         </div>
         <div class="extract-note">Download saves the original file as downloaded from the source &mdash; HLS (.m3u8) streams are saved as a raw .ts file (playable with VLC/MX Player), everything else keeps its original format.</div>
@@ -6882,6 +6884,8 @@ function hideDirectDlOverlayCosmetic() {
 }
 document.getElementById('directDlBtn').addEventListener('click', () => openDirectDlOverlay());
 document.getElementById('debugBtn').addEventListener('click', () => NovaDebug.toggle());
+document.getElementById('extractDebugBtn').addEventListener('click', () => NovaDebug.toggle());
+document.getElementById('directDlDebugBtn').addEventListener('click', () => NovaDebug.toggle());
 NovaDebug.setBadgeEl(document.getElementById('ndbgBadge'));
 document.getElementById('directDlPlayBtn').addEventListener('click', async () => {
   const raw = (document.getElementById('directDlUrlInput').value || '').trim();
