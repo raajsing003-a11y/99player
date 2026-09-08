@@ -2509,7 +2509,13 @@ function initGradingGL(tab) {
   };
   return tab.gl;
 }
-function isGradingNeeded() { return settings.vibrance !== 100 || settings.selSat !== 100 || settings.aiEnhance > 0 || settings.temperature !== 0 || settings.skinSmooth > 0 || settings.skinProtect; }
+// Color/AI Enhance grading (the WebGL canvas overlay) is disabled outright —
+// it was the cause of the video going black while audio kept playing on
+// videos whose server doesn't support CORS. Forcing this false means
+// setGradingVisible() never switches the canvas on, so playback always
+// stays on the plain <video> element, no matter what the Enhance sliders
+// are set to.
+function isGradingNeeded() { return false; }
 function setGradingVisible(tab, on) {
   if (!tab || !tab.canvas) return;
   if (on) {
