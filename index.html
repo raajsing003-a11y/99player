@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nova Browser 1.0</title>
+<title>Nova Browser 1.1</title>
 <meta name="description" content="A private in-app browser with fast video download and offline playback.">
 <meta name="theme-color" content="#121212">
 <meta name="mobile-web-app-capable" content="yes">
@@ -216,6 +216,7 @@
     flex:1 1 auto; padding:10px 20px; border-radius:20px; border:none;
     background:#d97757; color:#fff; font-size:14px; font-weight:600; cursor:pointer;
   }
+  .go-btn.secondary-go { background:#1a9e8f; }
   #status {
     padding:6px 14px; font-size:11.5px; color:#999; background:#1a1a1a;
     display:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
@@ -562,6 +563,40 @@
   }
   .mini-toast.visible { opacity:1; transform:translateX(-50%) translateY(0); }
 
+  /* ---------- Debug panel ---------- */
+  .ndbg-badge {
+    position:absolute; top:-4px; right:-4px; width:16px; height:16px; border-radius:50%;
+    background:#e5484d; color:#fff; font-size:9.5px; font-weight:700; display:none;
+    align-items:center; justify-content:center; line-height:1;
+  }
+  .ndbg-panel {
+    position:fixed; left:10px; right:10px; bottom:10px; top:15%; z-index:70;
+    background:#141414; border:1px solid #333; border-radius:16px; display:none;
+    flex-direction:column; overflow:hidden; box-shadow:0 10px 30px rgba(0,0,0,0.5);
+  }
+  .ndbg-panel.open { display:flex; }
+  .ndbg-head {
+    display:flex; align-items:center; justify-content:space-between; padding:12px 14px;
+    background:#1e1e1e; border-bottom:1px solid #2c2c2c; color:#eee; font-size:13px; font-weight:600;
+  }
+  .ndbg-head-btns { display:flex; gap:6px; }
+  .ndbg-head-btns button {
+    width:30px; height:30px; border-radius:10px; border:none; background:#2a2a2a; color:#ccc;
+    font-size:13px; cursor:pointer;
+  }
+  .ndbg-log {
+    flex:1; overflow-y:auto; padding:10px 12px; font-family:ui-monospace,Menlo,Consolas,monospace;
+    font-size:11px; line-height:1.55;
+  }
+  .ndbg-line { padding:4px 0; border-bottom:1px solid #212121; word-break:break-word; }
+  .ndbg-time { color:#666; margin-right:6px; }
+  .ndbg-tag { color:#7ec9d9; margin-right:6px; }
+  .ndbg-msg { color:#ddd; }
+  .ndbg-data { color:#888; margin-top:2px; padding-left:12px; white-space:pre-wrap; }
+  .ndbg-line.ndbg-warn .ndbg-msg { color:#e0b34d; }
+  .ndbg-line.ndbg-err .ndbg-msg { color:#e57373; font-weight:600; }
+  .ndbg-line.ndbg-err .ndbg-tag { color:#e57373; }
+
   /* ---------- Fast download & play overlay ---------- */
   .fastload-overlay {
     position:absolute; inset:0; z-index:10; display:none;
@@ -610,7 +645,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 1.0</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 1.1</div>
   </div>
 
   <div class="toolbar">
@@ -624,16 +659,7 @@
       <button class="url-copy-btn" id="urlCopyBtn" title="Copy this website's link">&#128203;</button>
       <button class="url-copy-btn" id="urlExternalBtn" title="Open in your device's browser (use this if a site refuses to load here)">&#8663;</button>
     </div>
-    <select id="engineSelect" title="Search engine">
-      <option value="bing">Bing</option>
-      <option value="ddg">DuckDuckGo</option>
-      <option value="google">Google</option>
-      <option value="brave">Brave</option>
-      <option value="ecosia">Ecosia</option>
-      <option value="startpage">Startpage</option>
-      <option value="yahoo">Yahoo</option>
-      <option value="wikipedia">Wikipedia</option>
-    </select>
+    <button class="icon-btn" id="directDlBtn" title="Direct download (no play needed)">&#11015;&#65039;</button>
     <div class="extra-buttons">
       <button class="icon-btn" id="downloadsBtn" title="Downloads">&#8681;</button>
       <button class="icon-btn" id="offlineBtn" title="Offline library">&#128190;</button>
@@ -644,6 +670,16 @@
       <button class="icon-btn" id="maskModeBtn" title="Mask URLs &amp; searches (privacy screen)">&#128373;</button>
       <button class="icon-btn" id="fullscreenBtn" title="Fullscreen">&#9974;</button>
       <button class="icon-btn" id="extractVideoBtn" title="Open video from a page link">&#127916;</button>
+      <select id="engineSelect" title="Search engine">
+        <option value="bing">Bing</option>
+        <option value="ddg">DuckDuckGo</option>
+        <option value="google">Google</option>
+        <option value="brave">Brave</option>
+        <option value="ecosia">Ecosia</option>
+        <option value="startpage">Startpage</option>
+        <option value="yahoo">Yahoo</option>
+        <option value="wikipedia">Wikipedia</option>
+      </select>
       <button class="icon-btn" id="immersiveBtn" title="Hide toolbar (full-page view)">&#128065;</button>
       <button class="icon-btn" id="desktopBtn" title="Toggle desktop/mobile view">&#128421;</button>
       <button class="icon-btn" id="enhanceBtn" title="Video enhancer" disabled><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"/></svg></button>
@@ -669,6 +705,7 @@
       <div class="home-search" id="homeSearchBox"><span class="hs-icon">&#128269;</span>Search or type a URL</div>
       <div class="home-grid-card">
         <div class="home-grid">
+          <button class="home-shortcut" data-target="directDlBtn"><span class="circle" style="background:#1a9e8f">&#9889;</span><span class="label">Direct DL</span></button>
           <button class="home-shortcut" data-target="downloadsBtn"><span class="circle" style="background:#1fae7f">&#8681;</span><span class="label">Downloads</span></button>
           <button class="home-shortcut" data-target="offlineBtn"><span class="circle" style="background:#7a5cd9">&#128190;</span><span class="label">Offline</span></button>
           <button class="home-shortcut" data-target="openFileBtn"><span class="circle" style="background:#2f7fd9">&#128194;</span><span class="label">Open file</span></button>
@@ -728,6 +765,20 @@
         <div class="extract-note">Works best on blogs, news sites and pages that host their own video file. Sites like YouTube, Instagram, Facebook or Netflix protect their video streams and can't be opened this way &mdash; paste a direct video link instead.</div>
       </div>
     </div>
+    <div class="extract-overlay" id="directDlOverlay">
+      <div class="extract-card" style="position:relative;">
+        <button id="directDlCloseBtn" title="Close" style="position:absolute; top:10px; right:10px; width:30px; height:30px; border-radius:50%; border:none; background:#2a2a2a; color:#ccc; font-size:15px; cursor:pointer; display:flex; align-items:center; justify-content:center;">&#10005;</button>
+        <div class="extract-title">Open a link</div>
+        <div class="extract-sub">Paste any video link (.mp4, .mkv, .m3u8, etc). Play it normally, or download it straight to your device at full speed without opening it first &mdash; saved exactly as-is, no format conversion.</div>
+        <input type="text" inputmode="url" id="directDlUrlInput" placeholder="https://example.com/video.mp4" autocomplete="off" autocapitalize="off" autocorrect="off">
+        <div class="extract-status" id="directDlStatus"></div>
+        <div class="extract-buttons">
+          <button id="directDlPlayBtn" class="secondary">&#9654; Play</button>
+          <button id="directDlGoBtn" class="primary">&#9889; Download</button>
+        </div>
+        <div class="extract-note">Download saves the original file as downloaded from the source &mdash; HLS (.m3u8) streams are saved as a raw .ts file (playable with VLC/MX Player), everything else keeps its original format.</div>
+      </div>
+    </div>
     <div class="auto-dl-indicator" id="autoDlIndicator" style="display:none;">&#8681; <span id="autoDlPct">0%</span></div>
 
     <div class="quick-controls" id="quickControls" style="display:none;">
@@ -742,6 +793,7 @@
       <button id="orientBtn" title="Orientation">&#128260;</button>
       <button id="fullscreenBtnPlayer" title="Fullscreen">&#9974;</button>
       <button id="lockBtn" title="Lock screen (hold for Kids Lock)">&#128275;</button>
+      <button id="debugBtn" title="Debug — why playback/download failed" style="position:relative;">&#128027;<span class="ndbg-badge" id="ndbgBadge"></span></button>
     </div>
 
     <div class="float-menu" id="aspectMenu">
@@ -822,10 +874,23 @@
         <input type="range" id="sat" min="0" max="200" value="100">
       </div>
       <div class="slider-row">
+        <label><span>Temperature</span><span class="val-wrap"><span id="temperatureVal">0</span><button class="reset-btn" data-key="temperature" data-default="0" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="temperature" min="-100" max="100" value="0">
+      </div>
+      <div class="note">Negative values push the video cooler (blue), positive values push it warmer (orange). Needs GPU rendering like Vibrance/Selective color below.</div>
+      <div class="slider-row">
         <label><span>Vibrance</span><span class="val-wrap"><span id="vibranceVal">100%</span><button class="reset-btn" data-key="vibrance" data-default="100" title="Reset">&#8635;</button></span></label>
         <input type="range" id="vibrance" min="0" max="200" value="100">
       </div>
       <div class="note">Vibrance boosts dull/muted colors more than already-saturated ones (skin tones move less than a global Saturation boost would).</div>
+      <div class="row-buttons">
+        <button id="skinProtectBtn" title="Shields skin tones from getting oversaturated/plasticky when Vibrance or AI Enhance are pushed up — lips stay their normal red since they're detected separately from skin.">Skin tone protection: Off</button>
+      </div>
+      <div class="slider-row">
+        <label><span>Skin Smoothing (Beautify)</span><span class="val-wrap"><span id="skinSmoothVal">0</span><button class="reset-btn" data-key="skinSmooth" data-default="0" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="skinSmooth" min="0" max="100" value="0">
+      </div>
+      <div class="note">Softens skin tones for a smoother, beauty-cam look. Eyes, brows, lips and hairline are detected separately and kept sharp so faces don't look blurry overall. Needs GPU rendering like Vibrance/Selective color.</div>
       <div class="slider-row">
         <label><span>Selective color</span><span class="val-wrap"><span id="selSwatch" style="display:inline-block;width:14px;height:14px;border-radius:3px;"></span><button class="reset-btn" data-key="selHue" data-default="0" title="Reset">&#8635;</button></span></label>
         <input type="range" id="selHue" min="0" max="360" value="0">
@@ -910,7 +975,12 @@
       </div>
       <div class="row-buttons"><button id="saveCustomBtn">Save current as My Preset</button></div>
       <div class="presets" id="customPresetRow"></div>
-      <div class="note">"My Preset" stores your own saved look. Tap Reset to clear all sliders back to neutral.</div>
+      <div class="row-buttons">
+        <button id="exportPresetsBtn">Save presets to phone</button>
+        <button id="importPresetsBtn">Load presets from phone</button>
+      </div>
+      <input type="file" id="importPresetsInput" accept="application/json,.json" style="display:none">
+      <div class="note">"My Preset" stores your own saved look. Tap Reset to clear all sliders back to neutral. "Save presets to phone" exports all your saved presets as a file you can keep, share, or move to another device; "Load presets from phone" imports a presets file back in.</div>
     </div>
   </div>
   </div>
@@ -935,10 +1005,139 @@
 </div>
 
 <script>
+/* ================= Debug panel ================= */
+// Live diagnostic log for the two things people most often ask "why did
+// this fail" about: a video that won't stream/play, and Direct Download.
+// Every meaningful branch in those two paths (which CORS/referrer strategy
+// was tried, what the server actually returned, which check rejected a
+// blob, etc.) calls dbg()/dbgErr() so the panel shows the real reason
+// instead of the person having to guess from a single toast message.
+const NovaDebug = (function() {
+  const MAX_LINES = 400;
+  let lines = [];
+  let panelEl = null, logEl = null, badgeEl = null;
+  let unseenErrors = 0;
+
+  function ts() {
+    const d = new Date();
+    return d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+  }
+  function fmtData(data) {
+    if (data === undefined) return '';
+    try { return typeof data === 'string' ? data : JSON.stringify(data); }
+    catch (e) { return String(data); }
+  }
+  function push(level, tag, msg, data) {
+    const entry = { level, tag, msg, data: fmtData(data), time: ts() };
+    lines.push(entry);
+    if (lines.length > MAX_LINES) lines.shift();
+    if (level === 'error' && (!panelEl || !panelEl.classList.contains('open'))) {
+      unseenErrors++;
+      if (badgeEl) { badgeEl.textContent = unseenErrors > 9 ? '9+' : String(unseenErrors); badgeEl.style.display = 'flex'; }
+    }
+    if (panelEl && panelEl.classList.contains('open')) render();
+  }
+  function render() {
+    if (!logEl) return;
+    logEl.innerHTML = lines.map(e => {
+      const cls = e.level === 'error' ? 'ndbg-err' : (e.level === 'warn' ? 'ndbg-warn' : 'ndbg-info');
+      const dataHtml = e.data ? '<div class="ndbg-data">' + escapeHtml(e.data) + '</div>' : '';
+      return '<div class="ndbg-line ' + cls + '"><span class="ndbg-time">' + e.time + '</span>' +
+        '<span class="ndbg-tag">[' + escapeHtml(e.tag) + ']</span>' +
+        '<span class="ndbg-msg">' + escapeHtml(e.msg) + '</span>' + dataHtml + '</div>';
+    }).join('');
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  function ensurePanel() {
+    if (panelEl) return;
+    panelEl = document.createElement('div');
+    panelEl.className = 'ndbg-panel';
+    panelEl.innerHTML =
+      '<div class="ndbg-head">' +
+        '<span>Debug &mdash; playback &amp; download</span>' +
+        '<div class="ndbg-head-btns">' +
+          '<button id="ndbgResetBtn" title="Forget which sites are \u2018blocked\u2019 (retry fast path fresh)">&#128260;</button>' +
+          '<button id="ndbgUpdateBtn" title="Force update: clears the cached app + service worker and reloads the latest version">&#8635;&#65039;</button>' +
+          '<button id="ndbgClearBtn" title="Clear">&#128465;</button>' +
+          '<button id="ndbgCopyBtn" title="Copy log">&#128203;</button>' +
+          '<button id="ndbgCloseBtn" title="Close">&#10005;</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="ndbg-log" id="ndbgLog"></div>';
+    document.body.appendChild(panelEl);
+    logEl = panelEl.querySelector('#ndbgLog');
+    panelEl.querySelector('#ndbgCloseBtn').addEventListener('click', close);
+    panelEl.querySelector('#ndbgClearBtn').addEventListener('click', () => { lines = []; render(); });
+    panelEl.querySelector('#ndbgUpdateBtn').addEventListener('click', async () => {
+      // The service worker (sw.js) caches this app's files for offline use.
+      // After shipping a code fix, the phone can keep serving the OLD
+      // cached index.html/JS indefinitely unless that cache is explicitly
+      // cleared and the service worker re-registered \u2014 a normal reload
+      // (even a hard one) isn't guaranteed to bypass it. This button does
+      // that manually: unregister every service worker, delete every
+      // Cache Storage entry this origin owns, then hard-reload so the
+      // freshest copy of the app loads from the network.
+      push('info', 'update', 'Force update requested \u2014 clearing service worker + cache storage\u2026');
+      try {
+        if ('serviceWorker' in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          for (const reg of regs) { await reg.unregister(); }
+        }
+        if (window.caches && caches.keys) {
+          const keys = await caches.keys();
+          for (const key of keys) { await caches.delete(key); }
+        }
+        push('info', 'update', 'Cleared \u2014 reloading now\u2026');
+        if (typeof showMiniToast === 'function') showMiniToast('Cache cleared \u2014 reloading\u2026');
+      } catch (e) {
+        push('error', 'update', 'Could not fully clear cache: ' + (e && e.message ? e.message : 'unknown error') + ' \u2014 reloading anyway');
+      }
+      setTimeout(() => { location.reload(true); }, 300);
+    });
+    panelEl.querySelector('#ndbgResetBtn').addEventListener('click', () => {
+      if (typeof forgetAllDomainPatterns === 'function') forgetAllDomainPatterns();
+      push('info', 'download', 'Cleared all "blocked/needs-extraction" site memory \u2014 next attempt on any domain will retry the fast path fresh');
+      if (typeof showMiniToast === 'function') showMiniToast('Site memory cleared \u2014 try the link again');
+    });
+    panelEl.querySelector('#ndbgCopyBtn').addEventListener('click', async () => {
+      const text = lines.map(e => e.time + ' [' + e.tag + '] ' + e.msg + (e.data ? ' ' + e.data : '')).join('\n');
+      try { await navigator.clipboard.writeText(text); showMiniToast('Debug log copied'); }
+      catch (e) { showMiniToast('Could not copy'); }
+    });
+  }
+  function open() {
+    ensurePanel();
+    panelEl.classList.add('open');
+    unseenErrors = 0;
+    if (badgeEl) badgeEl.style.display = 'none';
+    render();
+  }
+  function close() { if (panelEl) panelEl.classList.remove('open'); }
+  function toggle() { ensurePanel(); panelEl.classList.contains('open') ? close() : open(); }
+  function setBadgeEl(el) { badgeEl = el; }
+  // A short human-readable "so what actually went wrong" line, built from
+  // the last few log entries — shown in the panel header and usable
+  // anywhere a plain-language diagnosis (not just raw log lines) helps.
+  function diagnose() {
+    const errs = lines.filter(e => e.level === 'error');
+    if (!errs.length) return 'No errors logged yet.';
+    return errs[errs.length - 1].msg;
+  }
+  return {
+    log: (tag, msg, data) => push('info', tag, msg, data),
+    warn: (tag, msg, data) => push('warn', tag, msg, data),
+    error: (tag, msg, data) => push('error', tag, msg, data),
+    open, close, toggle, setBadgeEl, diagnose
+  };
+})();
+
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '1.0';
+const NOVA_VERSION = '1.7';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -951,7 +1150,7 @@ const DOWNLOAD_EXT_RE = /\.(pdf|zip|rar|7z|docx?|xlsx?|pptx?|csv|json|txt|png|jp
 
 let settings = { bright: 100, contrast: 100, sat: 100, sharp: 0, volBoost: 100, loop: false,
   denoise: 0, detail: 0, exposure: 0, gamma: 100, shadows: 0, highlights: 0,
-  vibrance: 100, selHue: 0, selRange: 30, selSat: 100, aiEnhance: 0, autoDownload: true };
+  vibrance: 100, selHue: 0, selRange: 30, selSat: 100, aiEnhance: 0, temperature: 0, skinProtect: false, skinSmooth: 0, autoDownload: true };
 let customPresets = {};
 const sharpMatrix = document.getElementById('sharpenMatrix');
 
@@ -991,11 +1190,38 @@ async function loadDomainPatterns() {
 // or which relay was needed instead).
 function recordDomainPattern(domain, method, data) {
   if (!domain) return;
-  domainPatterns[domain] = Object.assign({}, domainPatterns[domain], { [method]: data, updated: Date.now() });
+  domainPatterns[domain] = Object.assign({}, domainPatterns[domain], { [method]: data, [method + '_at']: Date.now(), updated: Date.now() });
   saveDomainPatterns();
 }
+// A NEGATIVE result (false — "this domain blocks direct fetch/needs
+// extraction") used to be trusted forever, permanently skipping straight to
+// the slow/unreliable public CORS-proxy relay even long after the original
+// cause (a one-off network hiccup, a stalled connection, a since-fixed bug
+// elsewhere) was gone — this is exactly why a link that used to play fine
+// stopped working with no way to recover on its own. A POSITIVE result
+// ("direct fetch works fine here") is kept trusted indefinitely, since
+// there's no risk in continuing to try the fast path that's already proven
+// to work. Only a stale negative gets re-checked periodically.
+const NEGATIVE_PATTERN_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 function getDomainPattern(domain, method) {
-  return domain && domainPatterns[domain] ? domainPatterns[domain][method] : null;
+  if (!domain || !domainPatterns[domain]) return null;
+  const value = domainPatterns[domain][method];
+  if (value === false) {
+    const at = domainPatterns[domain][method + '_at'] || 0;
+    if (Date.now() - at > NEGATIVE_PATTERN_TTL_MS) {
+      NovaDebug.log('download', 'Ignoring stale "blocked" memory for ' + domain + ' (' + method + ') \u2014 older than 6h, retrying the fast path fresh');
+      return null;
+    }
+  }
+  return value;
+}
+// Manual escape hatch (wired to the debug panel's reset button) for when a
+// site that used to work suddenly doesn't — instead of waiting out the 6h
+// TTL above, this clears the slate immediately so the very next attempt
+// re-tries the fast/direct path on every domain from scratch.
+function forgetAllDomainPatterns() {
+  domainPatterns = {};
+  saveDomainPatterns();
 }
 
 /* ================= Persistence ================= */
@@ -1349,6 +1575,11 @@ function resolveUrl(raw) {
 
 /* ================= Tabs ================= */
 function createTab(initialUrl, isVideo, opts) {
+  // A new tab replaces what's on screen — leaving this box open on top of
+  // it made it look stuck/sticky across tabs, so hide it here too (but
+  // don't cancel a Direct Download that's actually running — see
+  // hideDirectDlOverlayCosmetic above).
+  try { hideDirectDlOverlayCosmetic(); } catch (e) {}
   opts = opts || {};
   tabCounter++;
   const id = 'tab' + tabCounter;
@@ -1617,6 +1848,7 @@ function loadUrl(tabId, rawUrl, isNewNav) {
     tab._segmentBoundaries = null;
     tab._corsRetried = false;
     tab._retryStage = 0;
+    tab._contentUriFallbackTried = false;
     // A previous hls.js instance from an earlier video in this same tab
     // must be torn down before attaching a new source — otherwise it keeps
     // fetching the old stream's segments in the background and can fight
@@ -1632,6 +1864,56 @@ function loadUrl(tabId, rawUrl, isNewNav) {
       tab.el.removeAttribute('src');
       tab._blobFallbackTried = true;
       loadVideoViaHlsJs(tab, url);
+    } else if (/^(content|file):/i.test(url)) {
+      // A file opened from the device's file manager/"Open with" comes in
+      // as a content:// (or file://) URI. Assigning that straight to
+      // tab.el.src used to rely on the 'error' listener's content-uri
+      // fallback to catch it after a failed attempt — but that fallback
+      // only fires if/when the element actually reports an error with the
+      // right isBlobSrc state, which turned out not to be reliable here.
+      // Go straight to fetch+blob (and remux if it's raw MPEG-TS) up
+      // front instead, so this always runs the same way every time.
+      tab._contentUriFallbackTried = true;
+      NovaDebug.log('play', 'Opening a content://\u2044file:// URI directly \u2014 fetching as a blob up front instead of assigning it to <video src>', url);
+      (async () => {
+        try {
+          const resp = await fetch(url);
+          const blob = await resp.blob();
+          const looksLikeTs = blob.type === 'video/mp2t' || blob.type === 'video/mpeg' ||
+            (!blob.type && /\.ts(\?|$)/i.test(url));
+          let playableBlob = blob;
+          if (looksLikeTs) {
+            NovaDebug.log('play', 'Detected raw MPEG-TS file \u2014 remuxing to MP4 before playback (this can take a moment for large files)');
+            const status = document.getElementById('status');
+            status.style.display = 'block';
+            try {
+              const buf = await blob.arrayBuffer();
+              playableBlob = await remuxTsPartsToMp4([buf], (s) => { status.textContent = s; });
+              NovaDebug.log('play', 'Remux finished \u2014 handing player a playable MP4 blob');
+            } catch (remuxErr) {
+              NovaDebug.error('play', 'TS\u2192MP4 remux failed \u2014 playing the raw file instead (will likely still fail): ' + (remuxErr && remuxErr.message ? remuxErr.message : 'unknown error'));
+            }
+            status.style.display = 'none';
+          } else {
+            NovaDebug.log('play', 'Fetched file blob (type: ' + (blob.type || 'unknown') + ') \u2014 not MPEG-TS, playing as-is');
+          }
+          const objUrl = URL.createObjectURL(playableBlob);
+          tab.el.crossOrigin = null;
+          tab.el.src = objUrl;
+          tab.el.play().catch(() => {});
+          ensureAudioGraphIfBoosted(tab);
+          updateVolumeGain(tab, settings.volBoost);
+          applyFiltersToTab(tab);
+          updateAutoDlIndicator(tab);
+        } catch (e) {
+          NovaDebug.error('play', 'Could not read that file via fetch() \u2014 the app may need storage/file permission to access it: ' + (e && e.message ? e.message : 'unknown error'));
+          const msg = 'Couldn\u2019t open this file \u2014 the app may need permission to access it.';
+          showMiniToast(msg);
+          const status = document.getElementById('status');
+          status.style.display = 'block';
+          status.textContent = msg;
+        }
+      })();
     } else {
       tab.el.crossOrigin = null;
       tab.el.src = url;
@@ -1967,6 +2249,9 @@ uniform float u_vibrance;
 uniform float u_selHue;
 uniform float u_selRange;
 uniform float u_selSat;
+uniform float u_temp;
+uniform float u_skinProtect;
+uniform float u_skinSmooth;
 vec3 rgb2hsv(vec3 c){
   vec4 K = vec4(0.0,-1.0/3.0,2.0/3.0,-1.0);
   vec4 p2 = mix(vec4(c.bg,K.wz), vec4(c.gb,K.xy), step(c.b,c.g));
@@ -1983,6 +2268,12 @@ vec3 hsv2rgb(vec3 c){
 void main(){
   vec4 tex = texture2D(u_tex, v);
   vec3 col = tex.rgb;
+  // Warm/cool temperature: push red up & blue down for warm (positive),
+  // the opposite for cool (negative) — the same channel-balance trick real
+  // color-temperature sliders use, rather than a flat tint overlay.
+  col.r = clamp(col.r + u_temp * 0.30, 0.0, 1.0);
+  col.b = clamp(col.b - u_temp * 0.30, 0.0, 1.0);
+  col.g = clamp(col.g + u_temp * 0.06, 0.0, 1.0);
   if (u_ai > 0.0) {
     vec3 n  = texture2D(u_tex, v + vec2(0.0,-1.0)*u_texel).rgb;
     vec3 s  = texture2D(u_tex, v + vec2(0.0, 1.0)*u_texel).rgb;
@@ -2050,16 +2341,64 @@ void main(){
     // quality at a glance, not just technically sharper up close.
     col = clamp((col - 0.5) * (1.0 + u_ai * 0.24) + 0.5, 0.0, 1.0);
   }
+  // Skin smoothing (beautify): a small "beauty cam" style blur applied only
+  // to skin-toned pixels, and only where the surrounding area is already
+  // flat (low local edge energy) — real facial detail like eyes, brows,
+  // lip lines and the hairline sit on strong edges, so edgeProtect keeps
+  // those crisp while smoothing away pores/blemishes on plain skin.
+  if (u_skinSmooth > 0.0) {
+    vec3 hsvS = rgb2hsv(col);
+    float hueDistS = abs(hsvS.x - 0.06);
+    hueDistS = min(hueDistS, 1.0 - hueDistS);
+    float hueMaskS = 1.0 - smoothstep(0.03, 0.085, hueDistS);
+    float satMaskS = 1.0 - smoothstep(0.30, 0.55, hsvS.y);
+    float skinMaskS = hueMaskS * satMaskS * hsvS.z;
+    if (skinMaskS > 0.003) {
+      vec3 n1  = texture2D(u_tex, v + vec2(0.0,-1.0)*u_texel).rgb;
+      vec3 s1  = texture2D(u_tex, v + vec2(0.0, 1.0)*u_texel).rgb;
+      vec3 w1  = texture2D(u_tex, v + vec2(-1.0,0.0)*u_texel).rgb;
+      vec3 e1  = texture2D(u_tex, v + vec2( 1.0,0.0)*u_texel).rgb;
+      vec3 nw1 = texture2D(u_tex, v + vec2(-1.0,-1.0)*u_texel).rgb;
+      vec3 ne1 = texture2D(u_tex, v + vec2( 1.0,-1.0)*u_texel).rgb;
+      vec3 sw1 = texture2D(u_tex, v + vec2(-1.0, 1.0)*u_texel).rgb;
+      vec3 se1 = texture2D(u_tex, v + vec2( 1.0, 1.0)*u_texel).rgb;
+      vec3 n2  = texture2D(u_tex, v + vec2(0.0,-2.0)*u_texel).rgb;
+      vec3 s2  = texture2D(u_tex, v + vec2(0.0, 2.0)*u_texel).rgb;
+      vec3 w2  = texture2D(u_tex, v + vec2(-2.0,0.0)*u_texel).rgb;
+      vec3 e2s = texture2D(u_tex, v + vec2( 2.0,0.0)*u_texel).rgb;
+      vec3 ring1 = (n1+s1+w1+e1+nw1+ne1+sw1+se1) / 8.0;
+      vec3 ring2 = (n2+s2+w2+e2s) / 4.0;
+      vec3 blurred = col*0.35 + ring1*0.45 + ring2*0.20;
+      vec3 lumW3 = vec3(0.299,0.587,0.114);
+      float lumC = dot(col, lumW3);
+      float edgeMag = abs(dot(n1,lumW3)-lumC) + abs(dot(s1,lumW3)-lumC) + abs(dot(w1,lumW3)-lumC) + abs(dot(e1,lumW3)-lumC);
+      float edgeProtect = 1.0 - smoothstep(0.045, 0.20, edgeMag);
+      float mixAmt = clamp(skinMaskS * edgeProtect * u_skinSmooth, 0.0, 1.0);
+      col = mix(col, blurred, mixAmt);
+    }
+  }
   vec3 hsv = rgb2hsv(col);
   float sat = hsv.y;
+  // Skin-tone protection: skin sits in a narrow warm hue band (~15-25°) at
+  // LOW-TO-MODERATE saturation. Lips sit in almost the same hue band but
+  // are noticeably MORE saturated (they're basically pure, punchy red) —
+  // so a saturation ceiling on the mask separates the two without needing
+  // any lip-specific detection: skin gets shielded from going plasticky,
+  // lips keep getting the same vibrance/AI boost as everything else.
+  float skinHueDist = abs(hsv.x - 0.06);
+  skinHueDist = min(skinHueDist, 1.0 - skinHueDist);
+  float skinHueMask = 1.0 - smoothstep(0.03, 0.075, skinHueDist);
+  float skinSatMask = 1.0 - smoothstep(0.32, 0.52, hsv.y); // fades to 0 by the time we're as saturated as lips
+  float skinMask = skinHueMask * skinSatMask * hsv.z * u_skinProtect;
   float vib = u_vibrance - 1.0;
-  sat = clamp(sat + vib * (1.0 - sat) * sat * 2.5, 0.0, 1.0);
+  float vibEff = vib * (1.0 - skinMask * 0.85);
+  sat = clamp(sat + vibEff * (1.0 - sat) * sat * 2.5, 0.0, 1.0);
   if (u_ai > 0.0) {
     // A touch of extra saturation riding on the enhance strength — mirrors
     // what real "AI upscaler" apps do (they don't just sharpen, they also
     // punch color back up since compression flattens saturation along with
     // detail) — kept small so skin tones don't go plasticky.
-    sat = clamp(sat * (1.0 + u_ai * 0.16), 0.0, 1.0);
+    sat = clamp(sat * (1.0 + u_ai * 0.16 * (1.0 - skinMask * 0.7)), 0.0, 1.0);
   }
   float dist = abs(hsv.x - u_selHue);
   dist = min(dist, 1.0 - dist);
@@ -2125,11 +2464,14 @@ function initGradingGL(tab) {
     u_vibrance: gl.getUniformLocation(prog, 'u_vibrance'),
     u_selHue: gl.getUniformLocation(prog, 'u_selHue'),
     u_selRange: gl.getUniformLocation(prog, 'u_selRange'),
-    u_selSat: gl.getUniformLocation(prog, 'u_selSat')
+    u_selSat: gl.getUniformLocation(prog, 'u_selSat'),
+    u_temp: gl.getUniformLocation(prog, 'u_temp'),
+    u_skinProtect: gl.getUniformLocation(prog, 'u_skinProtect'),
+    u_skinSmooth: gl.getUniformLocation(prog, 'u_skinSmooth')
   };
   return tab.gl;
 }
-function isGradingNeeded() { return settings.vibrance !== 100 || settings.selSat !== 100 || settings.aiEnhance > 0; }
+function isGradingNeeded() { return settings.vibrance !== 100 || settings.selSat !== 100 || settings.aiEnhance > 0 || settings.temperature !== 0 || settings.skinSmooth > 0 || settings.skinProtect; }
 function setGradingVisible(tab, on) {
   if (!tab || !tab.canvas) return;
   if (on) {
@@ -2193,6 +2535,9 @@ function drawGradingFrame(tab) {
   gl.uniform1f(g.u_selHue, (settings.selHue % 360) / 360);
   gl.uniform1f(g.u_selRange, settings.selRange / 360);
   gl.uniform1f(g.u_selSat, settings.selSat / 100);
+  gl.uniform1f(g.u_temp, settings.temperature / 100);
+  gl.uniform1f(g.u_skinProtect, settings.skinProtect ? 1.0 : 0.0);
+  gl.uniform1f(g.u_skinSmooth, settings.skinSmooth / 100);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   return true;
 }
@@ -2200,6 +2545,7 @@ function retryVideoWithCors(tab) {
   tab._corsRetried = true;
   const url = tab.el.currentSrc || tab.el.src;
   if (!url) return;
+  NovaDebug.log('effects', 'Canvas tainted by cross-origin video \u2014 retrying with crossOrigin=anonymous so Color/AI Enhance can read frames', url);
   const savedTime = tab.el.currentTime || 0;
   const wasPlaying = !tab.el.paused;
   const finishReload = () => {
@@ -2212,11 +2558,12 @@ function retryVideoWithCors(tab) {
     tab.gl = null;
     if (tab.id === activeTabId && isGradingNeeded()) setGradingVisible(tab, true);
   };
-  const onLoaded = () => finishReload();
+  const onLoaded = () => { NovaDebug.log('effects', 'Server supports CORS \u2014 Color/AI Enhance effects now available for this video'); finishReload(); };
   const onError = () => {
     // This server genuinely doesn't support CORS — revert to the plain
     // (non-CORS) load so playback itself isn't broken, and let the normal
     // "effects aren't available for this video" path take over from here.
+    NovaDebug.warn('effects', 'Server does not support CORS \u2014 Color/AI Enhance effects unavailable for this video, but normal playback continues');
     tab.el.removeEventListener('loadedmetadata', onLoaded);
     tab.el.removeEventListener('error', onError);
     tab.el.crossOrigin = null;
@@ -2262,6 +2609,7 @@ function refreshEnhanceLabels() {
   document.getElementById('brightVal').textContent = settings.bright + '%';
   document.getElementById('contrastVal').textContent = settings.contrast + '%';
   document.getElementById('satVal').textContent = settings.sat + '%';
+  document.getElementById('temperatureVal').textContent = settings.temperature;
   document.getElementById('vibranceVal').textContent = settings.vibrance + '%';
   document.getElementById('selRangeVal').textContent = settings.selRange + '\u00b0';
   document.getElementById('selSatVal').textContent = settings.selSat + '%';
@@ -2274,11 +2622,16 @@ function refreshEnhanceLabels() {
   document.getElementById('gammaVal').textContent = settings.gamma + '%';
   document.getElementById('shadowsVal').textContent = settings.shadows;
   document.getElementById('highlightsVal').textContent = settings.highlights;
+  document.getElementById('skinSmoothVal').textContent = settings.skinSmooth;
 }
 function applyEnhanceSettingsToUI() {
   document.getElementById('bright').value = settings.bright;
   document.getElementById('contrast').value = settings.contrast;
   document.getElementById('sat').value = settings.sat;
+  document.getElementById('temperature').value = settings.temperature;
+  document.getElementById('skinProtectBtn').textContent = 'Skin tone protection: ' + (settings.skinProtect ? 'On' : 'Off');
+  document.getElementById('skinProtectBtn').classList.toggle('active-toggle', settings.skinProtect);
+  document.getElementById('skinSmooth').value = settings.skinSmooth;
   document.getElementById('vibrance').value = settings.vibrance;
   document.getElementById('selHue').value = settings.selHue;
   document.getElementById('selRange').value = settings.selRange;
@@ -2355,6 +2708,57 @@ function bindVideoElementEvents(tab) {
     if (!err) return;
     const currentUrl = tab.history[tab.historyIndex];
     const isBlobSrc = el.currentSrc && el.currentSrc.startsWith('blob:');
+    const MEDIA_ERR_NAMES = { 1: 'ABORTED', 2: 'NETWORK', 3: 'DECODE', 4: 'SRC_NOT_SUPPORTED' };
+    NovaDebug.error('play', 'Video element error ' + (MEDIA_ERR_NAMES[err.code] || err.code) + (isBlobSrc ? ' (on downloaded blob — not a network/CORS issue)' : ' (on live URL)'), currentUrl);
+    // A file picked from the device (via "Open with", the file manager, or
+    // the phone's own gallery) is handed to us as a content:// (or,
+    // sometimes, file://) URI. Android WebView's <video> element cannot
+    // stream from these schemes directly — it has no seekable-source
+    // support for the content resolver — so it fails with a codec/
+    // "not supported" error even for a perfectly normal, playable file.
+    // fetch() CAN usually resolve a content:// URI through the WebView's
+    // own request handling, so pull the bytes ourselves and hand the
+    // element a blob: URL instead, which it can always play.
+    if (!isBlobSrc && currentUrl && /^(content|file):/i.test(currentUrl) && !tab._contentUriFallbackTried) {
+      tab._contentUriFallbackTried = true;
+      NovaDebug.log('play', 'Source is a content://\u2044file:// URI (opened from the device\u2019s file manager/gallery) \u2014 WebView\u2019s <video> tag can\u2019t stream these directly; re-fetching as a blob instead');
+      fetch(currentUrl).then(r => r.blob()).then(async blob => {
+        // A raw MPEG-TS file (most HLS "master"/segment saves end up as
+        // .ts) has no WebView decoder at all, no matter how it's loaded \u2014
+        // that's why VLC/MX Player open it fine but this always fails with
+        // SRC_NOT_SUPPORTED. Detect it here (by the sniffed blob type, since
+        // a content:// name/extension isn't always available) and remux to
+        // MP4 with the same mux.js pipeline already used for HLS downloads,
+        // instead of handing the raw TS bytes straight to <video>.
+        const looksLikeTs = blob.type === 'video/mp2t' || blob.type === 'video/mpeg' ||
+          (!blob.type && /\.ts(\?|$)/i.test(currentUrl));
+        let playableBlob = blob;
+        if (looksLikeTs) {
+          try {
+            NovaDebug.log('play', 'Detected raw MPEG-TS file \u2014 remuxing to MP4 before playback');
+            const status = document.getElementById('status');
+            status.style.display = 'block';
+            const buf = await blob.arrayBuffer();
+            playableBlob = await remuxTsPartsToMp4([buf], (s) => { status.textContent = s; });
+            status.style.display = 'none';
+          } catch (remuxErr) {
+            NovaDebug.error('play', 'TS\u2192MP4 remux failed \u2014 falling back to raw file (will likely still fail to play): ' + (remuxErr && remuxErr.message ? remuxErr.message : 'unknown error'));
+          }
+        }
+        const objUrl = URL.createObjectURL(playableBlob);
+        el.src = objUrl;
+        el.load();
+        el.play().catch(() => {});
+      }).catch(e => {
+        NovaDebug.error('play', 'Could not read that file via fetch() either \u2014 the app may need storage/file permission to access it: ' + (e && e.message ? e.message : 'unknown error'));
+        const msg = 'Couldn\u2019t open this file \u2014 the app may need permission to access it.';
+        showMiniToast(msg);
+        const status = document.getElementById('status');
+        status.style.display = 'block';
+        status.textContent = msg;
+      });
+      return;
+    }
     // This link can't be streamed/played directly by the browser — it
     // genuinely needs to be downloaded to play at all, unlike a normal
     // video that just plays online with nothing saved. If Auto-DL is on,
@@ -2379,6 +2783,7 @@ function bindVideoElementEvents(tab) {
       tab._retryStage = tab._retryStage || 0;
       if (tab._retryStage < retryStages.length) {
         const stage = retryStages[tab._retryStage];
+        NovaDebug.warn('play', 'Retrying with crossOrigin=' + (stage.crossOrigin || 'none') + ', referrerPolicy=' + stage.referrerPolicy + ' (attempt ' + (tab._retryStage + 1) + '/' + retryStages.length + ')');
         tab._retryStage++;
         if (stage.crossOrigin) el.setAttribute('crossorigin', stage.crossOrigin);
         else el.removeAttribute('crossorigin');
@@ -2389,9 +2794,11 @@ function bindVideoElementEvents(tab) {
         return;
       }
       if (settings.autoDownload && !tab._blobFallbackTried) {
+        NovaDebug.log('play', 'All direct-play retries failed \u2014 falling back to download-then-play-as-blob (Auto-DL is ON)');
         tab._blobFallbackTried = true;
         fastDownloadAndPlay(tab, true);
       } else if (!settings.autoDownload) {
+        NovaDebug.error('play', 'All direct-play retries failed and Auto-DL is OFF \u2014 diagnosis: likely CORS/hotlink-protection block or a redirect/gate page, not a codec issue', currentUrl);
         const msg = 'This video can\u2019t play directly \u2014 tap the \u26a1 lightning button to download and play it.';
         showMiniToast(msg);
         const status = document.getElementById('status');
@@ -2407,6 +2814,7 @@ function bindVideoElementEvents(tab) {
       4: 'This video format/codec isn\u2019t supported by this browser.'
     };
     const msg = MEDIA_ERR_MESSAGES[err.code] || 'This video could not be played.';
+    NovaDebug.error('play', 'Final: ' + msg + (isBlobSrc ? ' (failed even after downloading \u2014 file itself is bad/unsupported, not a network issue)' : ''));
     showMiniToast(msg);
     const status = document.getElementById('status');
     status.style.display = 'block';
@@ -2915,7 +3323,7 @@ document.querySelectorAll('#orientMenu button').forEach(b => {
   function hideIndicator() { indicator.classList.remove('visible'); }
 
   function isInteractiveTarget(target) {
-    return !!target.closest('button, input, select, .video-controlbar, .float-menu, .lock-overlay');
+    return !!target.closest('button, input, select, .video-controlbar, .float-menu, .lock-overlay, .enhance-sheet');
   }
 
   /* Double-tap left/right half of the video = skip -10s / +10s (YouTube-style).
@@ -3341,7 +3749,7 @@ const FAST_CORS_PROXIES = [
   url => 'https://thingproxy.freeboard.io/fetch/' + url,
   url => 'https://proxy.cors.sh/' + url
 ];
-const FAST_PROXY_TIMEOUT_MS = 7000;
+const FAST_PROXY_TIMEOUT_MS = 4500;
 let lastExtractFailReason = '';
 
 // fetch with a hard timeout, so one dead/slow proxy doesn't stall the whole chain
@@ -5078,9 +5486,11 @@ async function playDirectFileProgressive(tab, url) {
         if (tab.el._objectUrl) { try { URL.revokeObjectURL(tab.el._objectUrl); } catch (e) {} }
         tab.el._objectUrl = msUrl;
         tab.el.src = msUrl;
+        tab._corsRetried = false; // MediaSource blob — always clean, give grading a fresh shot
         ensureAudioGraphIfBoosted(tab);
         updateVolumeGain(tab, settings.volBoost);
         applyFiltersToTab(tab);
+        if (tab.id === activeTabId) updateGradingForActiveTab();
       }
       appendQueue.push(value);
       pump();
@@ -5132,12 +5542,13 @@ async function playHlsProgressive(tab, url) {
 
   const ms = new MediaSource();
   if (tab.el._objectUrl) { try { URL.revokeObjectURL(tab.el._objectUrl); } catch (e) {} }
-  const msUrl = URL.createObjectURL(ms);
   tab.el._objectUrl = msUrl;
   tab.el.src = msUrl;
+  tab._corsRetried = false; // MediaSource blob — always clean, give grading a fresh shot
   ensureAudioGraphIfBoosted(tab);
   updateVolumeGain(tab, settings.volBoost);
   applyFiltersToTab(tab);
+  if (tab.id === activeTabId) updateGradingForActiveTab();
 
   let sourceBuffer = null;
   const appendQueue = [];
@@ -5587,13 +5998,69 @@ document.getElementById('extractGoBtn').addEventListener('click', runExtraction)
 document.getElementById('extractUrlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') runExtraction(); });
 
 document.getElementById('openFileBtn').addEventListener('click', () => document.getElementById('fileInput').click());
-document.getElementById('fileInput').addEventListener('change', () => {
+document.getElementById('fileInput').addEventListener('change', async () => {
   const file = document.getElementById('fileInput').files[0];
   if (!file) return;
-  const url = URL.createObjectURL(file);
-  createTab(null, true, { objectUrl: url, title: file.name, isLocalFile: true });
   document.getElementById('fileInput').value = '';
+  openLocalVideoFile(file);
 });
+
+// Shared entry point for any local video File object, regardless of how it
+// arrived \u2014 the in-app "Open File" picker above, or a file handed to us
+// by the OS (see the launchQueue consumer below, for files opened via
+// Android's "Open with" \u2192 this app, which otherwise never touches any of
+// this app's own JS at all and would just fail silently/generically).
+async function openLocalVideoFile(file) {
+  if (!file) return;
+  // A raw MPEG-TS file (most HLS "master"/segment saves end up as .ts) has
+  // no WebView decoder at all \u2014 that's why VLC/MX Player open it fine but
+  // wrapping it straight in a blob: URL (the old behavior here) always fails
+  // with SRC_NOT_SUPPORTED. Detect it by MIME type or extension and remux
+  // to MP4 with the same mux.js pipeline used for HLS downloads first.
+  const looksLikeTs = file.type === 'video/mp2t' || file.type === 'video/mpeg' ||
+    (!file.type && /\.ts$/i.test(file.name || ''));
+  let playableSource = file;
+  if (looksLikeTs) {
+    NovaDebug.log('play', 'Opened file "' + file.name + '" looks like raw MPEG-TS \u2014 remuxing to MP4 before playback');
+    const status = document.getElementById('status');
+    status.style.display = 'block';
+    status.textContent = 'Converting for playback\u2026';
+    try {
+      const buf = await file.arrayBuffer();
+      playableSource = await remuxTsPartsToMp4([buf], (s) => { status.textContent = s; });
+      NovaDebug.log('play', 'Remux finished \u2014 handing player a playable MP4 blob');
+    } catch (remuxErr) {
+      NovaDebug.error('play', 'TS\u2192MP4 remux failed \u2014 opening the raw file instead (will likely still fail to play): ' + (remuxErr && remuxErr.message ? remuxErr.message : 'unknown error'));
+    }
+    status.style.display = 'none';
+  }
+  const url = URL.createObjectURL(playableSource);
+  createTab(null, true, { objectUrl: url, title: file.name, isLocalFile: true });
+}
+
+// Files opened via the OS's "Open with" \u2192 Nova Browser (from a file
+// manager, gallery, Downloads app, etc.) arrive through the PWA File
+// Handling API, not through any tab-navigation or <input type=file> code
+// path above \u2014 without this consumer, Chrome/the WebView shell just tries
+// to top-level-navigate straight to the raw content:// URI on its own,
+// which bypasses every fix in this file (TS remux included) and is why
+// "open from folder" kept failing even after the in-app Open File button
+// was fixed. This requires a matching "file_handlers" entry in
+// manifest.json \u2014 without that, Android never routes the file here at all.
+if ('launchQueue' in window && window.launchQueue) {
+  window.launchQueue.setConsumer(async (launchParams) => {
+    if (!launchParams.files || !launchParams.files.length) return;
+    NovaDebug.log('play', 'Received ' + launchParams.files.length + ' file(s) via the OS file-handler launch (Open with \u2192 Nova Browser)');
+    for (const fileHandle of launchParams.files) {
+      try {
+        const file = await fileHandle.getFile();
+        openLocalVideoFile(file);
+      } catch (e) {
+        NovaDebug.error('play', 'Could not read a file handed off by the OS: ' + (e && e.message ? e.message : 'unknown error'));
+      }
+    }
+  });
+}
 
 /* ================= Wire up: enhance sheet ================= */
 function toggleEnhanceSheet() {
@@ -5621,6 +6088,15 @@ document.querySelectorAll('.enhance-tabs button').forEach(btn => {
 document.getElementById('bright').addEventListener('input', e => { settings.bright = Number(e.target.value); applyFiltersToAllVideoTabs(); refreshEnhanceLabels(); saveEnhanceSettings(); });
 document.getElementById('contrast').addEventListener('input', e => { settings.contrast = Number(e.target.value); applyFiltersToAllVideoTabs(); refreshEnhanceLabels(); saveEnhanceSettings(); });
 document.getElementById('sat').addEventListener('input', e => { settings.sat = Number(e.target.value); applyFiltersToAllVideoTabs(); refreshEnhanceLabels(); saveEnhanceSettings(); });
+document.getElementById('temperature').addEventListener('input', e => { settings.temperature = Number(e.target.value); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings(); });
+document.getElementById('skinProtectBtn').addEventListener('click', () => {
+  settings.skinProtect = !settings.skinProtect;
+  document.getElementById('skinProtectBtn').textContent = 'Skin tone protection: ' + (settings.skinProtect ? 'On' : 'Off');
+  document.getElementById('skinProtectBtn').classList.toggle('active-toggle', settings.skinProtect);
+  updateGradingForActiveTab();
+  saveEnhanceSettings();
+});
+document.getElementById('skinSmooth').addEventListener('input', e => { settings.skinSmooth = Number(e.target.value); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings(); });
 document.getElementById('vibrance').addEventListener('input', e => { settings.vibrance = Number(e.target.value); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings(); });
 document.getElementById('selHue').addEventListener('input', e => { settings.selHue = Number(e.target.value); updateSelSwatch(); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings(); });
 document.getElementById('selRange').addEventListener('input', e => { settings.selRange = Number(e.target.value); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings(); });
@@ -5726,6 +6202,278 @@ function updateFastLoadProgress(pct, received, total) {
 // blocked by the browser before they even leave the page. Proxies generally
 // don't pass Range requests through reliably, so this is one sequential
 // stream rather than parallel chunks.
+/* ================= Direct Download (no play, no format conversion) ================= */
+// A standalone, from-scratch HLS downloader for the "Direct Download" feature.
+// Deliberately does NOT call mux.js, does NOT flatten fragmented MP4, and does
+// NOT probe/convert anything — it just fetches every segment in parallel and
+// concatenates the raw bytes exactly as the source served them. That keeps it
+// both simpler/faster (no CPU spent transmuxing) and format-preserving, which
+// is the whole point of this feature as opposed to the regular player's
+// download-and-play path (which deliberately DOES convert, for in-app preview).
+async function downloadHlsRawNoConvert(mediaPlaylistUrl, onProgress, onStatus, signal, domain) {
+  const { segments, isFmp4Guess, initSegmentUrl } = await fetchHlsPlaylistSegments(mediaPlaylistUrl, signal);
+  const fetchSegment = async (u, passes) => {
+    for (let pass = 0; pass < passes; pass++) {
+      try {
+        const r = await fetchWithTimeout(u, { signal }, 15000);
+        if (r.ok) return await r.arrayBuffer();
+      } catch (e) {}
+      for (const proxyFn of FAST_CORS_PROXIES.slice(1)) {
+        try {
+          const r = await fetchWithTimeout(proxyFn(u), { signal }, 15000);
+          if (r.ok) return await r.arrayBuffer();
+        } catch (e) {}
+      }
+      if (signal && signal.aborted) break;
+      // Growing backoff on each retry — a small/strict CDN that rate-limits
+      // a burst of parallel requests needs real breathing room before a
+      // retry has any chance of succeeding, not just another instant hit.
+      await new Promise(r => setTimeout(r, 400 + pass * 500));
+    }
+    throw new Error('Segment failed: ' + u);
+  };
+  const parts = new Array(segments.length);
+  let completed = 0;
+  const failedIdx = [];
+  // Smaller, sites/CDNs behind this kind of "d/xxxx" short-link gate are
+  // frequently a lot stricter than a real video CDN about how many
+  // simultaneous connections/requests they'll tolerate from one client —
+  // firing all 100+ segments at once (which is fine against a proper CDN)
+  // was tripping rate-limiting on a real chunk of them here every time,
+  // however many retries each individual segment got. A modest, steady
+  // concurrency avoids triggering that in the first place. Domains that
+  // needed the rate-limit cleanup pass before start even lower next time —
+  // no point re-learning the same limit on every single download.
+  const rateLimitedBefore = domain && getDomainPattern(domain, 'directDlRateLimited') === true;
+  const CONCURRENCY = rateLimitedBefore ? 10 : 40;
+  let nextIndex = 0;
+  async function worker() {
+    while (nextIndex < segments.length) {
+      const idx = nextIndex++;
+      try {
+        parts[idx] = await fetchSegment(segments[idx], 2);
+      } catch (e) {
+        if (signal && signal.aborted) throw e;
+        failedIdx.push(idx);
+        continue;
+      }
+      completed++;
+      if (onProgress) onProgress((completed / segments.length) * 100, completed, segments.length);
+      if (onStatus) onStatus('Downloading segment ' + completed + '/' + segments.length + '…');
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, segments.length) }, worker));
+  // One more calm, low-concurrency, higher-retry-budget pass over whatever
+  // is still missing once the main pool is done — by now the burst that
+  // triggered any rate-limiting has settled, so leftover segments (often a
+  // small handful) get a real shot instead of being declared a lost cause
+  // off the back of the same crowded pass that likely caused them to fail.
+  if (failedIdx.length && !(signal && signal.aborted)) {
+    if (domain) recordDomainPattern(domain, 'directDlRateLimited', true);
+    if (onStatus) onStatus('Retrying ' + failedIdx.length + ' segment(s) that got rate-limited…');
+    const stillFailed = [];
+    for (const idx of failedIdx) {
+      try {
+        parts[idx] = await fetchSegment(segments[idx], 3);
+        completed++;
+        if (onProgress) onProgress((completed / segments.length) * 100, completed, segments.length);
+      } catch (e) {
+        if (signal && signal.aborted) throw e;
+        stillFailed.push(idx);
+      }
+    }
+    if (stillFailed.length) throw new Error(stillFailed.length + ' of ' + segments.length + ' segments could not be downloaded after retrying — the source may have removed or expired part of this stream, or is rate-limiting downloads.');
+  }
+  if (isFmp4Guess && initSegmentUrl) {
+    let initBuf = null;
+    try { initBuf = await fetchSegment(initSegmentUrl, 2); } catch (e) {}
+    return new Blob(initBuf ? [initBuf, ...parts] : parts, { type: 'video/mp4' });
+  }
+  // Plain MPEG-TS segments concatenate directly into one raw .ts file —
+  // exactly what a native HLS downloader/CLI tool would produce, playable
+  // in VLC/MX Player as-is, with zero re-encoding or remuxing involved.
+  return new Blob(parts, { type: 'video/mp2t' });
+}
+function triggerBrowserDownload(blob, filename) {
+  const a = document.createElement('a');
+  const url = URL.createObjectURL(blob);
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+let directDlAbort = null;
+async function runDirectDownload() {
+  const input = document.getElementById('directDlUrlInput');
+  const statusEl = document.getElementById('directDlStatus');
+  const goBtn = document.getElementById('directDlGoBtn');
+  let url = (input.value || '').trim();
+  if (!url) { statusEl.textContent = 'Paste a video link first.'; statusEl.className = 'extract-status error'; return; }
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  NovaDebug.log('download', 'Starting direct download', url);
+  goBtn.disabled = true;
+  statusEl.className = 'extract-status';
+  statusEl.textContent = 'Starting download…';
+  const ctrl = new AbortController();
+  directDlAbort = ctrl;
+  const startedAt = Date.now();
+  const onProgress = (pct) => { statusEl.textContent = Math.round(pct) + '% downloaded…'; };
+  const onStatus = (s) => { statusEl.textContent = s; };
+  // Checks only the actual path/filename — NOT the full URL string. A gate
+  // link like fmaal.com/go/?file=Some_Show.mp4 has ".mp4" sitting inside a
+  // query-string VALUE, not as the real file extension; matching against
+  // the whole URL wrongly treated that as "this is already a real, direct
+  // video link" and skipped ever trying to extract the actual video URL
+  // from the page — even when the direct fetch failed outright.
+  const KNOWN_VIDEO_EXT = (u) => {
+    try { return /\.(mp4|mkv|webm|mov|avi|flv|m4v|m3u8)$/i.test(new URL(u).pathname); }
+    catch (e) { return /\.(mp4|mkv|webm|mov|avi|flv|m4v|m3u8)(\?|$)/i.test(u); }
+  };
+  // A "d/xxxx"-style gate/short-link page often answers a plain fetch with
+  // HTTP 200 and a small HTML page instead of failing outright — nothing
+  // throws, so the old code happily "succeeded" and saved that tiny HTML
+  // page as if it were the video (the exact 25KB ".mp4" bug). Catch that
+  // here: reject as not-a-video by declared type, and — since some gate
+  // pages omit an honest Content-Type — also peek at the actual bytes for
+  // HTML markers when the file is suspiciously small.
+  const looksLikeNonVideoBlob = async (blob) => {
+    if (!blob) { NovaDebug.error('download', 'No blob returned at all (fetch resolved with nothing)'); return true; }
+    NovaDebug.log('download', 'Checking blob: size=' + blob.size + ' bytes, declared type=' + (blob.type || '(none)'));
+    if (blob.type && /^(text\/html|text\/plain|application\/json|application\/xml|text\/xml)/i.test(blob.type)) {
+      NovaDebug.error('download', 'Server declared Content-Type "' + blob.type + '" \u2014 this is a page/gate response, not a video file');
+      return true;
+    }
+    if (blob.size > 0 && blob.size < 2 * 1024 * 1024) {
+      try {
+        const head = await blob.slice(0, 1024).text();
+        if (/<!doctype html|<html[\s>]/i.test(head)) {
+          NovaDebug.error('download', 'Blob is only ' + blob.size + ' bytes and its content is actually HTML \u2014 classic "d/xxxx" gate-link bug, the real video is embedded deeper on that page');
+          return true;
+        }
+      } catch (e) { NovaDebug.warn('download', 'Could not peek at blob content to verify it', String(e)); }
+    }
+    return false;
+  };
+  const attemptDownload = async (u) => {
+    if (/\.m3u8(\?|$)/i.test(u)) return await downloadHlsRawNoConvert(u, onProgress, onStatus, ctrl.signal, getDomain(u));
+    // downloadVideoBlob already never converts anything for a direct file
+    // link (it's a byte-for-byte parallel-chunk fetch) — reused as-is.
+    return await downloadVideoBlob(u, ctrl.signal, onProgress, onStatus);
+  };
+  const domain = getDomain(url);
+  const findRealUrlOnPage = async () => {
+    onStatus('Looking for the actual video on that page…');
+    let candidates = [];
+    try { candidates = await extractVideoCandidatesFast(url); } catch (e) {}
+    if ((!candidates || !candidates.length) && !ctrl.signal.aborted) {
+      try { candidates = await extractVideoCandidatesFromPageSlow(url); } catch (e) {}
+    }
+    return candidates && candidates.length ? (candidates[0].url || candidates[0]) : null;
+  };
+  try {
+    let blob;
+    // Remembered from a previous Direct Download on this same domain — a
+    // "d/xxxx"-style gate/short-link page never IS the real video file, so
+    // skip straight to page-extraction instead of wasting a fetch attempt
+    // (and its timeout/retry time) re-discovering that every single time.
+    const knownNeedsExtraction = !KNOWN_VIDEO_EXT(url) && getDomainPattern(domain, 'directDlNeedsExtraction') === true;
+    NovaDebug.log('download', 'URL looks like a known video extension: ' + KNOWN_VIDEO_EXT(url) + '; domain previously needed page-extraction: ' + (knownNeedsExtraction ? 'yes (skipping straight to it)' : 'no/unknown'));
+    if (knownNeedsExtraction) {
+      const realUrl = await findRealUrlOnPage();
+      if (!realUrl) { NovaDebug.error('download', 'Page-scan found no video URL on the page at all'); throw new Error('Could not find a video on that page.'); }
+      NovaDebug.log('download', 'Found candidate video URL on page', realUrl);
+      onStatus('Found the video (remembered route for this site) \u2014 downloading…');
+      blob = await attemptDownload(realUrl);
+      if (await looksLikeNonVideoBlob(blob)) throw new Error('The video link found on that page did not return a valid video file.');
+      url = realUrl;
+    } else {
+      try {
+        NovaDebug.log('download', 'Attempting direct fetch of the pasted link itself (as if it IS the video file)');
+        blob = await attemptDownload(url);
+        if (await looksLikeNonVideoBlob(blob)) throw new Error('__not_video__');
+        NovaDebug.log('download', 'Direct fetch succeeded and blob looks like a real video \u2014 no page-extraction needed for this domain');
+        if (domain) recordDomainPattern(domain, 'directDlNeedsExtraction', false);
+      } catch (firstErr) {
+        NovaDebug.warn('download', 'Direct fetch of the pasted link failed: ' + (firstErr && firstErr.message === '__not_video__' ? 'response was not a video (see blob check above)' : (firstErr && firstErr.message ? firstErr.message : 'unknown error')) + ' \u2014 falling back to scanning the page for the real video URL');
+        // A pasted link that isn't itself a raw video file — a "d/xxxx"
+        // short-link, a tube-site watch page, a redirect gate, etc. — fails
+        // here (CORS-blocked fetch, or a fetch that just returns HTML instead
+        // of video bytes), even though the actual video file is reachable
+        // once you find its real URL on that page. Rather than giving up,
+        // fall back to the same page-scanning extractor "Get video" uses to
+        // dig the real, direct video URL out of the page and retry the
+        // download with THAT — this is what makes pasting a tube-site link
+        // here work, not just a raw .mp4/.m3u8 link.
+        const notVideo = firstErr && firstErr.message === '__not_video__';
+        if (ctrl.signal.aborted || (KNOWN_VIDEO_EXT(url) && !notVideo)) {
+          NovaDebug.error('download', 'Giving up without page-scan: ' + (ctrl.signal.aborted ? 'user cancelled' : 'URL already has a real video extension but the fetch itself still failed \u2014 likely a CORS block or the server rejecting the request; a page-scan would not help here'));
+          throw firstErr;
+        }
+        const realUrl = await findRealUrlOnPage();
+        if (!realUrl) {
+          NovaDebug.error('download', 'Page-scan also found no usable video URL \u2014 diagnosis: this page likely needs JS execution / login / DRM that a plain scan can\u2019t see through');
+          throw (notVideo ? new Error('That link only leads to a page \u2014 could not find the actual video file on it.') : firstErr);
+        }
+        NovaDebug.log('download', 'Found candidate video URL via page-scan', realUrl);
+        onStatus('Found the video \u2014 downloading…');
+        blob = await attemptDownload(realUrl);
+        if (await looksLikeNonVideoBlob(blob)) throw new Error('The video link found on that page did not return a valid video file.');
+        NovaDebug.log('download', 'Page-scan route worked \u2014 remembering it for this domain next time');
+        if (domain) recordDomainPattern(domain, 'directDlNeedsExtraction', true);
+        url = realUrl;
+      }
+    }
+    const filename = guessFilenameFromUrl(url, blob.type);
+    NovaDebug.log('download', 'Success \u2014 saving as ' + filename + ' (' + Math.round((blob.size || 0) / 1024) + ' KB)');
+    triggerBrowserDownload(blob, filename);
+    const took = formatElapsed(Date.now() - startedAt);
+    statusEl.className = 'extract-status success';
+    statusEl.textContent = 'Done in ' + took + ' \u2014 saved as ' + filename;
+  } catch (e) {
+    if (!ctrl.signal.aborted) {
+      statusEl.className = 'extract-status error';
+      statusEl.textContent = 'Download failed: ' + (e && e.message ? e.message : 'unknown error');
+      NovaDebug.error('download', 'FINAL FAILURE \u2014 ' + (e && e.message ? e.message : 'unknown error') + '. Tap the \u{1F41B} debug button to see every step that was tried.');
+    }
+  } finally {
+    goBtn.disabled = false;
+    directDlAbort = null;
+  }
+}
+function openDirectDlOverlay(prefillUrl) {
+  document.getElementById('directDlOverlay').classList.add('visible');
+  const statusEl = document.getElementById('directDlStatus');
+  statusEl.textContent = ''; statusEl.className = 'extract-status';
+  const input = document.getElementById('directDlUrlInput');
+  input.value = prefillUrl || '';
+  if (!prefillUrl) setTimeout(() => input.focus(), 50);
+}
+function closeDirectDlOverlay() {
+  if (directDlAbort) { try { directDlAbort.abort(); } catch (e) {} directDlAbort = null; }
+  document.getElementById('directDlOverlay').classList.remove('visible');
+}
+// Cosmetic-only variant: hides the overlay without cancelling an in-flight
+// Direct Download. createTab() used to call the abort-and-close version
+// unconditionally on every new tab — including tabs created internally by
+// completely unrelated flows, like the auto-download-fallback creating a
+// blob-playback tab after a video failed to stream. That silently killed
+// the person's own manual Direct Download mid-way with "The user aborted a
+// request", even though the two had nothing to do with each other.
+function hideDirectDlOverlayCosmetic() {
+  document.getElementById('directDlOverlay').classList.remove('visible');
+}
+document.getElementById('directDlBtn').addEventListener('click', () => openDirectDlOverlay());
+document.getElementById('debugBtn').addEventListener('click', () => NovaDebug.toggle());
+NovaDebug.setBadgeEl(document.getElementById('ndbgBadge'));
+document.getElementById('directDlPlayBtn').addEventListener('click', () => {
+  const val = (document.getElementById('directDlUrlInput').value || '').trim();
+  if (!val) { showMiniToast('Paste a video link first'); return; }
+  closeDirectDlOverlay();
+  loadUrl(activeTabId, val, true);
+});
+document.getElementById('directDlGoBtn').addEventListener('click', runDirectDownload);
+document.getElementById('directDlCloseBtn').addEventListener('click', closeDirectDlOverlay);
+document.getElementById('directDlOverlay').addEventListener('click', (e) => { if (e.target.id === 'directDlOverlay') closeDirectDlOverlay(); });
+
 async function proxyDownload(url, signal, title, onProgress) {
   const proxies = [
     u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
@@ -5803,11 +6551,21 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
   // through the dedicated segment-by-segment HLS downloader instead.
   if (/\.m3u8(\?|$)/i.test(url)) {
     if (onStatus) onStatus('Preparing HLS download…');
-    return await downloadHlsBlob(url, onProgress, onStatus, signal);
+    // Was downloadHlsBlob (mux.js re-mux) — that path was unreliable and is
+    // why the lightning/fast-download button often silently failed on HLS
+    // streams. downloadHlsRawNoConvert is the same battle-tested downloader
+    // Direct Download uses (no transmuxing, just fetches segments and
+    // concatenates them), so this now works exactly as reliably. The
+    // existing canPlayType() check further down still decides whether the
+    // result can swap into in-app playback or just gets saved for an
+    // external player (e.g. VLC) — same as before.
+    return await downloadHlsRawNoConvert(url, onProgress, onStatus, signal, getDomain(url));
   }
   const streamDomain = getDomain(url);
   const knownDirectBlocked = getDomainPattern(streamDomain, 'streamDirect') === false;
+  NovaDebug.log('download', 'downloadVideoBlob: domain=' + streamDomain + ', previously-known-CORS-blocked=' + knownDirectBlocked);
   if (knownDirectBlocked) {
+    NovaDebug.log('download', 'Skipping direct fetch (remembered this domain blocks it) \u2014 going straight to CORS-proxy relay');
     // This host has failed direct fetches before — skip straight to the
     // relay instead of spending a HEAD timeout + failed GET re-discovering
     // that every time a video from this domain is opened.
@@ -5827,6 +6585,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       acceptsRanges = (head.headers.get('accept-ranges') || '').toLowerCase().includes('bytes');
       watchdog.poke();
     } catch (headErr) {
+      NovaDebug.warn('download', 'HEAD request failed/blocked (' + (headErr && headErr.message ? headErr.message : 'unknown') + ') \u2014 continuing without file-size/range info, this alone is not fatal');
       if (signal && signal.aborted) throw headErr;
       // no size/range info — proceed with a plain single-stream GET below
     }
@@ -5856,9 +6615,11 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
         }
         watchdog.poke();
       } catch (probeErr) {
+        NovaDebug.warn('download', 'Range probe request also failed (' + (probeErr && probeErr.message ? probeErr.message : 'unknown — likely CORS or the server rejecting the request entirely') + ')');
         if (signal && signal.aborted) throw probeErr;
       }
     }
+    NovaDebug.log('download', 'Chosen download path: ' + (len > 0 && acceptsRanges ? 'fast parallel-chunk (server supports Range, size=' + Math.round(len/1024/1024) + 'MB)' : 'plain single-stream GET (no size/range info available)'));
 
     let result;
     if (len > 0 && acceptsRanges) {
@@ -6109,6 +6870,13 @@ function guessFilenameFromUrl(url, blobType) {
 function swapTabToBlob(tab, objectUrl, blob, sourceUrl) {
   if (tab.isLocalFile && /^blob:/i.test(tab.el.src)) { try { URL.revokeObjectURL(tab.el.src); } catch (e) {} }
   tab.isLocalFile = true; // so closing this tab releases the blob URL too
+  // A blob: URL is always same-origin/"clean" for canvas purposes — no CORS
+  // involved at all — so any earlier cross-origin taint failure no longer
+  // applies. Clear that flag so the WebGL grading pipeline (temperature,
+  // vibrance, selective color, AI enhance, skin protect/smooth) gets a
+  // completely fresh attempt against this now-local source instead of
+  // staying stuck in whatever failed/gave-up state the live stream left it in.
+  tab._corsRetried = false;
   // Keep the blob + a filename around so a "Save to device" button can offer
   // it after the download finishes, without re-downloading anything.
   if (blob) {
@@ -6126,6 +6894,11 @@ function swapTabToBlob(tab, objectUrl, blob, sourceUrl) {
   tab.el.addEventListener('loadedmetadata', function onMeta() {
     tab.el.removeEventListener('loadedmetadata', onMeta);
     if (wasTime > 0.2) { try { tab.el.currentTime = wasTime; } catch (e) {} }
+    // Restart grading now that this tab has a clean local source — if the
+    // effects loop had previously stopped itself (taint failure on the live
+    // stream), this is what actually brings it back; without this call it
+    // would otherwise stay off forever even though it would now succeed.
+    if (tab.id === activeTabId) updateGradingForActiveTab();
     // The background download finishes on its own timer, not in direct
     // response to a tap — so calling play() here on an unmuted element hits
     // the browser's autoplay-without-gesture block and gets silently
@@ -6176,8 +6949,22 @@ function formatElapsed(ms) {
   return m + 'm ' + rem + 's';
 }
 async function fastDownloadAndPlay(tab, silent) {
-  const url = tab.el.currentSrc || tab.el.src;
-  if (!url || /^blob:/i.test(url)) return; // already local/fast
+  let url = tab.el.currentSrc || tab.el.src;
+  // hls.js (used for most .m3u8 streams) hands the <video> element a
+  // "blob:" URL that wraps a MediaSource object, NOT a real downloadable
+  // file — that made this button silently do nothing for basically every
+  // site that streams HLS this way, since it looked identical to "already
+  // downloaded". Only treat a blob: src as "nothing to do" when we
+  // actually already have a completed local download (tab.isLocalFile is a
+  // device-picked file, tab._savedBlob means we already finished fetching
+  // it); otherwise fall back to the real URL this tab was loaded with so
+  // the download can actually happen.
+  if (/^blob:/i.test(url || '')) {
+    if (tab.isLocalFile || tab._savedBlob) return; // genuinely already local — nothing to fetch
+    const realUrl = tab.history && tab.history[tab.historyIndex];
+    url = (realUrl && !/^blob:/i.test(realUrl)) ? realUrl : null;
+  }
+  if (!url) return;
   if (tab._autoDLAbort) { try { tab._autoDLAbort.abort(); } catch (e) {} tab._autoDLAbort = null; } // manual takes over from any auto-download in flight
   const overlay = document.getElementById('fastLoadOverlay');
   const title = document.getElementById('fastLoadTitle');
@@ -6517,9 +7304,9 @@ function applyPresetValues(vals) { Object.assign(settings, vals); applyEnhanceSe
 document.querySelectorAll('.presets button[data-preset]').forEach(btn => {
   btn.addEventListener('click', () => {
     const table = {
-      reset:    { bright:100, contrast:100, sat:100, sharp:0, denoise:0, detail:0, exposure:0, gamma:100, shadows:0, highlights:0, vibrance:100, selHue:0, selRange:30, selSat:100, aiEnhance:0 },
+      reset:    { bright:100, contrast:100, sat:100, sharp:0, denoise:0, detail:0, exposure:0, gamma:100, shadows:0, highlights:0, vibrance:100, selHue:0, selRange:30, selSat:100, aiEnhance:0, temperature:0, skinProtect:false, skinSmooth:0 },
       clear:    { bright:105, contrast:115, sat:105, sharp:35, denoise:15, detail:20, exposure:5, gamma:105, shadows:10, highlights:5 },
-      warm:     { bright:105, contrast:105, sat:120, sharp:15, denoise:10, detail:10, exposure:5, gamma:100, shadows:5, highlights:0 },
+      warm:     { bright:105, contrast:105, sat:120, sharp:15, denoise:10, detail:10, exposure:5, gamma:100, shadows:5, highlights:0, temperature:25 },
       vivid:    { bright:100, contrast:120, sat:150, sharp:25, denoise:5, detail:20, exposure:0, gamma:110, shadows:0, highlights:15 },
       lowlight: { bright:140, contrast:125, sat:110, sharp:20, denoise:35, detail:15, exposure:25, gamma:110, shadows:40, highlights:5 }
     };
@@ -6532,7 +7319,7 @@ document.getElementById('saveCustomBtn').addEventListener('click', () => {
   customPresets[name] = { bright: settings.bright, contrast: settings.contrast, sat: settings.sat, sharp: settings.sharp,
     denoise: settings.denoise, detail: settings.detail, exposure: settings.exposure, gamma: settings.gamma,
     shadows: settings.shadows, highlights: settings.highlights,
-    vibrance: settings.vibrance, selHue: settings.selHue, selRange: settings.selRange, selSat: settings.selSat, aiEnhance: settings.aiEnhance };
+    vibrance: settings.vibrance, selHue: settings.selHue, selRange: settings.selRange, selSat: settings.selSat, aiEnhance: settings.aiEnhance, temperature: settings.temperature, skinProtect: settings.skinProtect, skinSmooth: settings.skinSmooth };
   saveCustomPresets(); renderCustomPresets();
 });
 function renderCustomPresets() {
@@ -6545,6 +7332,61 @@ function renderCustomPresets() {
     row.appendChild(btn);
   });
 }
+
+/* ---- Export/import presets as a file (save to phone / load from phone) ----
+   customPresets already auto-persist to localStorage, but that only survives
+   on this exact browser/device. Exporting to a real file lets the user keep
+   a backup in their phone's Files/Downloads app, share it, or move their
+   presets to a different phone or a reinstalled app — then load it back in
+   with the file picker below. */
+document.getElementById('exportPresetsBtn').addEventListener('click', () => {
+  const names = Object.keys(customPresets);
+  if (!names.length) { showMiniToast('No saved presets yet \u2014 tap "Save current as My Preset" first'); return; }
+  try {
+    const payload = { novaPresets: true, version: 1, presets: customPresets };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'nova-presets.json';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    showMiniToast('Presets saved \u2014 check your phone\u2019s Downloads/Files app');
+  } catch (e) {
+    showMiniToast('Couldn\u2019t save presets to a file on this device');
+  }
+});
+document.getElementById('importPresetsBtn').addEventListener('click', () => {
+  document.getElementById('importPresetsInput').click();
+});
+document.getElementById('importPresetsInput').addEventListener('change', (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      const incoming = (data && data.presets && typeof data.presets === 'object') ? data.presets
+        : (data && typeof data === 'object' ? data : null);
+      if (!incoming) throw new Error('bad format');
+      let added = 0;
+      Object.keys(incoming).forEach(name => {
+        const p = incoming[name];
+        if (p && typeof p === 'object') { customPresets[name] = p; added++; }
+      });
+      if (!added) throw new Error('empty');
+      saveCustomPresets(); renderCustomPresets();
+      showMiniToast('Loaded ' + added + ' preset' + (added === 1 ? '' : 's') + ' from file');
+    } catch (err) {
+      showMiniToast('That doesn\u2019t look like a Nova presets file');
+    }
+  };
+  reader.onerror = () => showMiniToast('Couldn\u2019t read that file');
+  reader.readAsText(file);
+});
 
 /* ================= Pull-to-refresh / edge swipe ================= */
 (function() {
