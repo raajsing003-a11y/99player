@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nova Browser 1.1</title>
+<title>Nova Browser 1.8</title>
 <meta name="description" content="A private in-app browser with fast video download and offline playback.">
 <meta name="theme-color" content="#121212">
 <meta name="mobile-web-app-capable" content="yes">
@@ -1137,7 +1137,7 @@ const NovaDebug = (function() {
 /* ================= State ================= */
 // Bumped by hand on every change made to this file — single source of truth
 // for the version shown in the tab bar (see renderTabbar).
-const NOVA_VERSION = '1.7';
+const NOVA_VERSION = '1.8';
 let tabs = [];
 let activeTabId = null;
 let tabCounter = 0;
@@ -1188,32 +1188,32 @@ async function loadDomainPatterns() {
 // method: 'extract' (which CORS_PROXIES index found the video on a page) or
 // 'stream' (whether the video host itself accepts direct HEAD/Range requests,
 // or which relay was needed instead).
+// Only POSITIVE outcomes ("this route worked") are ever persisted here.
+// A "blocked" / negative result (server rejected direct fetch, needed the
+// slow extraction path, got rate-limited) is deliberately never saved —
+// per the person's request, a domain that failed once should NOT be
+// remembered as blocked going forward. Every attempt on every domain
+// always starts fresh; only a proven-working shortcut gets remembered, so
+// there's no way for stale "blocked" memory to skip a fresh retry that
+// might actually succeed this time (site un-blocked, network hiccup gone,
+// rate-limit window passed, etc.).
+const NEGATIVE_PATTERN_KEYS = new Set([
+  'streamDirect:false',
+  'directDlNeedsExtraction:true',
+  'directDlRateLimited:true'
+]);
 function recordDomainPattern(domain, method, data) {
   if (!domain) return;
+  if (NEGATIVE_PATTERN_KEYS.has(method + ':' + data)) {
+    NovaDebug.log('download', 'Not saving a "blocked/needs-slow-path" result for ' + domain + ' (' + method + ') \\u2014 next attempt will retry fresh instead of remembering this as blocked');
+    return;
+  }
   domainPatterns[domain] = Object.assign({}, domainPatterns[domain], { [method]: data, [method + '_at']: Date.now(), updated: Date.now() });
   saveDomainPatterns();
 }
-// A NEGATIVE result (false — "this domain blocks direct fetch/needs
-// extraction") used to be trusted forever, permanently skipping straight to
-// the slow/unreliable public CORS-proxy relay even long after the original
-// cause (a one-off network hiccup, a stalled connection, a since-fixed bug
-// elsewhere) was gone — this is exactly why a link that used to play fine
-// stopped working with no way to recover on its own. A POSITIVE result
-// ("direct fetch works fine here") is kept trusted indefinitely, since
-// there's no risk in continuing to try the fast path that's already proven
-// to work. Only a stale negative gets re-checked periodically.
-const NEGATIVE_PATTERN_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 function getDomainPattern(domain, method) {
   if (!domain || !domainPatterns[domain]) return null;
-  const value = domainPatterns[domain][method];
-  if (value === false) {
-    const at = domainPatterns[domain][method + '_at'] || 0;
-    if (Date.now() - at > NEGATIVE_PATTERN_TTL_MS) {
-      NovaDebug.log('download', 'Ignoring stale "blocked" memory for ' + domain + ' (' + method + ') \u2014 older than 6h, retrying the fast path fresh');
-      return null;
-    }
-  }
-  return value;
+  return domainPatterns[domain][method];
 }
 // Manual escape hatch (wired to the debug panel's reset button) for when a
 // site that used to work suddenly doesn't — instead of waiting out the 6h
@@ -1564,6 +1564,13 @@ function resolveUrl(raw) {
   let url = raw.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim();
   if (!url) return null;
   if (/^https?:\/\//i.test(url)) return url;
+  // content:// (Android "share"/"open with" file URIs) and file:// URIs are
+  // real, complete addresses on their own — they were falling through every
+  // check below (they don't start with http(s), and they don't match the
+  // "looks like a domain" pattern because of the "://") and ending up sent
+  // to the search engine as plain text instead of being opened. Pass them
+  // through untouched, same as http(s) links.
+  if (/^(content|file):\/\//i.test(url)) return url;
   // Collapse any stray internal spaces before checking if this looks like a
   // domain — a genuine multi-word search phrase won't match the pattern
   // below anyway, so this only helps real links survive a messy paste.
@@ -1802,7 +1809,13 @@ function loadUrl(tabId, rawUrl, isNewNav) {
   const url = resolveUrl(rawUrl);
   if (!url) return;
 
-  const looksLikeVideo = VIDEO_EXT_RE.test(url);
+  // content:// and file:// URIs (a video shared from the file manager/gallery/
+  // Downloads app, or pasted as a raw URI) almost never carry a recognizable
+  // .mp4-style extension, so the extension check below misses them — they'd
+  // otherwise fall through to the plain <iframe> path, which can't navigate
+  // to a content:// URI at all and just shows a blank/broken-file page. Treat
+  // any content:// or file:// URI as a video up front, regardless of extension.
+  const looksLikeVideo = VIDEO_EXT_RE.test(url) || /^(content|file):/i.test(url);
   if (looksLikeVideo) preconnectToOrigin(url);
   if (looksLikeVideo && !tab.isVideo) {
     const newEl = document.createElement('video');
@@ -1849,6 +1862,7 @@ function loadUrl(tabId, rawUrl, isNewNav) {
     tab._corsRetried = false;
     tab._retryStage = 0;
     tab._contentUriFallbackTried = false;
+    tab._gradingBlobTried = false;
     // A previous hls.js instance from an earlier video in this same tab
     // must be torn down before attaching a new source — otherwise it keeps
     // fetching the old stream's segments in the background and can fight
@@ -1929,6 +1943,29 @@ function loadUrl(tabId, rawUrl, isNewNav) {
     }
   } else {
     tab.el.src = url;
+    // Known WebView/mobile-Chrome quirk: an <iframe> that's brand new (or was
+    // just made the active/visible one) sometimes silently drops the very
+    // first src assignment — it never fires 'error', it just sits on a blank
+    // page, because the navigation started before the frame had finished its
+    // first layout/paint. Going Back then Forward "fixes" it because that's
+    // a second src assignment on an iframe that's now fully settled. Rather
+    // than make the person do that by hand, check shortly after whether the
+    // frame actually left about:blank, and nudge it with one more assignment
+    // if it didn't — this is the same fix, done automatically.
+    const expectedUrl = url;
+    const thisTab = tab;
+    setTimeout(() => {
+      if (!thisTab.el || thisTab.el.tagName !== 'IFRAME' || thisTab.el.src !== expectedUrl) return; // navigated elsewhere since
+      let stillBlank = false;
+      try {
+        // If this throws, the frame already navigated cross-origin — success.
+        stillBlank = thisTab.el.contentWindow && thisTab.el.contentWindow.location.href === 'about:blank';
+      } catch (e) { stillBlank = false; }
+      if (stillBlank) {
+        NovaDebug.log('nav', 'Frame was still blank after first load attempt \u2014 retrying the same URL once (common first-navigation quirk)', expectedUrl);
+        thisTab.el.src = expectedUrl;
+      }
+    }, 700);
   }
 
   const status = document.getElementById('status');
@@ -2523,9 +2560,34 @@ function drawGradingFrame(tab) {
     // Try once: reload the same URL with crossOrigin='anonymous', keeping
     // the current playback position, and see if that server actually
     // supports it. Only give up for real once that retry has also failed.
+    // Cross-origin video without CORS *mode* taints the canvas — and
+    // critically, the <video> element only makes a CORS-mode request if
+    // `crossOrigin` was set before it started loading. It never was, so
+    // this used to fail permanently even for servers that DO send
+    // Access-Control-Allow-Origin and would happily have allowed it.
+    // Try once: reload the same URL with crossOrigin='anonymous', keeping
+    // the current playback position, and see if that server actually
+    // supports it.
     if (!tab._corsRetried) {
       retryVideoWithCors(tab);
       return true; // don't tear down the loop yet — retry is in flight
+    }
+    // The server genuinely doesn't send CORS headers at all (most video
+    // CDNs/websites don't) — no crossOrigin trick can ever fix that, since
+    // it's a server-side policy, not a client setting. The ONLY way to
+    // guarantee Vibrance/AI Enhance/Skin tone/Temperature/etc. actually
+    // work on this video is to have the full bytes locally: a blob: URL is
+    // always same-origin and can NEVER taint the canvas, regardless of the
+    // original server's CORS policy. So instead of giving up here (which
+    // is why these effects "just didn't work" on most real-world videos),
+    // download the video once in the background and swap the player over
+    // to that local copy — after that, every effect works reliably no
+    // matter what the source server does or doesn't support.
+    if (!tab._gradingBlobTried) {
+      tab._gradingBlobTried = true;
+      const srcUrl = tab.el.currentSrc || tab.el.src;
+      upgradeToBlobForGrading(tab, srcUrl);
+      return true; // keep the loop alive; upgrade runs in the background
     }
     return false;
   }
@@ -2540,6 +2602,87 @@ function drawGradingFrame(tab) {
   gl.uniform1f(g.u_skinSmooth, settings.skinSmooth / 100);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   return true;
+}
+// Downloads the full video (background, no UI blocking) and swaps the
+// player over to the resulting blob: URL — used only when the server
+// doesn't support CORS, as the one guaranteed way to make Vibrance/AI
+// Enhance/Skin tone/Temperature/etc. actually work regardless of source
+// format or which site the video came from. A blob: URL is always
+// same-origin so it can never taint the WebGL canvas these effects read
+// from, no matter what the original server's CORS policy is.
+async function upgradeToBlobForGrading(tab, url) {
+  if (!url || url.startsWith('blob:') || tab.isLocalFile) return;
+  const status = document.getElementById('status');
+  const setStatus = (msg) => { if (tab.id === activeTabId) { status.style.display = 'block'; status.textContent = msg; } };
+  NovaDebug.log('effects', 'Server has no CORS support \u2014 downloading this video once in the background so Color/AI Enhance can work on it', url);
+  if (tab.id === activeTabId) showMiniToast('Preparing enhance effects for this video\u2026');
+  // The #status bar (used for the text progress messages below) is hidden
+  // by CSS whenever the player is in fullscreen \u2014 which is exactly when
+  // someone is actually watching and adjusting Enhance sliders. Without a
+  // second, always-visible indicator, this whole download looked like
+  // nothing was happening at all. Piggyback on the existing top-right
+  // auto-download badge (.auto-dl-indicator) instead \u2014 it's never hidden
+  // by player/immersive mode \u2014 so there's a real, visible \"X% \u00b7 size\"
+  // counter the whole time, in every view mode.
+  const ctrl = new AbortController();
+  tab._autoDLAbort = ctrl;
+  tab._autoDLPct = 0;
+  tab._autoDLBytes = 0;
+  updateAutoDlIndicator(tab);
+  try {
+    const blob = await downloadVideoBlob(
+      url, ctrl.signal,
+      (pct, bytes, total) => {
+        tab._autoDLPct = pct;
+        tab._autoDLBytes = bytes || 0;
+        tab._autoDLTotal = total || 0;
+        updateAutoDlIndicator(tab);
+        setStatus('Preparing enhance effects\u2026 ' + Math.round(pct) + '%');
+      },
+      (s) => setStatus(s)
+    );
+    tab._autoDLAbort = null;
+    // Bail out quietly if the user navigated this tab elsewhere while the
+    // download was still running.
+    if (tab.history[tab.historyIndex] !== url) return;
+    const savedTime = tab.el.currentTime || 0;
+    const wasPlaying = !tab.el.paused;
+    tab._savedBlob = blob;
+    tab._savedFilename = guessFilenameFromUrl(url, blob.type);
+    if (tab.el._objectUrl) { try { URL.revokeObjectURL(tab.el._objectUrl); } catch (e) {} }
+    const objUrl = URL.createObjectURL(blob);
+    tab.el._objectUrl = objUrl;
+    tab.el.crossOrigin = null; // blob: URLs need no CORS mode at all
+    tab.el.src = objUrl;
+    tab.el.load();
+    tab._corsRetried = true; // no more CORS games needed — it's local now
+    tab.gl = null; // fresh GL/texture state bound to the new element source
+    tab.el.addEventListener('loadedmetadata', () => {
+      if (savedTime > 0) { try { tab.el.currentTime = savedTime; } catch (e) {} }
+      if (wasPlaying) tab.el.play().catch(() => {});
+      ensureAudioGraphIfBoosted(tab);
+      updateVolumeGain(tab, settings.volBoost);
+      applyFiltersToTab(tab);
+      if (tab.id === activeTabId) {
+        status.style.display = 'none';
+        updateGradingForActiveTab();
+        showMiniToast('Enhance effects are now available for this video');
+      }
+      updateAutoDlIndicator(tab);
+      NovaDebug.log('effects', 'Switched to local copy \u2014 Color/AI Enhance now guaranteed to work for this video');
+    }, { once: true });
+  } catch (e) {
+    tab._autoDLAbort = null;
+    tab._autoDLFailed = true;
+    updateAutoDlIndicator(tab);
+    NovaDebug.error('effects', 'Could not download this video to enable Enhance effects: ' + (e && e.message ? e.message : 'unknown error'), url);
+    if (tab.id === activeTabId) {
+      status.style.display = 'none';
+      showMiniToast('Couldn\u2019t enable Enhance effects for this video (download failed)');
+    }
+    // Let the loop stop cleanly on the next frame — playback itself keeps
+    // working normally, just without the color-grading effects.
+  }
 }
 function retryVideoWithCors(tab) {
   tab._corsRetried = true;
@@ -3725,10 +3868,13 @@ document.getElementById('desktopBtn').addEventListener('click', () => {
 const CORS_PROXIES = [
   url => url, // try direct fetch first (works when the site allows CORS)
   url => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
-  url => 'https://corsproxy.io/?url=' + encodeURIComponent(url),
+  // corsproxy.io now requires a paid API key for every request and returns
+  // 401 without one — removed so it stops burning a slot/timeout on every extraction.
   url => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url),
   url => 'https://thingproxy.freeboard.io/fetch/' + url,
   url => 'https://proxy.cors.sh/' + url,
+  url => 'https://api.cors.lol/url=' + url, // free, no key needed as of 2026
+  url => 'https://corsfix.com/' + url, // free for dev/open-source use, no key needed
   url => 'https://yacdn.org/proxy/' + url,
   url => 'https://cors.eu.org/' + url,
   url => 'https://api.allorigins.win/get?url=' + encodeURIComponent(url),
@@ -3744,12 +3890,17 @@ const PROXY_TIMEOUT_MS = 12000;
 const FAST_CORS_PROXIES = [
   url => url, // try direct fetch first (works when the site allows CORS)
   url => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
-  url => 'https://corsproxy.io/?url=' + encodeURIComponent(url),
+  // corsproxy.io removed — now needs a paid API key, always 401s without one.
   url => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url),
   url => 'https://thingproxy.freeboard.io/fetch/' + url,
-  url => 'https://proxy.cors.sh/' + url
+  url => 'https://proxy.cors.sh/' + url,
+  url => 'https://api.cors.lol/url=' + url,
+  url => 'https://corsfix.com/' + url
 ];
-const FAST_PROXY_TIMEOUT_MS = 4500;
+// Restored from the older version: 4500ms was cutting off proxies that would
+// have succeeded a couple seconds later on slower/heavier pages — 7000ms
+// matches the fast-path timeout that was working reliably before.
+const FAST_PROXY_TIMEOUT_MS = 7000;
 let lastExtractFailReason = '';
 
 // fetch with a hard timeout, so one dead/slow proxy doesn't stall the whole chain
@@ -3962,6 +4113,49 @@ function findVideoUrlsInHtml(html, baseUrl) {
     if (abs2 && /^https?:\/\//i.test(abs2)) iframeCandidates.push(abs2);
   }
 
+  // 9) Generic <a href="...video-file"> and download-attribute links — plain
+  // "click to download" anchors that aren't <link>/<embed>/<source> tags.
+  const anchorRe = /<a[^>]+href=["']([^"']+?\.(?:mp4|webm|m3u8|mov|m4v|mkv|avi|3gp|ogv|flv)(?:\?[^"']*)?)["'][^>]*>/gi;
+  while ((m = anchorRe.exec(unescaped))) candidates.push(m[1]);
+  const downloadAttrRe = /<a[^>]+download[^>]*href=["']([^"']+)["']/gi;
+  while ((m = downloadAttrRe.exec(unescaped))) { if (/\.(mp4|webm|m3u8|mov|m4v|mkv|avi|3gp|ogv|flv)(?:\?|$)/i.test(m[1])) candidates.push(m[1]); }
+
+  // 9b) video.js-style player.src({ src: "...", type: "..." }) calls, and
+  // Shaka Player's manifestUri / load("...") calls.
+  const playerSrcRe = /\.src\(\s*\{[^}]*?["']?src["']?\s*:\s*["']([^"']+)["']/gi;
+  while ((m = playerSrcRe.exec(unescaped))) candidates.push(m[1]);
+  const shakaRe = /(?:manifestUri|manifestUrl)\s*[:=]\s*["']([^"']+)["']/gi;
+  while ((m = shakaRe.exec(unescaped))) candidates.push(m[1]);
+  const loadCallRe = /\.load\(\s*["'](https?:\/\/[^"']+?\.(?:m3u8|mpd|mp4)[^"']*)["']\s*\)/gi;
+  while ((m = loadCallRe.exec(unescaped))) candidates.push(m[1]);
+
+  // 9c) JW Player / Plyr / Video.js "sources" as an array of OBJECTS rather than
+  // plain strings — {"file":"url", "type":"mp4"} or {"src":"url", "type":"video/mp4"}.
+  const sourceObjRe = /\{\s*["']?(?:file|src)["']?\s*:\s*["'](https?:\/\/[^"']+?\.(?:mp4|webm|m3u8|mov|m4v|mpd)[^"']*)["'][^}]*\}/gi;
+  while ((m = sourceObjRe.exec(unescaped))) candidates.push(m[1]);
+
+  // 9d) Hex-escaped URLs (\x68\x74\x74\x70...) — a lightweight obfuscation some
+  // filehost/streaming templates use instead of, or alongside, base64/packer.
+  const hexRe = /((?:\\x[0-9a-fA-F]{2}){10,})/g;
+  while ((m = hexRe.exec(unescaped))) {
+    try {
+      const dec = m[1].replace(/\\x([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+      if (/^https?:\/\//i.test(dec) && /\.(mp4|webm|m3u8|mov|m4v|mpd)/i.test(dec)) unescaped += '\n' + dec;
+    } catch (e) { /* not a clean hex run — skip */ }
+  }
+
+  // 9e) URL-safe base64 (- and _ instead of +/) inside atob-like decode calls,
+  // and standalone long base64 blobs assigned to a variable right before a
+  // decode call elsewhere in the script (common in lightly-obfuscated templates).
+  const atobUrlSafeRe = /(?:atob|Base64\.decode)\(\s*["']([A-Za-z0-9\-_]{16,}={0,2})["']\s*\)/gi;
+  while ((m = atobUrlSafeRe.exec(unescaped))) {
+    try {
+      const b64 = m[1].replace(/-/g, '+').replace(/_/g, '/');
+      const dec = atob(b64);
+      if (/\.(mp4|webm|m3u8|mov|m4v|mpd)/i.test(dec)) unescaped += '\n' + dec;
+    } catch (e) {}
+  }
+
   // 7g) <meta http-equiv="refresh" content="0;url=..."> interstitial/redirect pages —
   // common on shortlinks and "click to continue" gate pages that sit in front of the
   // actual video page. Followed the same way as an iframe candidate.
@@ -3979,7 +4173,7 @@ function findVideoUrlsInHtml(html, baseUrl) {
     // also accept known CDN manifest/progressive-redirect URLs that don't end in a
     // plain file extension (e.g. cloudflarestream.com/.../manifest/video.m3u8?query,
     // vimeo progressive_redirect paths) alongside the standard extensions.
-    .filter(u => /\.(mp4|webm|m3u8|mov|m4v|mpd|flv|ogv|ts)(?:[?#]|$)/i.test(u) || /manifest\/video\.m3u8|progressive_redirect/i.test(u))
+    .filter(u => /\.(mp4|webm|m3u8|mov|m4v|mpd|flv|ogv|ts|mkv|avi|3gp|f4v)(?:[?#]|$)/i.test(u) || /manifest\/video\.m3u8|progressive_redirect/i.test(u))
     .filter(u => { if (seen.has(u)) return false; seen.add(u); return true; });
 
   // Prefer mp4/webm over m3u8/mpd (m3u8/mpd need HLS/DASH support the plain <video> tag may lack)
@@ -4004,12 +4198,13 @@ async function scanUrlForVideoCandidates(pageUrl, statusEl) {
   let settledCount = 0;
   let collectedIframes = [];
 
-  const attempt = (proxyFn) => new Promise((resolve) => {
+  const attempt = (proxyFn, proxyIdx) => new Promise((resolve) => {
     (async () => {
       try {
         const fetchUrl = proxyFn(pageUrl);
         const res = await fetchWithTimeout(fetchUrl, { method: 'GET', mode: 'cors' }, PROXY_TIMEOUT_MS);
         lastHttpStatus = res.status;
+        NovaDebug.log('extract', 'Route #' + proxyIdx + ' responded', 'status=' + res.status + '  ' + fetchUrl);
         if (!res.ok) { resolve(null); return; }
         let html = await res.text();
         // allorigins' /get endpoint wraps the page in {"contents":"...","status":{...}} JSON
@@ -4017,12 +4212,14 @@ async function scanUrlForVideoCandidates(pageUrl, statusEl) {
         if (fetchUrl.indexOf('allorigins.win/get') !== -1) {
           try { const parsed = JSON.parse(html); if (parsed && typeof parsed.contents === 'string') html = parsed.contents; } catch (e) {}
         }
-        if (!html || html.length < 50) { resolve(null); return; }
+        if (!html || html.length < 50) { NovaDebug.warn('extract', 'Route #' + proxyIdx + ' returned an empty/too-short response (' + (html ? html.length : 0) + ' chars)'); resolve(null); return; }
         anyFetchSucceeded = true;
         const found = findVideoUrlsInHtml(html, pageUrl);
         if (found._iframeCandidates && found._iframeCandidates.length) collectedIframes = collectedIframes.concat(found._iframeCandidates);
+        NovaDebug.log('extract', 'Route #' + proxyIdx + ' scanned page (' + html.length + ' chars) \u2014 found ' + found.length + ' video URL(s) + ' + (found._iframeCandidates ? found._iframeCandidates.length : 0) + ' iframe(s)');
         resolve(found.length ? found : null);
       } catch (e) {
+        NovaDebug.warn('extract', 'Route #' + proxyIdx + ' threw/timed out', (e && e.message) || String(e));
         resolve(null);
       } finally {
         settledCount++;
@@ -4033,7 +4230,7 @@ async function scanUrlForVideoCandidates(pageUrl, statusEl) {
     })();
   });
 
-  const promises = CORS_PROXIES.map(fn => attempt(fn));
+  const promises = CORS_PROXIES.map((fn, idx) => attempt(fn, idx));
 
   const result = await new Promise((resolveAll) => {
     let pending = promises.length;
@@ -4100,11 +4297,12 @@ async function extractVideoCandidatesFast(pageUrl) {
     } catch (e) {}
   }
 
-  const attempt = (proxyFn) => new Promise((resolve) => {
+  const attempt = (proxyFn, proxyIdx) => new Promise((resolve) => {
     (async () => {
       try {
         const fetchUrl = proxyFn(pageUrl);
         const res = await fetchWithTimeout(fetchUrl, { method: 'GET', mode: 'cors' }, FAST_PROXY_TIMEOUT_MS);
+        NovaDebug.log('extract', '[fast] Route #' + proxyIdx + ' responded', 'status=' + res.status + '  ' + fetchUrl);
         if (!res.ok) { resolve(null); return; }
         let html = await res.text();
         if (fetchUrl.indexOf('allorigins.win/get') !== -1) {
@@ -4112,8 +4310,10 @@ async function extractVideoCandidatesFast(pageUrl) {
         }
         if (!html || html.length < 50) { resolve(null); return; }
         const found = findVideoUrlsInHtml(html, pageUrl);
+        NovaDebug.log('extract', '[fast] Route #' + proxyIdx + ' scanned (' + html.length + ' chars) \u2014 found ' + found.length + ' video URL(s)');
         resolve(found.length ? found : null);
       } catch (e) {
+        NovaDebug.warn('extract', '[fast] Route #' + proxyIdx + ' threw/timed out', (e && e.message) || String(e));
         resolve(null);
       }
     })();
@@ -4131,7 +4331,7 @@ async function extractVideoCandidatesFast(pageUrl) {
     let pending = order.length;
     let doneAlready = false;
     order.forEach(idx => {
-      attempt(FAST_CORS_PROXIES[idx])
+      attempt(FAST_CORS_PROXIES[idx], idx)
         .then(result => {
           pending--;
           if (doneAlready) return;
@@ -4195,7 +4395,7 @@ async function extractVideoCandidatesFromPageOnce(pageUrl) {
 
   lastExtractFailReason = primary.anyFetchSucceeded
     ? "This page's video is loaded by JavaScript after the page opens, so it isn't in the raw page source — that's why it can't be found this way."
-    : "Couldn't reach this page from here through any of the available routes" + (primary.lastHttpStatus ? ' (last response: ' + primary.lastHttpStatus + ')' : '') + ". The site, your network, or the proxy services may be blocking the request. Try again in a moment.";
+    : "Couldn't reach this page through any of the " + CORS_PROXIES.length + " available routes" + (primary.lastHttpStatus ? ' (last response: ' + primary.lastHttpStatus + ')' : '') + ". These are free public proxies and sometimes ALL of them are rate-limited/down at once — this isn't necessarily your link or your network. Wait a minute and tap Find video again.";
   return [];
 }
 
@@ -4431,7 +4631,7 @@ async function loadVideoViaHlsJs(tab, url) {
     // on a fast connection the player keeps pulling in more instead of
     // pausing fetches once 30s is banked — this is what actually lets it
     // use the full available speed rather than throttling itself.
-    maxBufferLength: 90,
+    maxBufferLength: 120,
     // Hard ceiling maxBufferLength can grow to when the stream's bitrate is
     // low (hls.js scales the effective target between these based on
     // bitrate) — keeps the same "buffer as much as the link allows" intent
@@ -4442,7 +4642,7 @@ async function loadVideoViaHlsJs(tab, url) {
     // well before the second ceiling above, quietly throttling how far
     // ahead it fetches. Raised hard since the goal here is "use all the
     // bandwidth available", not conserve memory/data.
-    maxBufferSize: 600 * 1000 * 1000,
+    maxBufferSize: 900 * 1000 * 1000,
     // Never cap the selected rendition to the on-screen video size — some
     // phones report a small CSS/canvas size that would otherwise lock
     // playback to a lower-than-max quality even on a fast connection.
@@ -4474,7 +4674,7 @@ async function loadVideoViaHlsJs(tab, url) {
     // and stepping up over several fragments. Assume a fast link by
     // default instead, so it reaches for the top quality immediately and
     // only steps down if the real measurement says otherwise.
-    abrEwmaDefaultEstimate: 20000000,
+    abrEwmaDefaultEstimate: 50000000,
     // Starts fetching the next fragment while the current one is still
     // being parsed instead of fetch-then-parse-then-fetch — overlapping
     // the two fills the buffer noticeably faster on higher-latency links.
@@ -5621,7 +5821,7 @@ async function playHlsProgressive(tab, url) {
     }
     throw new Error('Segment failed: ' + u);
   };
-  const CONCURRENCY = 64; // segments must still be fed to the
+  const CONCURRENCY = 128; // segments must still be fed to the
   // transmuxer/SourceBuffer strictly in order, but downloading well ahead
   // of what's been appended just costs a little memory (segments are
   // small), not correctness — raised well past the old conservative value
@@ -6245,7 +6445,7 @@ async function downloadHlsRawNoConvert(mediaPlaylistUrl, onProgress, onStatus, s
   // needed the rate-limit cleanup pass before start even lower next time —
   // no point re-learning the same limit on every single download.
   const rateLimitedBefore = domain && getDomainPattern(domain, 'directDlRateLimited') === true;
-  const CONCURRENCY = rateLimitedBefore ? 10 : 40;
+  const CONCURRENCY = rateLimitedBefore ? 10 : 64;
   let nextIndex = 0;
   async function worker() {
     while (nextIndex < segments.length) {
@@ -6464,11 +6664,60 @@ function hideDirectDlOverlayCosmetic() {
 document.getElementById('directDlBtn').addEventListener('click', () => openDirectDlOverlay());
 document.getElementById('debugBtn').addEventListener('click', () => NovaDebug.toggle());
 NovaDebug.setBadgeEl(document.getElementById('ndbgBadge'));
-document.getElementById('directDlPlayBtn').addEventListener('click', () => {
-  const val = (document.getElementById('directDlUrlInput').value || '').trim();
-  if (!val) { showMiniToast('Paste a video link first'); return; }
-  closeDirectDlOverlay();
-  loadUrl(activeTabId, val, true);
+document.getElementById('directDlPlayBtn').addEventListener('click', async () => {
+  const raw = (document.getElementById('directDlUrlInput').value || '').trim();
+  if (!raw) { showMiniToast('Paste a video link first'); return; }
+  let val = raw.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim();
+  if (!/^https?:\/\//i.test(val)) val = 'https://' + val;
+  const statusEl = document.getElementById('directDlStatus');
+  const playBtn = document.getElementById('directDlPlayBtn');
+  // BUG FIX: this button used to always call loadUrl() directly, which only
+  // works when the pasted link IS the raw video file itself (ends in
+  // .mp4/.m3u8/etc). Most real-world "video links" people paste here are
+  // actually a PAGE that merely contains/embeds a video (a watch page, a
+  // short-link, a gate page) \u2014 loadUrl() has no way to know that, so it just
+  // opened the page as a normal website (or a blank/broken tab), and the
+  // person saw "the link doesn't work" with zero explanation. The Download
+  // button already handled this correctly by falling back to the page-video
+  // extractor (resolveAndOpenVideo/extractVideoCandidatesFromPage) when a
+  // direct fetch/URL doesn't look like a video \u2014 Play never did the same
+  // check. Now Play uses that identical resolution logic before opening.
+  NovaDebug.log('play', 'Direct-play requested for pasted link', val);
+  if (VIDEO_EXT_RE.test(val)) {
+    NovaDebug.log('play', 'Link already has a recognizable video extension \u2014 opening directly');
+    closeDirectDlOverlay();
+    loadUrl(activeTabId, val, true);
+    return;
+  }
+  playBtn.disabled = true;
+  statusEl.className = 'extract-status';
+  statusEl.textContent = 'Checking link\u2026';
+  try {
+    const result = await resolveAndOpenVideo(val, statusEl);
+    if (result.outcome === 'opened') {
+      NovaDebug.log('play', 'Resolved to a playable video URL \u2014 opening', result.quality || '');
+      closeDirectDlOverlay();
+    } else if (result.outcome === 'search-results') {
+      NovaDebug.warn('play', 'Pasted link is a search-results page, not a video page', val);
+      statusEl.className = 'extract-status error';
+      statusEl.textContent = 'That looks like a search results page (' + result.hostname + '), not a video page \u2014 open the actual video page first, then paste that link.';
+    } else if (result.outcome === 'multiple') {
+      NovaDebug.log('play', 'Found ' + result.candidates.length + ' quality candidates \u2014 letting user pick');
+      statusEl.className = 'extract-status success';
+      statusEl.textContent = 'Found ' + result.candidates.length + ' versions \u2014 pick one:';
+      renderQualityList(result.candidates, (u) => { closeDirectDlOverlay(); createTab(u, true, {}); });
+    } else {
+      NovaDebug.error('play', 'Could not find any playable video on/at this link \u2014 diagnosis: page may need JS to load the video, or the site (YouTube/Instagram/Facebook/Netflix-style) actively protects its stream', val);
+      statusEl.className = 'extract-status error';
+      statusEl.textContent = lastExtractFailReason || 'Couldn\u2019t find a playable video at that link. It may be a protected site (YouTube/Instagram/Facebook/Netflix etc.) or block this kind of access \u2014 tap the \u{1F41B} debug button for details.';
+    }
+  } catch (e) {
+    NovaDebug.error('play', 'Unexpected error while resolving the link: ' + (e && e.message ? e.message : 'unknown error'), val);
+    statusEl.className = 'extract-status error';
+    statusEl.textContent = 'Something went wrong reading that link. Tap the \u{1F41B} debug button for details, or try Download instead.';
+  } finally {
+    playBtn.disabled = false;
+  }
 });
 document.getElementById('directDlGoBtn').addEventListener('click', runDirectDownload);
 document.getElementById('directDlCloseBtn').addEventListener('click', closeDirectDlOverlay);
@@ -6478,7 +6727,9 @@ async function proxyDownload(url, signal, title, onProgress) {
   const proxies = [
     u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
     u => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u),
-    u => 'https://corsproxy.io/?url=' + encodeURIComponent(u),
+    // corsproxy.io removed — needs a paid API key now, always 401s without one.
+    u => 'https://api.cors.lol/url=' + u,
+    u => 'https://corsfix.com/' + u,
     u => 'https://thingproxy.freeboard.io/fetch/' + u
   ];
   const domain = getDomain(url);
@@ -6687,7 +6938,7 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // the pool off on its own instead of forcing it and risking a broken
       // download. That self-limiting behavior is what makes it safe to set
       // the ceiling itself higher than before.
-      const MAX_WORKERS = 192;
+      const MAX_WORKERS = 256;
       const fetchPiece = async (idx, attemptsLeft) => {
         const [start, end] = pieces[idx];
         try {
@@ -6754,10 +7005,10 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
         allWorkerPromises.push(p);
         return p;
       }
-      const START_WORKERS = 96;
+      const START_WORKERS = 128;
       for (let i = 0; i < Math.min(START_WORKERS, pieces.length); i++) launchWorker();
-      // Ramp: every 120ms, if nothing has failed recently and there's still
-      // unclaimed work, add up to 8 more workers — up to MAX_WORKERS. A
+      // Ramp: every 90ms, if nothing has failed recently and there's still
+      // unclaimed work, add up to 12 more workers — up to MAX_WORKERS. A
       // slower, steadier ramp (vs. slamming straight to a huge worker
       // count) matters because most video CDNs rate-limit or briefly
       // throttle a burst of simultaneous connections from one client —
@@ -6770,8 +7021,8 @@ async function downloadVideoBlob(url, signal, onProgress, onStatus) {
       // on its own instead of forcing it and breaking the download.
       const ramp = setInterval(() => {
         if (rampBlocked || firstFatalError || nextPiece >= pieces.length || activeWorkers >= MAX_WORKERS) { clearInterval(ramp); return; }
-        for (let i = 0; i < 8 && activeWorkers < MAX_WORKERS && nextPiece < pieces.length && !rampBlocked; i++) launchWorker();
-      }, 120);
+        for (let i = 0; i < 12 && activeWorkers < MAX_WORKERS && nextPiece < pieces.length && !rampBlocked; i++) launchWorker();
+      }, 90);
       // Wait for the whole pool to actually drain — poll instead of a single
       // Promise.all call, since the set of promises to wait for keeps
       // growing for as long as the ramp is still adding workers.

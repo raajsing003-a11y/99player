@@ -1,7 +1,7 @@
 {
   "name": "Nova Browser",
   "short_name": "Nova",
-  "description": "A private in-app browser with fast video download and offline playback.",
+  "description": "A privacy-focused browser for watching, extracting and downloading videos.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
@@ -9,9 +9,36 @@
   "background_color": "#121212",
   "theme_color": "#121212",
   "icons": [
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "file_handlers": [
+    {
+      "action": "./index.html",
+      "accept": {
+        "video/*": [
+          ".mp4",
+          ".webm",
+          ".mkv",
+          ".mov",
+          ".m4v",
+          ".avi",
+          ".3gp",
+          ".ts",
+          ".flv",
+          ".ogv"
+        ]
+      }
+    }
   ]
 }
