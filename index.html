@@ -2517,12 +2517,21 @@ function setGradingVisible(tab, on) {
     if (!g) { on = false; }
   }
   if (on) {
-    tab.el.classList.add('grading-hidden');
-    tab.canvas.classList.add('active-frame');
+    // Don't hide the real <video> or switch to the canvas yet — only once
+    // drawGradingFrame() has actually drawn a real frame onto it. Doing the
+    // swap immediately was the cause of "video plays, audio plays, but
+    // screen goes black": for CORS-tainted videos the canvas can stay
+    // empty for the whole duration of a retry or a background full-video
+    // download, and the video underneath was already hidden the instant
+    // grading was requested, so there was nothing to show in the meantime.
+    tab._gradingReady = false;
+    tab._gradingOn = true;
     startGradingLoop(tab);
   } else {
     tab.el.classList.remove('grading-hidden');
     tab.canvas.classList.remove('active-frame');
+    tab._gradingReady = false;
+    tab._gradingOn = false;
     if (gradingRAF) { cancelAnimationFrame(gradingRAF); gradingRAF = null; }
   }
 }
@@ -2602,6 +2611,15 @@ function drawGradingFrame(tab) {
   gl.uniform1f(g.u_skinProtect, settings.skinProtect ? 1.0 : 0.0);
   gl.uniform1f(g.u_skinSmooth, settings.skinSmooth / 100);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  // Only now — after a real frame has actually landed on the canvas — swap
+  // the visible layer over. Until this point the <video> stays on screen
+  // so playback never goes black while a CORS retry or background
+  // download is still in flight.
+  if (!tab._gradingReady) {
+    tab._gradingReady = true;
+    tab.el.classList.add('grading-hidden');
+    tab.canvas.classList.add('active-frame');
+  }
   return true;
 }
 // Downloads the full video (background, no UI blocking) and swaps the
@@ -2725,7 +2743,7 @@ function retryVideoWithCors(tab) {
 function startGradingLoop(tab) {
   if (gradingRAF) cancelAnimationFrame(gradingRAF);
   function frame() {
-    if (tab.id !== activeTabId || !tab.canvas.classList.contains('active-frame')) { gradingRAF = null; return; }
+    if (tab.id !== activeTabId || !tab._gradingOn) { gradingRAF = null; return; }
     const ok = drawGradingFrame(tab);
     if (!ok) {
       // Stop the loop and hand the screen back to the real <video> instead
