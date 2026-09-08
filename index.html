@@ -661,6 +661,7 @@
       <button class="url-copy-btn" id="urlExternalBtn" title="Open in your device's browser (use this if a site refuses to load here)">&#8663;</button>
     </div>
     <button class="icon-btn" id="directDlBtn" title="Direct download (no play needed)">&#11015;&#65039;</button>
+    <button class="icon-btn" id="mainDebugBtn" title="Debug — why a page/video failed" style="position:relative;">&#128027;<span class="ndbg-badge" id="ndbgBadgeMain"></span></button>
     <div class="extra-buttons">
       <button class="icon-btn" id="downloadsBtn" title="Downloads">&#8681;</button>
       <button class="icon-btn" id="offlineBtn" title="Offline library">&#128190;</button>
@@ -6884,6 +6885,7 @@ function hideDirectDlOverlayCosmetic() {
 }
 document.getElementById('directDlBtn').addEventListener('click', () => openDirectDlOverlay());
 document.getElementById('debugBtn').addEventListener('click', () => NovaDebug.toggle());
+document.getElementById('mainDebugBtn').addEventListener('click', () => NovaDebug.toggle());
 document.getElementById('extractDebugBtn').addEventListener('click', () => NovaDebug.toggle());
 document.getElementById('directDlDebugBtn').addEventListener('click', () => NovaDebug.toggle());
 NovaDebug.setBadgeEl(document.getElementById('ndbgBadge'));
