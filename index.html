@@ -671,6 +671,7 @@
       <button class="icon-btn" id="maskModeBtn" title="Mask URLs &amp; searches (privacy screen)">&#128373;</button>
       <button class="icon-btn" id="fullscreenBtn" title="Fullscreen">&#9974;</button>
       <button class="icon-btn" id="extractVideoBtn" title="Open video from a page link">&#127916;</button>
+      <button class="icon-btn" id="apiActorsBtn" title="Browse Apify Actors (APIs)">&#129513;</button>
       <select id="engineSelect" title="Search engine">
         <option value="bing">Bing</option>
         <option value="ddg">DuckDuckGo</option>
@@ -696,6 +697,7 @@
   <div class="panel" id="bookmarksPanel"></div>
   <div class="panel" id="downloadsPanel"></div>
   <div class="panel" id="offlinePanel"></div>
+  <div class="panel" id="apiActorsPanel"></div>
 
   <div class="stage" id="stage">
     <div class="refresh-indicator" id="refreshIndicator">&#8635;</div>
@@ -714,6 +716,7 @@
           <button class="home-shortcut" data-target="bookmarksBtn"><span class="circle" style="background:#d9527a">&#128278;</span><span class="label">Bookmarks</span></button>
           <button class="home-shortcut" data-target="historyBtn"><span class="circle" style="background:#5a6b7a">&#8987;</span><span class="label">History</span></button>
           <button class="home-shortcut" data-target="extractVideoBtn"><span class="circle" style="background:#d9483f">&#127916;</span><span class="label">Get video</span></button>
+          <button class="home-shortcut" data-target="apiActorsBtn"><span class="circle" style="background:#3f9ad9">&#129513;</span><span class="label">APIs</span></button>
           <button class="home-shortcut" data-target="desktopBtn"><span class="circle" style="background:#4a4a4a">&#128421;</span><span class="label">Desktop</span></button>
         </div>
       </div>
@@ -2053,6 +2056,64 @@ function closePanels() {
   document.getElementById('bookmarksPanel').classList.remove('open');
   document.getElementById('downloadsPanel').classList.remove('open');
   document.getElementById('offlinePanel').classList.remove('open');
+  document.getElementById('apiActorsPanel').classList.remove('open');
+}
+
+/* ---- Apify Actors (APIs) directory — live search via Apify's public
+   store API, no API key needed for browsing. Selecting a result opens
+   its Apify page (with the affiliate param) in a new tab. ---- */
+let apiActorsAbort = null;
+let apiActorsSearchTimer = null;
+async function fetchApifyActors(query) {
+  const listEl = document.getElementById('apiActorsList');
+  if (!listEl) return;
+  listEl.innerHTML = '<div class="panel-empty">Loading\u2026</div>';
+  if (apiActorsAbort) { try { apiActorsAbort.abort(); } catch (e) {} }
+  const ctrl = new AbortController();
+  apiActorsAbort = ctrl;
+  try {
+    const url = 'https://api.apify.com/v2/store?limit=30&offset=0' + (query ? '&search=' + encodeURIComponent(query) : '');
+    const res = await fetch(url, { signal: ctrl.signal });
+    const data = await res.json();
+    const items = (data && data.data && data.data.items) || [];
+    if (ctrl.signal.aborted) return;
+    listEl.innerHTML = '';
+    if (items.length === 0) { listEl.innerHTML = '<div class="panel-empty">No actors found.</div>'; return; }
+    items.forEach(actor => {
+      const title = actor.title || actor.name || 'Unknown';
+      const desc = actor.description || '';
+      let link = actor.url || '';
+      if (!link && actor.username && actor.name) link = 'https://apify.com/' + actor.username + '/' + actor.name;
+      const sep = link.includes('?') ? '&' : '?';
+      const affUrl = link ? link + sep + 'fpr=p2hrc6' : '';
+      const row = document.createElement('div');
+      row.className = 'panel-row';
+      row.style.alignItems = 'flex-start';
+      row.innerHTML = '<span class="link' + (maskMode ? ' masked' : '') + '" style="white-space:normal;line-height:1.4;">' +
+        '<b>' + (maskMode ? maskLabel() : escapeHtml(title)) + '</b>' +
+        (maskMode ? '' : (desc ? '<br><span style="color:#999;font-size:11.5px;">' + escapeHtml(desc.slice(0, 140)) + (desc.length > 140 ? '\u2026' : '') + '</span>' : '')) +
+        '</span>';
+      if (affUrl) {
+        row.querySelector('.link').addEventListener('click', () => { createTab(affUrl); closePanels(); });
+      }
+      listEl.appendChild(row);
+    });
+  } catch (e) {
+    if (e.name === 'AbortError') return;
+    listEl.innerHTML = '<div class="panel-empty">Couldn\u2019t load Apify Actors \u2014 check your network connection.</div>';
+  }
+}
+function renderApiActorsPanel() {
+  const panel = document.getElementById('apiActorsPanel');
+  panel.innerHTML = '<input type="text" id="apiActorsSearch" placeholder="Search 10,000+ Apify Actors (APIs)\u2026" ' +
+    'style="width:100%;box-sizing:border-box;padding:8px 10px;border-radius:8px;border:1px solid #333;background:#111;color:#eee;font-size:13px;margin-bottom:8px;">' +
+    '<div id="apiActorsList"></div>';
+  document.getElementById('apiActorsSearch').addEventListener('input', (e) => {
+    clearTimeout(apiActorsSearchTimer);
+    const v = e.target.value.trim();
+    apiActorsSearchTimer = setTimeout(() => fetchApifyActors(v), 400);
+  });
+  fetchApifyActors('');
 }
 function renderHistoryPanel() {
   const panel = document.getElementById('historyPanel');
@@ -3763,6 +3824,12 @@ document.getElementById('offlineBtn').addEventListener('click', () => {
   const willOpen = !panel.classList.contains('open');
   closePanels();
   if (willOpen) { renderOfflinePanel(); panel.classList.add('open'); }
+});
+document.getElementById('apiActorsBtn').addEventListener('click', () => {
+  const panel = document.getElementById('apiActorsPanel');
+  const willOpen = !panel.classList.contains('open');
+  closePanels();
+  if (willOpen) { renderApiActorsPanel(); panel.classList.add('open'); }
 });
 document.getElementById('fullscreenBtn').addEventListener('click', () => {
   const container = document.getElementById('stage');
@@ -6117,6 +6184,47 @@ async function downloadHlsBlob(mediaPlaylistUrl, onProgress, onStatus, signal) {
   }
 }
 
+/* ================= cobalt (youtube/instagram/tiktok/etc. resolver) =================
+   cobalt.tools runs an open, free-for-personal-use API that resolves the
+   real, direct media URL for sites that actively protect their streams —
+   exactly the sites our own page-scraper can never see through. We only
+   ever send it the pasted page URL and read back a direct link; nothing
+   is uploaded/stored on our side. api.cobalt.tools is tried first, and if
+   it's unreachable (rate-limited, temporarily down, etc.) a couple of
+   known community-run instances are tried next — see cobalt.directory for
+   a fuller/updated list if these ever stop working. */
+const COBALT_INSTANCES = ['https://api.cobalt.tools/', 'https://co.wuk.sh/'];
+const COBALT_HOST_RE = /(^|\.)(?:youtube\.com|youtu\.be|instagram\.com|tiktok\.com|twitter\.com|x\.com|facebook\.com|fb\.watch|reddit\.com|redd\.it|pinterest\.[a-z.]+|soundcloud\.com|vimeo\.com|dailymotion\.com|twitch\.tv|clips\.twitch\.tv|bilibili\.com|bsky\.app|tumblr\.com|loom\.com|rutube\.ru|ok\.ru|streamable\.com|snapchat\.com)$/i;
+function isCobaltSupportedUrl(u) {
+  try { return COBALT_HOST_RE.test(new URL(u).hostname.replace(/^www\./, '')); }
+  catch (e) { return false; }
+}
+async function resolveViaCobalt(pageUrl) {
+  let lastErr = null;
+  for (const base of COBALT_INSTANCES) {
+    try {
+      const resp = await fetchWithTimeout(base, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: pageUrl, downloadMode: 'auto' })
+      }, 15000);
+      if (!resp.ok) { lastErr = new Error('cobalt instance returned HTTP ' + resp.status); continue; }
+      const data = await resp.json();
+      NovaDebug.log('play', 'cobalt response status: ' + data.status, base);
+      if (data.status === 'redirect' || data.status === 'tunnel' || data.status === 'stream') {
+        return { url: data.url, label: 'cobalt' };
+      }
+      if (data.status === 'picker' && Array.isArray(data.picker) && data.picker.length) {
+        // Multiple items (e.g. a slideshow/carousel post) — take the first
+        // playable one rather than failing outright.
+        const first = data.picker.find(p => p.type !== 'photo') || data.picker[0];
+        if (first && first.url) return { url: first.url, label: 'cobalt' };
+      }
+      lastErr = new Error(data.error && data.error.code ? data.error.code : ('cobalt could not resolve this link (status: ' + data.status + ')'));
+    } catch (e) { lastErr = e; }
+  }
+  throw (lastErr || new Error('No cobalt instance responded'));
+}
 async function resolveAndOpenVideo(pageUrl, statusEl) {
   if (VIDEO_EXT_RE.test(pageUrl)) {
     createTab(pageUrl, true, {});
@@ -6124,6 +6232,26 @@ async function resolveAndOpenVideo(pageUrl, statusEl) {
   }
   if (isSearchResultsPage(pageUrl)) {
     return { outcome: 'search-results', hostname: new URL(pageUrl).hostname };
+  }
+  // YouTube/Instagram/TikTok/Twitter(X)/Facebook/Reddit/etc. actively protect
+  // their video streams — the plain page-scraper below can't see through
+  // that (it just finds an HTML watch-page, not a real media URL). Try
+  // cobalt first for exactly these sites; it resolves the real stream on
+  // its own server and hands back a direct link. Anything cobalt doesn't
+  // cover (or if it's briefly unreachable) just falls through to the normal
+  // page-scan below, so this can only ever add coverage, never remove it.
+  if (isCobaltSupportedUrl(pageUrl)) {
+    if (statusEl) { statusEl.textContent = 'Resolving via cobalt…'; statusEl.className = 'extract-status'; }
+    try {
+      const resolved = await resolveViaCobalt(pageUrl);
+      if (resolved && resolved.url) {
+        NovaDebug.log('play', 'cobalt resolved this link to a direct stream', resolved.url);
+        createTab(resolved.url, true, {});
+        return { outcome: 'opened', quality: resolved.label };
+      }
+    } catch (e) {
+      NovaDebug.warn('play', 'cobalt could not resolve this link \u2014 falling back to normal page-scan: ' + (e && e.message ? e.message : 'unknown error'), pageUrl);
+    }
   }
   // No recognizable video extension in the URL itself — plenty of CDN/stream
   // links have no extension at all. Check the actual Content-Type before
@@ -6140,7 +6268,29 @@ async function resolveAndOpenVideo(pageUrl, statusEl) {
   } catch (e) { /* HEAD blocked/failed — fall through to page scraping below */ }
   if (statusEl) { statusEl.textContent = 'Looking for a video on that page…'; statusEl.className = 'extract-status'; }
   const candidates = await extractVideoCandidatesFromPage(pageUrl);
-  if (!candidates.length) return { outcome: 'not-found' };
+  if (!candidates.length) {
+    // Nothing found by scanning the page itself, and this wasn't one of our
+    // whitelisted cobalt platforms above (or cobalt was tried and failed) —
+    // as a last resort, try cobalt anyway. cobalt actually supports more
+    // sites than our curated whitelist tracks (its list keeps growing), so
+    // this catches platforms we haven't explicitly listed instead of giving
+    // up outright. Skipped only if we already tried cobalt for this exact
+    // URL above, so we never hit it twice.
+    if (!isCobaltSupportedUrl(pageUrl)) {
+      if (statusEl) { statusEl.textContent = 'Trying one more way…'; statusEl.className = 'extract-status'; }
+      try {
+        const resolved = await resolveViaCobalt(pageUrl);
+        if (resolved && resolved.url) {
+          NovaDebug.log('play', 'cobalt (last-resort, unlisted host) resolved this link', resolved.url);
+          createTab(resolved.url, true, {});
+          return { outcome: 'opened', quality: resolved.label };
+        }
+      } catch (e) {
+        NovaDebug.warn('play', 'Last-resort cobalt attempt also failed: ' + (e && e.message ? e.message : 'unknown error'), pageUrl);
+      }
+    }
+    return { outcome: 'not-found' };
+  }
   // Verify candidates in ranked order and open the first one that's actually live.
   let best = await pickWorkingQuality(candidates);
   // If the winning candidate is an HLS master playlist, resolve it to its
@@ -6592,17 +6742,53 @@ async function runDirectDownload() {
     if ((!candidates || !candidates.length) && !ctrl.signal.aborted) {
       try { candidates = await extractVideoCandidatesFromPageSlow(url); } catch (e) {}
     }
-    return candidates && candidates.length ? (candidates[0].url || candidates[0]) : null;
+    if (candidates && candidates.length) return candidates[0].url || candidates[0];
+    // Page-scan found nothing — last resort before giving up: try cobalt on
+    // this exact URL even if it's not one of our whitelisted platforms.
+    // cobalt supports more sites than we explicitly track, so this widens
+    // "works on mostly every website" without slowing down the common case
+    // (it only ever runs after everything else has already failed).
+    if (!ctrl.signal.aborted && !isCobaltSupportedUrl(url)) {
+      try {
+        const resolved = await resolveViaCobalt(url);
+        if (resolved && resolved.url) {
+          NovaDebug.log('download', 'cobalt (last-resort, unlisted host) resolved this link', resolved.url);
+          return resolved.url;
+        }
+      } catch (e) { NovaDebug.warn('download', 'Last-resort cobalt attempt also failed: ' + (e && e.message ? e.message : 'unknown error'), url); }
+    }
+    return null;
   };
   try {
     let blob;
+    // Same cobalt resolver used by Play — for YouTube/Instagram/TikTok/etc.
+    // links, resolve the real media URL first instead of running the page
+    // extractor (which can't see through these sites' stream protection).
+    if (isCobaltSupportedUrl(url)) {
+      onStatus('Resolving via cobalt…');
+      try {
+        const resolved = await resolveViaCobalt(url);
+        if (resolved && resolved.url) {
+          NovaDebug.log('download', 'cobalt resolved this link \u2014 downloading the direct stream it returned', resolved.url);
+          onStatus('Found the video \u2014 downloading…');
+          blob = await attemptDownload(resolved.url);
+          if (await looksLikeNonVideoBlob(blob)) throw new Error('cobalt\u2019s resolved link did not return a valid video file.');
+          url = resolved.url;
+        }
+      } catch (e) {
+        NovaDebug.warn('download', 'cobalt could not resolve this link \u2014 falling back to the normal extractor: ' + (e && e.message ? e.message : 'unknown error'), url);
+      }
+    }
     // Remembered from a previous Direct Download on this same domain — a
     // "d/xxxx"-style gate/short-link page never IS the real video file, so
     // skip straight to page-extraction instead of wasting a fetch attempt
     // (and its timeout/retry time) re-discovering that every single time.
-    const knownNeedsExtraction = !KNOWN_VIDEO_EXT(url) && getDomainPattern(domain, 'directDlNeedsExtraction') === true;
+    const knownNeedsExtraction = !blob && !KNOWN_VIDEO_EXT(url) && getDomainPattern(domain, 'directDlNeedsExtraction') === true;
     NovaDebug.log('download', 'URL looks like a known video extension: ' + KNOWN_VIDEO_EXT(url) + '; domain previously needed page-extraction: ' + (knownNeedsExtraction ? 'yes (skipping straight to it)' : 'no/unknown'));
-    if (knownNeedsExtraction) {
+    if (blob) {
+      // cobalt already produced and verified a working blob above — skip
+      // straight to saving it, no need to run any of the extraction paths.
+    } else if (knownNeedsExtraction) {
       const realUrl = await findRealUrlOnPage();
       if (!realUrl) { NovaDebug.error('download', 'Page-scan found no video URL on the page at all'); throw new Error('Could not find a video on that page.'); }
       NovaDebug.log('download', 'Found candidate video URL on page', realUrl);
