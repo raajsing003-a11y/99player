@@ -6215,11 +6215,16 @@ function isCobaltSupportedUrl(u) {
 }
 async function resolveViaCobalt(pageUrl) {
   let lastErr = null;
-  for (const base of COBALT_INSTANCES) {
+  let customBase = '', customKey = '';
+  try { customBase = (localStorage.getItem('novaCobaltUrl') || '').trim(); customKey = (localStorage.getItem('novaCobaltKey') || '').trim(); } catch (e) {}
+  const bases = (customBase ? [customBase.replace(/\/?$/, '/')] : []).concat(COBALT_INSTANCES);
+  for (const base of bases) {
     try {
+      const hdrs = { 'Accept': 'application/json', 'Content-Type': 'application/json' };
+      if (customKey && base === bases[0] && customBase) hdrs['Authorization'] = 'Api-Key ' + customKey;
       const resp = await fetchWithTimeout(base, {
         method: 'POST',
-        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+        headers: hdrs,
         body: JSON.stringify({ url: pageUrl, downloadMode: 'auto' })
       }, 15000);
       if (!resp.ok) { lastErr = new Error('cobalt instance returned HTTP ' + resp.status); continue; }
@@ -7997,6 +8002,7 @@ panel.innerHTML='<div class="yrow"><input type="text" id="ytIn" placeholder="You
 +'<div class="yrow"><button class="yb" id="ytPop">&#8599; YouTube app/site me kholo</button><button class="yb" id="ytPaste">&#128203; Paste</button></div>'
 +'<label class="opt"><input type="checkbox" id="ytEmb"> Address bar me YouTube link daalo to yahin player me chalao</label>'
 +'<label class="opt"><input type="checkbox" id="ytDir"> Effects mode: video ko direct stream bana ke Nova ke normal player me chalao (saare effects chalte hain; na mile to embed)</label>'
++'<div class="yrow"><button class="yb" id="ytDl">&#11015; Download video</button><button class="yb" id="ytCob">&#9881; Cobalt server</button></div>'
 +'<div class="opt" style="margin:6px 0 2px">Saved YouTube (hamesha save rehta hai):</div><div id="ytList"></div>';
 const qc=$('#quickControls'),yq=document.createElement('button');yq.id='ytOutBtn';yq.title='YouTube par kholo (sirf YouTube video ke liye)';yq.innerHTML='&#8599;';yq.style.display='none';qc.insertBefore(yq,qc.firstChild);
 const _cp=window.closePanels;window.closePanels=function(){_cp&&_cp();panel.classList.remove('open')};
@@ -8133,10 +8139,10 @@ const _rt=window.refreshTransportUI;window.refreshTransportUI=function(tab){_rt(
 const _ev=window.ensureAudioGraph;window.ensureAudioGraph=function(t){if(t&&t.yt)return;return _ev(t)};
 ['prevBtn','nextBtn'].forEach(n=>$('#'+n).addEventListener('click',e=>{const t=ytTab();if(!t||!t._yq.list||!t._yp)return;e.stopImmediatePropagation();try{n==='prevBtn'?t._yp.previousVideo():t._yp.nextVideo()}catch(x){}},true));
 $('#pipBtn').addEventListener('click',e=>{if(!ytTab())return;e.stopImmediatePropagation();toast('YouTube player me PiP nahi chalta — ↗ se YouTube kholo')},true);
-$('#fastLoadBtn').addEventListener('click',e=>{const t=ytTab();if(!t)return;e.stopImmediatePropagation();document.getElementById('extractVideoBtn').click();setTimeout(()=>{const i=$('#extractUrlInput');if(i)i.value=urlOf(t._yq)},80);toast('Download ke liye link bhar diya — Get video chalao')},true);
+$('#fastLoadBtn').addEventListener('click',e=>{const t=ytTab();if(!t)return;e.stopImmediatePropagation();ytDownload(t._yq)},true);
 $('#enhanceBtnPlayer').addEventListener('click',()=>{if(ytTab()&&!warned){warned=true;toast('YouTube embed par effects limited hain. Pura effects ke liye YouTube panel me Effects mode ON rakho (direct stream).')}},true);
 yq.onclick=()=>{const t=ytTab();if(t)window.open(urlOf(t._yq),'_blank')};
-const _act=window.activateTab;window.activateTab=function(id){const r=_act(id);yq.style.display=ytTab()?'':'none';qb.style.display=ytTab()?'':'none';return r};
+const _act=window.activateTab;window.activateTab=function(id){const r=_act(id);yq.style.display=ytTab()?'':'none';qb.style.display=ytTab()?'':'none';dlq.style.display=ytTab()?'':'none';return r};
 
 /* ---- panel events ---- */
 btn.onclick=()=>{const w=!panel.classList.contains('open');window.closePanels();if(w){render();panel.classList.add('open');$('#ytEmb').checked=EMB;$('#ytDir').checked=DIR;setTimeout(()=>$('#ytIn').focus(),50)}};
@@ -8144,6 +8150,14 @@ $('#ytGo').onclick=()=>{const q=parse($('#ytIn').value);if(!q.id&&!q.list)return
 $('#ytIn').addEventListener('keydown',e=>{if(e.key==='Enter')$('#ytGo').click()});
 $('#ytPaste').onclick=async()=>{try{const t=await navigator.clipboard.readText();$('#ytIn').value=t;const q=parse(t);if(q.id||q.list)$('#ytGo').click()}catch(e){toast('Paste nahi hua — box me long-press karke paste karo')}};
 $('#ytPop').onclick=()=>{const q=parse($('#ytIn').value);if(!q.id&&!q.list)return toast('Pehle link daalo');window.open(urlOf(q),'_blank')};
+function ytDownload(q){if(!q||!q.id)return toast('Download ke liye single video ka link chahiye');
+ openDirectDlOverlay(urlOf({id:q.id}));setTimeout(()=>{const g=document.getElementById('directDlGoBtn');if(g)g.click()},150)}
+$('#ytDl').onclick=()=>{let q=parse($('#ytIn').value);if(!q.id){const t=ytTab();q=t?t._yq:{}}if(!q||!q.id)return toast('Pehle link daalo ya video chalao');panel.classList.remove('open');ytDownload(q)};
+$('#ytCob').onclick=()=>{const u=prompt('Apna cobalt API server URL (khali = default). Public servers aksar band hote hain; apna host kiya hua best.',localStorage.getItem('novaCobaltUrl')||'');if(u===null)return;
+ const k=u?prompt('API key (agar server maangta hai, warna khali):',localStorage.getItem('novaCobaltKey')||''):'';
+ try{localStorage.setItem('novaCobaltUrl',u.trim());localStorage.setItem('novaCobaltKey',(k||'').trim())}catch(e){}toast(u.trim()?'Cobalt server save ho gaya':'Default cobalt servers use honge')};
+const dlq=document.createElement('button');dlq.id='ytDlBtn';dlq.title='Is YouTube video ko download karo';dlq.innerHTML='&#11015;';dlq.style.display='none';qc.insertBefore(dlq,qc.firstChild);
+dlq.onclick=()=>{const t=ytTab();if(t)ytDownload(t._yq)};
 $('#ytEmb').onchange=e=>{EMB=e.target.checked;SV('novaYtEmbed',EMB)};
 $('#ytDir').onchange=e=>{DIR=e.target.checked;SV('novaYtDirect',DIR)};
 function grab(e){if(!EMB)return false;const v=$('#urlInput').value,q=parse(v);if((q.id||q.list)&&/[\/.]/.test(v)){e.preventDefault();e.stopImmediatePropagation();$('#urlInput').blur();openYT(q);return true}return false}
