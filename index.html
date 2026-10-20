@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nova Browser 1.8</title>
+<title>Nova Browser 3.0</title>
 <meta name="description" content="A private in-app browser with fast video download and offline playback.">
 <meta name="theme-color" content="#121212">
 <meta name="mobile-web-app-capable" content="yes">
@@ -646,7 +646,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 1.1</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 3.0</div>
   </div>
 
   <div class="toolbar">
@@ -8004,6 +8004,7 @@ panel.innerHTML='<div class="yrow"><input type="text" id="ytIn" placeholder="You
 +'<label class="opt"><input type="checkbox" id="ytDir"> Effects mode: video ko direct stream bana ke Nova ke normal player me chalao (saare effects chalte hain; na mile to embed)</label>'
 +'<div class="yrow"><button class="yb" id="ytDl">&#11015; Download video</button><button class="yb" id="ytCob">&#9881; Cobalt server</button></div>'
 +'<div class="yrow"><button class="yb go" id="ytSrv">&#128421; Mera server (100% tareeka)</button></div>'
++'<div class="opt" style="opacity:.6;font-size:11px">Build: YT-SRV-3 (server + fallback)</div>'
 +'<div class="opt" style="margin:6px 0 2px">Saved YouTube (hamesha save rehta hai):</div><div id="ytList"></div>';
 const qc=$('#quickControls'),yq=document.createElement('button');yq.id='ytOutBtn';yq.title='YouTube par kholo (sirf YouTube video ke liye)';yq.innerHTML='&#8599;';yq.style.display='none';qc.insertBefore(yq,qc.firstChild);
 const _cp=window.closePanels;window.closePanels=function(){_cp&&_cp();panel.classList.remove('open')};
