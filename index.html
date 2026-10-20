@@ -8150,8 +8150,28 @@ $('#ytGo').onclick=()=>{const q=parse($('#ytIn').value);if(!q.id&&!q.list)return
 $('#ytIn').addEventListener('keydown',e=>{if(e.key==='Enter')$('#ytGo').click()});
 $('#ytPaste').onclick=async()=>{try{const t=await navigator.clipboard.readText();$('#ytIn').value=t;const q=parse(t);if(q.id||q.list)$('#ytGo').click()}catch(e){toast('Paste nahi hua — box me long-press karke paste karo')}};
 $('#ytPop').onclick=()=>{const q=parse($('#ytIn').value);if(!q.id&&!q.list)return toast('Pehle link daalo');window.open(urlOf(q),'_blank')};
-function ytDownload(q){if(!q||!q.id)return toast('Download ke liye single video ka link chahiye');
- openDirectDlOverlay(urlOf({id:q.id}));setTimeout(()=>{const g=document.getElementById('directDlGoBtn');if(g)g.click()},150)}
+/* ---- Download: cobalt -> Piped -> Invidious, har step ka error dikhao ---- */
+const PIPED=['https://pipedapi.kavin.rocks','https://pipedapi.adminforge.de','https://api.piped.private.coffee','https://pipedapi.leptons.xyz'];
+const INVID=['https://yewtu.be','https://inv.nadeko.net','https://invidious.nerdvpn.de','https://invidious.privacyredirect.com'];
+const tmo=(p,ms)=>Promise.race([p,new Promise((_,j)=>setTimeout(()=>j(new Error('timeout')),ms))]);
+async function jget(u){let first;
+ try{const r=await tmo(fetch(u,{headers:{Accept:'application/json'}}),9000);if(!r.ok)throw new Error('HTTP '+r.status);return await r.json()}catch(e){first=e}
+ if(/^HTTP/.test(first&&first.message||''))throw first;
+ try{const r=await tmo(fetch('https://api.allorigins.win/raw?url='+encodeURIComponent(u)),12000);if(!r.ok)throw new Error('HTTP '+r.status);return await r.json()}
+ catch(e){throw new Error((first&&first.message||'fail')+' (proxy: '+(e&&e.message||e)+')')}}
+async function ytResolveAny(id,log){const page='https://www.youtube.com/watch?v='+id;
+ const jobs=[(async()=>{const r=await tmo(resolveViaCobalt(page),20000);if(r&&r.url)return r.url;throw new Error('khali jawab')})().catch(e=>{log.push('cobalt: '+(e&&e.message||e));throw e})];
+ PIPED.forEach(b=>jobs.push((async()=>{const d=await jget(b+'/streams/'+id);
+   const m=(d.videoStreams||[]).filter(v=>!v.videoOnly&&v.url);m.sort((x,y)=>(y.height||0)-(x.height||0));if(m[0])return m[0].url;if(d.hls)return d.hls;throw new Error('muxed stream nahi mili')})().catch(e=>{log.push(new URL(b).host+': '+(e&&e.message||e));throw e})));
+ INVID.forEach(b=>jobs.push((async()=>{const d=await jget(b+'/api/v1/videos/'+id+'?local=true');
+   const f=(d.formatStreams||[]).filter(x=>x.url);f.sort((x,y)=>parseInt(y.resolution||0)-parseInt(x.resolution||0));if(f[0])return f[0].url.startsWith('http')?f[0].url:b+f[0].url;throw new Error('stream nahi mili')})().catch(e=>{log.push(new URL(b).host+': '+(e&&e.message||e));throw e})));
+ try{return await Promise.any(jobs)}catch(e){return null}}
+async function ytDownload(q){if(!q||!q.id)return toast('Download ke liye single video ka link chahiye');
+ openDirectDlOverlay('');const st=document.getElementById('directDlStatus'),inp=document.getElementById('directDlUrlInput');
+ inp.value=urlOf({id:q.id});st.className='extract-status';st.textContent='Servers se direct link la raha hoon…';
+ const log=[];const u=await ytResolveAny(q.id,log);
+ if(!u){st.className='extract-status error';st.textContent='YouTube link nahi mil paya. Wajah: '+log.join(' | ')+'. Fix: ⚙ Cobalt server me apna cobalt server daalo.';return}
+ inp.value=u;st.textContent='Link mil gaya — download shuru…';setTimeout(()=>{const g=document.getElementById('directDlGoBtn');if(g)g.click()},100)}
 $('#ytDl').onclick=()=>{let q=parse($('#ytIn').value);if(!q.id){const t=ytTab();q=t?t._yq:{}}if(!q||!q.id)return toast('Pehle link daalo ya video chalao');panel.classList.remove('open');ytDownload(q)};
 $('#ytCob').onclick=()=>{const u=prompt('Apna cobalt API server URL (khali = default). Public servers aksar band hote hain; apna host kiya hua best.',localStorage.getItem('novaCobaltUrl')||'');if(u===null)return;
  const k=u?prompt('API key (agar server maangta hai, warna khali):',localStorage.getItem('novaCobaltKey')||''):'';
