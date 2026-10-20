@@ -7955,7 +7955,7 @@ loadPersistedData().then(async () => {
 <style id="nova-yt-css">
 .stage .ytshim{position:absolute;top:0;left:0;width:100%;height:100%;background:#000;display:none;overflow:hidden}
 .stage .ytshim.active-frame{display:block;filter:brightness(var(--b,1)) contrast(var(--c,1)) saturate(var(--s,1)) blur(var(--denoise,0px)) url(#sharpenFilter)}
-.stage .ytshim iframe{display:block;position:absolute;top:0;left:0;width:100%;height:100%;border:0;pointer-events:none;background:#000;transform-origin:50% 50%}
+.stage .ytshim iframe{display:block;position:absolute;top:50%;left:50%;border:0;pointer-events:none;background:#000;transform-origin:50% 50%}
 .stage .ytshim .ytfb{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:#ccc;text-align:center;padding:24px;font-size:14px;line-height:1.5;background:#000;z-index:3}
 .stage .ytshim .ytfb a{background:#c62828;color:#fff;padding:10px 20px;border-radius:99px;text-decoration:none;font-weight:600;pointer-events:auto}
 #ytPanel{max-height:min(340px,48vh)}
@@ -7971,7 +7971,7 @@ loadPersistedData().then(async () => {
 (function(){
 const $=s=>document.querySelector(s);
 const LS=(k,d)=>{try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},SV=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
-let YL=LS('novaYtList',[]),EMB=LS('novaYtEmbed',true),apiP=null,warned=false;
+let YQ=LS('novaYtQ','highres'),YL=LS('novaYtList',[]),EMB=LS('novaYtEmbed',true),DIR=LS('novaYtDirect',true),apiP=null,warned=false;
 const toast=m=>{try{showMiniToast(m)}catch(e){}};
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function parse(t){t=(t||'').trim();if(!t)return{};let id=null,list=null;
@@ -7996,6 +7996,7 @@ const panel=document.createElement('div');panel.className='panel';panel.id='ytPa
 panel.innerHTML='<div class="yrow"><input type="text" id="ytIn" placeholder="YouTube video / playlist / shorts link paste karo"><button class="yb go" id="ytGo">&#9654; Play</button></div>'
 +'<div class="yrow"><button class="yb" id="ytPop">&#8599; YouTube app/site me kholo</button><button class="yb" id="ytPaste">&#128203; Paste</button></div>'
 +'<label class="opt"><input type="checkbox" id="ytEmb"> Address bar me YouTube link daalo to yahin player me chalao</label>'
++'<label class="opt"><input type="checkbox" id="ytDir"> Effects mode: video ko direct stream bana ke Nova ke normal player me chalao (saare effects chalte hain; na mile to embed)</label>'
 +'<div class="opt" style="margin:6px 0 2px">Saved YouTube (hamesha save rehta hai):</div><div id="ytList"></div>';
 const qc=$('#quickControls'),yq=document.createElement('button');yq.id='ytOutBtn';yq.title='YouTube par kholo (sirf YouTube video ke liye)';yq.innerHTML='&#8599;';yq.style.display='none';qc.insertBefore(yq,qc.firstChild);
 const _cp=window.closePanels;window.closePanels=function(){_cp&&_cp();panel.classList.remove('open')};
@@ -8063,10 +8064,10 @@ function openYT(q,fromList){if(!q||(!q.id&&!q.list))return toast('Sahi YouTube l
   const vars={autoplay:1,playsinline:1,rel:0,modestbranding:1,controls:0,disablekb:1,fs:0,iv_load_policy:3};if(q.list){vars.list=q.list;if(!q.id)vars.listType='playlist'}
   tab._yp=new YT.Player(pid,{width:'100%',height:'100%',host:'https://www.youtube-nocookie.com',videoId:q.id||undefined,playerVars:vars,events:{
    onReady:e=>{clearTimeout(tab._yf);S.ready=true;try{e.target.playVideo();if(q.list&&S.loop)e.target.setLoop(true)}catch(x){}
-     const f=el.querySelector('iframe');if(f){f.removeAttribute('width');f.removeAttribute('height')}applyAspect(tab,tab.aspect||'fit');
+     try{e.target.setPlaybackQuality(YQ)}catch(x){}applyAspect(tab,tab.aspect||'fit');
      S.fire('loadedmetadata');refreshPlaybackUIForTab(tab);refreshTransportUI(tab)},
    onStateChange:e=>{const s=e.data;S.state=s;
-     if(s===1){S.fire('play');S.fire('playing')}else if(s===2)S.fire('pause');
+     if(s===1){S.fire('play');S.fire('playing');if(!S.qset){S.qset=1;try{tab._yp.setPlaybackQuality(YQ)}catch(x){}}}else if(s===2)S.fire('pause');
      else if(s===0){if(S.loop&&!q.list){try{tab._yp.seekTo(0);tab._yp.playVideo()}catch(x){}}else S.fire('ended')}
      try{const d=tab._yp.getVideoData()||{};if(d.title)ytName(q,d.title)}catch(x){}
      if(tab.id===activeTabId)refreshTransportUI(tab)},
@@ -8077,16 +8078,52 @@ function openYT(q,fromList){if(!q||(!q.id&&!q.list))return toast('Sahi YouTube l
   tab._yf=setTimeout(()=>{if(!S.ready)ytFail(tab,q,'Player load nahi hua.')},12000)
  }).catch(()=>ytFail(tab,q,'YouTube player load nahi ho paya (internet ya blocker).'))}
 
+/* ---- Effects mode: YouTube ko cobalt se direct stream bana ke normal Nova video tab me chalao ---- */
+async function ytDirect(q){if(!q||!q.id||q.list)return false;toast('Direct stream ban rahi hai (effects ke liye)…');
+ try{const r=await Promise.race([resolveViaCobalt('https://www.youtube.com/watch?v='+q.id),new Promise((_,j)=>setTimeout(()=>j(new Error('timeout')),8000))]);
+  if(!r||!r.url)return false;
+  try{document.querySelectorAll('.stage video').forEach(v=>v.pause())}catch(e){}
+  const old=tabs.filter(t=>t.yt);save(q);createTab(r.url,true,{});old.forEach(t=>closeTab(t.id));return true}
+ catch(e){try{NovaDebug.warn('play','YouTube direct stream fail: '+(e&&e.message),q.id)}catch(x){}return false}}
+const _oy=openYT;
+openYT=function(q,fromList,force){if(!DIR||force||!q||!q.id||q.list)return _oy(q,fromList);
+ ytDirect(q).then(ok=>{if(!ok){toast('Direct stream nahi mili — embed player me chala raha hoon (effects limited ho sakte hain)');_oy(q,fromList)}})};
+const _yf0=ytFail;
+ytFail=function(tab,q,why){_yf0(tab,q,why);try{const fb=tab.el.querySelector('.ytfb');if(!fb||!q.id||q.list)return;
+ const b=document.createElement('button');b.className='yb go';b.style.pointerEvents='auto';b.innerHTML='&#9889; Direct stream se chalao (effects ke saath)';
+ b.onclick=()=>{b.disabled=true;b.textContent='Ban rahi hai…';ytDirect(q).then(ok=>{if(!ok){b.disabled=false;b.innerHTML='&#9889; Direct nahi mili — dobara try';toast('Direct stream nahi mili (cobalt busy/down ho sakta hai)')}})};
+ fb.appendChild(b)}catch(e){}};
+
 /* ---- Nova ke functions ko YouTube tab ke liye theek karo ---- */
+const QPX={highres:2160,hd2160:2160,hd1440:1440,hd1080:1080,hd720:720,large:480,medium:360,small:240,tiny:144};
+const QNAME={highres:'Highest (4K tak)',hd2160:'2160p 4K',hd1440:'1440p',hd1080:'1080p HD',hd720:'720p',large:'480p',medium:'360p',small:'240p',tiny:'144p'};
+/* YouTube embed apni quality iframe ke size se chunta hai — isliye iframe ko quality ke hisaab se bada banake screen me fit karte hain */
+function ytLayout(tab){const f=tab&&tab.el.querySelector('iframe');if(!f)return;const mode=tab.aspect||'fit';
+ const H=QPX[YQ]||2160,W=Math.round(H*16/9),st=$('#stage'),sw=st.clientWidth||1,sh=st.clientHeight||1;
+ const w0=Math.min(sw,sh*16/9),h0=w0*9/16;let sx=w0/W,sy=h0/H;
+ if(mode==='crop'){sx=sy=Math.max(sw/W,sh/H)}
+ else if(mode==='stretch'){sx=sw/W;sy=sh/H}
+ else if(mode==='4:3'){sx=Math.min(sw,sh*4/3)/W;sy=Math.min(sh,sw*3/4)/H}
+ f.style.width=W+'px';f.style.height=H+'px';f.style.marginLeft=(-W/2)+'px';f.style.marginTop=(-H/2)+'px';
+ f.style.transform='scale('+sx+','+sy+')'}
 const _aa=window.applyAspect;
 window.applyAspect=function(tab,mode){if(!tab||!tab.yt)return _aa(tab,mode);
- tab.aspect=mode;const f=tab.el.querySelector('iframe');
- if(f){const st=$('#stage'),sw=st.clientWidth||1,sh=st.clientHeight||1,w0=Math.min(sw,sh*16/9),h0=Math.min(sh,sw*9/16);let sx=1,sy=1;
-  if(mode==='crop'){sx=sy=Math.max(sw/w0,sh/h0)}
-  else if(mode==='stretch'){sx=sw/w0;sy=sh/h0}
-  else if(mode==='4:3'){sx=Math.min(sw,sh*4/3)/w0;sy=Math.min(sh,sw*3/4)/h0}
-  f.style.transform=(sx===1&&sy===1)?'':'scale('+sx+','+sy+')'}
+ tab.aspect=mode;ytLayout(tab);
  document.querySelectorAll('#aspectMenu button').forEach(b=>b.classList.toggle('active-toggle',b.dataset.aspect===mode))};
+addEventListener('resize',()=>{const t=ytTab();if(t)ytLayout(t)});
+/* quality menu */
+const qm=document.createElement('div');qm.className='float-menu';qm.id='ytQMenu';$('#aspectMenu').after(qm);
+const qb=document.createElement('button');qb.id='ytQBtn';qb.title='YouTube quality';qb.style.cssText='font-size:11px;font-weight:700;display:none';qb.textContent='HD';qc.insertBefore(qb,qc.firstChild);
+function setQ(q){YQ=q;SV('novaYtQ',q);const t=ytTab();if(!t)return;
+ try{t._yp.setPlaybackQuality(q==='highres'?'highres':q)}catch(e){}
+ ytLayout(t);toast('Quality: '+(QNAME[q]||q)+' (YouTube video ke hisaab se milegi)');setTimeout(()=>t._ys&&t._ys.fire('resize'),1500)}
+function buildQ(){const t=ytTab();let av=[];try{av=t._yp.getAvailableQualityLevels()||[]}catch(e){}
+ const order=['highres','hd2160','hd1440','hd1080','hd720','large','medium','small','tiny'];
+ const list=['highres'].concat(order.slice(1).filter(k=>!av.length||av.indexOf(k)>=0||k===YQ));
+ qm.innerHTML='';list.forEach(k=>{const b=document.createElement('button');b.textContent=QNAME[k];b.className=k===YQ?'active-toggle':'';b.onclick=()=>{setQ(k);qm.classList.remove('visible')};qm.appendChild(b)})}
+qb.onclick=()=>{const w=!qm.classList.contains('visible');closeFloatMenus();if(w){buildQ();qm.classList.add('visible')}};
+$('#qualityLabel').addEventListener('click',()=>{if(ytTab())qb.click()});$('#qualityLabel').style.cursor='pointer';
+const _cf=window.closeFloatMenus;window.closeFloatMenus=function(){_cf();qm.classList.remove('visible')};
 const _ug=window.updateGradingForActiveTab;window.updateGradingForActiveTab=function(){const t=getTab(activeTabId);if(t&&t.yt){tabs.forEach(x=>{if(x.isVideo&&!x.yt&&x.canvas)try{setGradingVisible(x,false)}catch(e){}});return}return _ug.apply(this,arguments)};
 const _sg=window.setGradingVisible;if(_sg)window.setGradingVisible=function(t){if(t&&t.yt)return;return _sg.apply(this,arguments)};
 const _gp=window.getPreviewVideoFor;window.getPreviewVideoFor=function(t){return t&&t.yt?null:_gp(t)};
@@ -8097,17 +8134,18 @@ const _ev=window.ensureAudioGraph;window.ensureAudioGraph=function(t){if(t&&t.yt
 ['prevBtn','nextBtn'].forEach(n=>$('#'+n).addEventListener('click',e=>{const t=ytTab();if(!t||!t._yq.list||!t._yp)return;e.stopImmediatePropagation();try{n==='prevBtn'?t._yp.previousVideo():t._yp.nextVideo()}catch(x){}},true));
 $('#pipBtn').addEventListener('click',e=>{if(!ytTab())return;e.stopImmediatePropagation();toast('YouTube player me PiP nahi chalta — ↗ se YouTube kholo')},true);
 $('#fastLoadBtn').addEventListener('click',e=>{const t=ytTab();if(!t)return;e.stopImmediatePropagation();document.getElementById('extractVideoBtn').click();setTimeout(()=>{const i=$('#extractUrlInput');if(i)i.value=urlOf(t._yq)},80);toast('Download ke liye link bhar diya — Get video chalao')},true);
-$('#enhanceBtnPlayer').addEventListener('click',()=>{if(ytTab()&&!warned){warned=true;toast('YouTube par: brightness/contrast/saturation/sharpness/blur chalte hain. Vibrance, AI enhance, volume boost >100% nahi.')}},true);
+$('#enhanceBtnPlayer').addEventListener('click',()=>{if(ytTab()&&!warned){warned=true;toast('YouTube embed par effects limited hain. Pura effects ke liye YouTube panel me Effects mode ON rakho (direct stream).')}},true);
 yq.onclick=()=>{const t=ytTab();if(t)window.open(urlOf(t._yq),'_blank')};
-const _act=window.activateTab;window.activateTab=function(id){const r=_act(id);yq.style.display=ytTab()?'':'none';return r};
+const _act=window.activateTab;window.activateTab=function(id){const r=_act(id);yq.style.display=ytTab()?'':'none';qb.style.display=ytTab()?'':'none';return r};
 
 /* ---- panel events ---- */
-btn.onclick=()=>{const w=!panel.classList.contains('open');window.closePanels();if(w){render();panel.classList.add('open');$('#ytEmb').checked=EMB;setTimeout(()=>$('#ytIn').focus(),50)}};
+btn.onclick=()=>{const w=!panel.classList.contains('open');window.closePanels();if(w){render();panel.classList.add('open');$('#ytEmb').checked=EMB;$('#ytDir').checked=DIR;setTimeout(()=>$('#ytIn').focus(),50)}};
 $('#ytGo').onclick=()=>{const q=parse($('#ytIn').value);if(!q.id&&!q.list)return toast('Sahi YouTube link daalo');$('#ytIn').value='';panel.classList.remove('open');openYT(q)};
 $('#ytIn').addEventListener('keydown',e=>{if(e.key==='Enter')$('#ytGo').click()});
 $('#ytPaste').onclick=async()=>{try{const t=await navigator.clipboard.readText();$('#ytIn').value=t;const q=parse(t);if(q.id||q.list)$('#ytGo').click()}catch(e){toast('Paste nahi hua — box me long-press karke paste karo')}};
 $('#ytPop').onclick=()=>{const q=parse($('#ytIn').value);if(!q.id&&!q.list)return toast('Pehle link daalo');window.open(urlOf(q),'_blank')};
 $('#ytEmb').onchange=e=>{EMB=e.target.checked;SV('novaYtEmbed',EMB)};
+$('#ytDir').onchange=e=>{DIR=e.target.checked;SV('novaYtDirect',DIR)};
 function grab(e){if(!EMB)return false;const v=$('#urlInput').value,q=parse(v);if((q.id||q.list)&&/[\/.]/.test(v)){e.preventDefault();e.stopImmediatePropagation();$('#urlInput').blur();openYT(q);return true}return false}
 $('#urlInput').addEventListener('keydown',e=>{if(e.key==='Enter')grab(e)},true);
 $('#goBtn').addEventListener('click',grab,true);
