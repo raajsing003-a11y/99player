@@ -7952,5 +7952,169 @@ loadPersistedData().then(async () => {
 })();
 
 </script>
+<style id="nova-yt-css">
+.stage .ytshim{position:absolute;top:0;left:0;width:100%;height:100%;background:#000;display:none;overflow:hidden}
+.stage .ytshim.active-frame{display:block;filter:brightness(var(--b,1)) contrast(var(--c,1)) saturate(var(--s,1)) blur(var(--denoise,0px)) url(#sharpenFilter)}
+.stage .ytshim iframe{display:block;position:absolute;top:0;left:0;width:100%;height:100%;border:0;pointer-events:none;background:#000;transform-origin:50% 50%}
+.stage .ytshim .ytfb{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:#ccc;text-align:center;padding:24px;font-size:14px;line-height:1.5;background:#000;z-index:3}
+.stage .ytshim .ytfb a{background:#c62828;color:#fff;padding:10px 20px;border-radius:99px;text-decoration:none;font-weight:600;pointer-events:auto}
+#ytPanel{max-height:min(340px,48vh)}
+#ytPanel .yrow{display:flex;gap:6px;margin:4px 0 6px}
+#ytPanel input[type=text]{flex:1;min-width:0;background:#121212;color:#eee;border:1px solid #3a3a3a;border-radius:8px;padding:8px 10px;font-size:13px}
+#ytPanel .yb{background:#2a2a2a;color:#eee;border:1px solid #3a3a3a;border-radius:8px;padding:7px 12px;font-size:13px;cursor:pointer;flex-shrink:0}
+#ytPanel .yb.go{background:#c62828;border-color:#c62828;color:#fff}
+#ytPanel .opt{font-size:12px;color:#aaa;display:flex;gap:6px;align-items:center;margin:2px 0 6px}
+#ytPanel .panel-row span.link{color:#eee}
+</style>
+<script id="nova-yt-js">
+/* ===== YouTube link player — Nova ke poore player features ke saath ===== */
+(function(){
+const $=s=>document.querySelector(s);
+const LS=(k,d)=>{try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},SV=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
+let YL=LS('novaYtList',[]),EMB=LS('novaYtEmbed',true),apiP=null,warned=false;
+const toast=m=>{try{showMiniToast(m)}catch(e){}};
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function parse(t){t=(t||'').trim();if(!t)return{};let id=null,list=null;
+ if(/^[\w-]{11}$/.test(t))return{id:t};
+ let u;try{u=new URL(/^https?:\/\//i.test(t)?t:'https://'+t)}catch(e){return{}}
+ const h=u.hostname.replace(/^(www|m|music)\./,'');if(!/^(youtube\.com|youtube-nocookie\.com|youtu\.be)$/.test(h))return{};
+ list=u.searchParams.get('list');
+ if(h==='youtu.be')id=u.pathname.slice(1).split('/')[0];
+ else if(u.pathname==='/watch')id=u.searchParams.get('v');
+ else{const m=u.pathname.match(/^\/(?:shorts|embed|live|v)\/([\w-]{11})/);if(m)id=m[1]}
+ if(id&&!/^[\w-]{11}$/.test(id))id=null;if(list&&!/^[\w-]+$/.test(list))list=null;
+ return{id,list}}
+const kOf=q=>q.list&&!q.id?'l:'+q.list:'v:'+q.id+(q.list?'@'+q.list:'');
+const urlOf=q=>q.id?'https://www.youtube.com/watch?v='+q.id+(q.list?'&list='+q.list:''):'https://www.youtube.com/playlist?list='+q.list;
+const ytTab=()=>{const t=getTab(activeTabId);return t&&t.yt?t:null};
+
+/* ---- UI: toolbar button, home shortcut, panel, quick button ---- */
+const btn=document.createElement('button');btn.className='icon-btn';btn.id='ytNovaBtn';btn.title='YouTube link se play';btn.innerHTML='<span style="color:#ff4040">&#9654;</span>';
+const bb=$('#bookmarksBtn');bb.parentNode.insertBefore(btn,bb);
+const hg=$('.home-grid');if(hg){const b=document.createElement('button');b.className='home-shortcut';b.dataset.target='ytNovaBtn';b.innerHTML='<span class="circle" style="background:#e53935">&#9654;</span><span class="label">YouTube</span>';hg.insertBefore(b,hg.firstChild)}
+const panel=document.createElement('div');panel.className='panel';panel.id='ytPanel';$('#apiActorsPanel').after(panel);
+panel.innerHTML='<div class="yrow"><input type="text" id="ytIn" placeholder="YouTube video / playlist / shorts link paste karo"><button class="yb go" id="ytGo">&#9654; Play</button></div>'
++'<div class="yrow"><button class="yb" id="ytPop">&#8599; YouTube app/site me kholo</button><button class="yb" id="ytPaste">&#128203; Paste</button></div>'
++'<label class="opt"><input type="checkbox" id="ytEmb"> Address bar me YouTube link daalo to yahin player me chalao</label>'
++'<div class="opt" style="margin:6px 0 2px">Saved YouTube (hamesha save rehta hai):</div><div id="ytList"></div>';
+const qc=$('#quickControls'),yq=document.createElement('button');yq.id='ytOutBtn';yq.title='YouTube par kholo (sirf YouTube video ke liye)';yq.innerHTML='&#8599;';yq.style.display='none';qc.insertBefore(yq,qc.firstChild);
+const _cp=window.closePanels;window.closePanels=function(){_cp&&_cp();panel.classList.remove('open')};
+
+/* ---- saved list ---- */
+function render(){const L=$('#ytList');L.innerHTML='';if(!YL.length){L.innerHTML='<div class="panel-empty">Abhi koi saved link nahi. Upar link daalke Play dabao — apne aap save ho jayega.</div>';return}
+ YL.forEach((x,i)=>{const r=document.createElement('div');r.className='panel-row';r.innerHTML='<span class="link">'+(x.list&&!x.id?'&#128195; ':'&#9654; ')+esc(x.n)+'</span><button title="Hatao">&times;</button>';
+  r.querySelector('.link').onclick=()=>{panel.classList.remove('open');openYT({id:x.id,list:x.list},true)};
+  r.querySelector('button').onclick=()=>{YL.splice(i,1);SV('novaYtList',YL);render()};L.appendChild(r)})}
+async function save(q){const k=kOf(q);if(YL.some(x=>x.k===k))return;const e={k,id:q.id||null,list:q.list||null,n:q.list&&!q.id?'YouTube playlist '+q.list.slice(-6):'YouTube video '+q.id};YL.unshift(e);SV('novaYtList',YL);render();
+ try{const r=await fetch('https://www.youtube.com/oembed?format=json&url='+encodeURIComponent(urlOf(q)));if(r.ok){const j=await r.json();if(j.title&&/^YouTube /.test(e.n)){e.n=j.title.slice(0,70);SV('novaYtList',YL);render()}}}catch(x){}}
+function ytName(q,t){const e=YL.find(x=>x.k===kOf(q));if(t&&e&&/^YouTube /.test(e.n)){e.n=t.slice(0,70);SV('novaYtList',YL);render()}}
+
+/* ---- YT IFrame API ---- */
+function api(){return apiP||(apiP=new Promise((res,rej)=>{if(window.YT&&YT.Player)return res();const o=window.onYouTubeIframeAPIReady;window.onYouTubeIframeAPIReady=()=>{o&&o();res()};
+ const s=document.createElement('script');s.src='https://www.youtube.com/iframe_api';s.onerror=()=>{apiP=null;rej()};document.head.append(s);setTimeout(()=>{apiP=null;rej()},10000)}))}
+
+/* ---- <video> jaisa shim: Nova ka poora player (seek bar, gestures, speed, mute, loop, filters, rotate/flip/zoom, aspect) isi se chalta hai ---- */
+const QH={tiny:144,small:240,medium:360,large:480,hd720:720,hd1080:1080,hd1440:1440,hd2160:2160,highres:2160};
+function mkShim(tab,q){const el=tab.el,S=tab._ys={state:-1,dur:0,loop:!!settings.loop,meta:false,lastT:-1,err:false};
+ const P=()=>tab._yp,ok=()=>{try{return P()&&P().getPlayerState!==undefined&&S.ready}catch(e){return false}};
+ const g=(f,d)=>{try{return ok()?f(P()):d}catch(e){return d}};
+ const def=(o)=>Object.keys(o).forEach(k=>Object.defineProperty(el,k,Object.assign({configurable:true},o[k])));
+ def({
+  currentTime:{get:()=>g(p=>p.getCurrentTime()||0,0),set:v=>{g(p=>p.seekTo(Math.max(0,+v||0),true));el.dispatchEvent(new Event('timeupdate'))}},
+  duration:{get:()=>g(p=>p.getDuration()||0,0)},
+  paused:{get:()=>!(S.state===1||S.state===3)},
+  ended:{get:()=>S.state===0},
+  volume:{get:()=>g(p=>p.getVolume()/100,1),set:v=>g(p=>p.setVolume(Math.round(Math.max(0,Math.min(1,+v))*100)))},
+  muted:{get:()=>g(p=>p.isMuted(),false),set:v=>g(p=>v?p.mute():p.unMute())},
+  playbackRate:{get:()=>g(p=>p.getPlaybackRate(),1),set:v=>g(p=>{const r=p.getAvailablePlaybackRates()||[1];let b=r[0];r.forEach(x=>{if(Math.abs(x-v)<Math.abs(b-v))b=x});p.setPlaybackRate(b);el.dispatchEvent(new Event('ratechange'))})},
+  loop:{get:()=>S.loop,set:v=>{S.loop=!!v;g(p=>{if(tab._yq.list)p.setLoop(!!v)})}},
+  src:{get:()=>urlOf(tab._yq),set:v=>{}},currentSrc:{get:()=>urlOf(tab._yq)},
+  readyState:{get:()=>S.ready?4:0},error:{get:()=>null},
+  videoHeight:{get:()=>g(p=>QH[p.getPlaybackQuality()]||720,720)},videoWidth:{get:()=>Math.round(el.videoHeight*16/9)},
+  buffered:{get:()=>({length:1,start:()=>0,end:()=>g(p=>(p.getDuration()||0)*p.getVideoLoadedFraction(),0)})},
+  seekable:{get:()=>({length:1,start:()=>0,end:()=>el.duration})}
+ });
+ el.play=()=>{g(p=>p.playVideo());return Promise.resolve()};el.pause=()=>{g(p=>p.pauseVideo())};el.load=()=>{};
+ el.requestPictureInPicture=()=>Promise.reject(new Error('no pip'));
+ /* events */
+ const fire=n=>el.dispatchEvent(new Event(n));
+ S.fire=fire;
+ tab._yi=setInterval(()=>{if(!ok())return;const t=el.currentTime;if(t!==S.lastT){S.lastT=t;fire('timeupdate')}
+  const d=el.duration;if(d&&d!==S.dur){S.dur=d;fire('durationchange');if(!S.meta){S.meta=true;fire('loadedmetadata')}}},250);
+ return S}
+function ytFail(tab,q,why){const el=tab.el;try{tab._yp&&tab._yp.destroy()}catch(e){}tab._yp=null;if(tab._ys)tab._ys.ready=false;
+ el.innerHTML='<div class="ytfb"><div>&#9888; '+esc(why)+'<br>Yahan nahi chal raha, par YouTube par chalega.</div><a target="_blank" rel="noopener" href="'+urlOf(q)+'">&#9654; YouTube par kholo</a></div>'}
+function killYT(tab){clearInterval(tab._yi);clearTimeout(tab._yf);try{tab._yp&&tab._yp.destroy()}catch(e){}tab._yp=null}
+
+function openYT(q,fromList){if(!q||(!q.id&&!q.list))return toast('Sahi YouTube link daalo');
+ try{document.querySelectorAll('.stage video').forEach(v=>v.pause())}catch(e){}
+ const old=tabs.filter(t=>t.yt);
+ tabCounter++;const id='tab'+tabCounter;
+ const el=document.createElement('div');el.className='ytshim';el.id=id;$('#stage').appendChild(el);
+ const pid=id+'_p';el.innerHTML='<div id="'+pid+'"></div>';
+ const tab={id,el,canvas:null,gl:null,isVideo:true,yt:true,_yq:q,history:[urlOf(q)],historyIndex:0,title:'YouTube',desktopMode:false,rotation:0,flipped:false,zoomScale:1,panX:0,panY:0,gestureBrightness:1,aspect:'fit',audioCtx:null,gainNode:null,sourceNode:null,isLocalFile:false};
+ tabs.push(tab);const S=mkShim(tab,q);
+ /* Nova ke apne listeners (play/pause/timeupdate/ended UI) */
+ bindVideoElementEvents(tab);
+ activateTab(id);
+ old.forEach(t=>closeTab(t.id));
+ if(!fromList)save(q);
+ api().then(()=>{
+  const vars={autoplay:1,playsinline:1,rel:0,modestbranding:1,controls:0,disablekb:1,fs:0,iv_load_policy:3};if(q.list){vars.list=q.list;if(!q.id)vars.listType='playlist'}
+  tab._yp=new YT.Player(pid,{width:'100%',height:'100%',host:'https://www.youtube-nocookie.com',videoId:q.id||undefined,playerVars:vars,events:{
+   onReady:e=>{clearTimeout(tab._yf);S.ready=true;try{e.target.playVideo();if(q.list&&S.loop)e.target.setLoop(true)}catch(x){}
+     const f=el.querySelector('iframe');if(f){f.removeAttribute('width');f.removeAttribute('height')}applyAspect(tab,tab.aspect||'fit');
+     S.fire('loadedmetadata');refreshPlaybackUIForTab(tab);refreshTransportUI(tab)},
+   onStateChange:e=>{const s=e.data;S.state=s;
+     if(s===1){S.fire('play');S.fire('playing')}else if(s===2)S.fire('pause');
+     else if(s===0){if(S.loop&&!q.list){try{tab._yp.seekTo(0);tab._yp.playVideo()}catch(x){}}else S.fire('ended')}
+     try{const d=tab._yp.getVideoData()||{};if(d.title)ytName(q,d.title)}catch(x){}
+     if(tab.id===activeTabId)refreshTransportUI(tab)},
+   onPlaybackQualityChange:()=>{S.fire('resize')},
+   onError:e=>{const c=e.data;
+     if(q.list&&(c===100||c===101||c===150)&&(S.skips=(S.skips||0)+1)<=5){try{tab._yp.nextVideo();return}catch(x){}}
+     ytFail(tab,q,c===153?'Page ka origin YouTube ko nahi mila (file se khola hai? https par host karo).':c===100?'Video private ya hata diya gaya hai.':(c===101||c===150)?'Video owner ne embed band kiya hua hai.':'Video play nahi ho paya (code '+c+').')}}});
+  tab._yf=setTimeout(()=>{if(!S.ready)ytFail(tab,q,'Player load nahi hua.')},12000)
+ }).catch(()=>ytFail(tab,q,'YouTube player load nahi ho paya (internet ya blocker).'))}
+
+/* ---- Nova ke functions ko YouTube tab ke liye theek karo ---- */
+const _aa=window.applyAspect;
+window.applyAspect=function(tab,mode){if(!tab||!tab.yt)return _aa(tab,mode);
+ tab.aspect=mode;const f=tab.el.querySelector('iframe');
+ if(f){const st=$('#stage'),sw=st.clientWidth||1,sh=st.clientHeight||1,w0=Math.min(sw,sh*16/9),h0=Math.min(sh,sw*9/16);let sx=1,sy=1;
+  if(mode==='crop'){sx=sy=Math.max(sw/w0,sh/h0)}
+  else if(mode==='stretch'){sx=sw/w0;sy=sh/h0}
+  else if(mode==='4:3'){sx=Math.min(sw,sh*4/3)/w0;sy=Math.min(sh,sw*3/4)/h0}
+  f.style.transform=(sx===1&&sy===1)?'':'scale('+sx+','+sy+')'}
+ document.querySelectorAll('#aspectMenu button').forEach(b=>b.classList.toggle('active-toggle',b.dataset.aspect===mode))};
+const _ug=window.updateGradingForActiveTab;window.updateGradingForActiveTab=function(){const t=getTab(activeTabId);if(t&&t.yt){tabs.forEach(x=>{if(x.isVideo&&!x.yt&&x.canvas)try{setGradingVisible(x,false)}catch(e){}});return}return _ug.apply(this,arguments)};
+const _sg=window.setGradingVisible;if(_sg)window.setGradingVisible=function(t){if(t&&t.yt)return;return _sg.apply(this,arguments)};
+const _gp=window.getPreviewVideoFor;window.getPreviewVideoFor=function(t){return t&&t.yt?null:_gp(t)};
+const _ct=window.closeTab;window.closeTab=function(id){const t=getTab(id);if(t&&t.yt)killYT(t);return _ct(id)};
+const _lu=window.loadUrl;window.loadUrl=function(id,raw,n){const t=getTab(id);if(t&&t.yt){const q=parse(raw);if(q.id||q.list)return openYT(q);createTab();return _lu(activeTabId,raw,n)}return _lu(id,raw,n)};
+const _rt=window.refreshTransportUI;window.refreshTransportUI=function(tab){_rt(tab);if(tab&&tab.yt&&tab._yq.list){$('#prevBtn').disabled=false;$('#nextBtn').disabled=false}};
+const _ev=window.ensureAudioGraph;window.ensureAudioGraph=function(t){if(t&&t.yt)return;return _ev(t)};
+['prevBtn','nextBtn'].forEach(n=>$('#'+n).addEventListener('click',e=>{const t=ytTab();if(!t||!t._yq.list||!t._yp)return;e.stopImmediatePropagation();try{n==='prevBtn'?t._yp.previousVideo():t._yp.nextVideo()}catch(x){}},true));
+$('#pipBtn').addEventListener('click',e=>{if(!ytTab())return;e.stopImmediatePropagation();toast('YouTube player me PiP nahi chalta — ↗ se YouTube kholo')},true);
+$('#fastLoadBtn').addEventListener('click',e=>{const t=ytTab();if(!t)return;e.stopImmediatePropagation();document.getElementById('extractVideoBtn').click();setTimeout(()=>{const i=$('#extractUrlInput');if(i)i.value=urlOf(t._yq)},80);toast('Download ke liye link bhar diya — Get video chalao')},true);
+$('#enhanceBtnPlayer').addEventListener('click',()=>{if(ytTab()&&!warned){warned=true;toast('YouTube par: brightness/contrast/saturation/sharpness/blur chalte hain. Vibrance, AI enhance, volume boost >100% nahi.')}},true);
+yq.onclick=()=>{const t=ytTab();if(t)window.open(urlOf(t._yq),'_blank')};
+const _act=window.activateTab;window.activateTab=function(id){const r=_act(id);yq.style.display=ytTab()?'':'none';return r};
+
+/* ---- panel events ---- */
+btn.onclick=()=>{const w=!panel.classList.contains('open');window.closePanels();if(w){render();panel.classList.add('open');$('#ytEmb').checked=EMB;setTimeout(()=>$('#ytIn').focus(),50)}};
+$('#ytGo').onclick=()=>{const q=parse($('#ytIn').value);if(!q.id&&!q.list)return toast('Sahi YouTube link daalo');$('#ytIn').value='';panel.classList.remove('open');openYT(q)};
+$('#ytIn').addEventListener('keydown',e=>{if(e.key==='Enter')$('#ytGo').click()});
+$('#ytPaste').onclick=async()=>{try{const t=await navigator.clipboard.readText();$('#ytIn').value=t;const q=parse(t);if(q.id||q.list)$('#ytGo').click()}catch(e){toast('Paste nahi hua — box me long-press karke paste karo')}};
+$('#ytPop').onclick=()=>{const q=parse($('#ytIn').value);if(!q.id&&!q.list)return toast('Pehle link daalo');window.open(urlOf(q),'_blank')};
+$('#ytEmb').onchange=e=>{EMB=e.target.checked;SV('novaYtEmbed',EMB)};
+function grab(e){if(!EMB)return false;const v=$('#urlInput').value,q=parse(v);if((q.id||q.list)&&/[\/.]/.test(v)){e.preventDefault();e.stopImmediatePropagation();$('#urlInput').blur();openYT(q);return true}return false}
+$('#urlInput').addEventListener('keydown',e=>{if(e.key==='Enter')grab(e)},true);
+$('#goBtn').addEventListener('click',grab,true);
+$('#urlInput').addEventListener('search',grab,true);
+render();
+})();
+</script>
+
 </body>
 </html>
