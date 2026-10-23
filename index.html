@@ -12,6 +12,11 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Studytube">
 <link rel="manifest" href="manifest.json">
+<link rel="preconnect" href="https://www.googleapis.com" crossorigin>
+<link rel="preconnect" href="https://i.ytimg.com" crossorigin>
+<link rel="preconnect" href="https://www.youtube.com">
+<link rel="preconnect" href="https://www.youtube-nocookie.com">
+<link rel="dns-prefetch" href="https://s.ytimg.com">
 <link rel="icon" href="icon-192.png" sizes="192x192" type="image/png">
 <link rel="icon" href="icon-512.png" sizes="512x512" type="image/png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -9169,13 +9174,14 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
   const isUrl = q => /^(https?:\/\/|www\.)\S+$/i.test(q);
   async function openLink(q) {
     const id = ytId(q); if (!id) return false;
-    loading = true; res = []; render();
+    const stub = { id, t: 'Loading\u2026', c: '', cn: '', p: 0, d: 0 };
+    res = [stub]; render(); play(id);
     try {
       const j = await api('videos', { part: 'snippet,contentDetails', id }), x = (j.items || [])[0];
       if (!x) throw new Error('Video not found');
-      res = [{ id, t: dec(x.snippet.title), c: x.snippet.channelId, cn: x.snippet.channelTitle, p: Date.parse(x.snippet.publishedAt) || 0, d: iso(x.contentDetails.duration) }];
-      loading = false; render(); play(id);
-    } catch (e) { res = null; loading = false; render(); toast(fr(e.message)); }
+      Object.assign(stub, { t: dec(x.snippet.title), c: x.snippet.channelId, cn: x.snippet.channelTitle, p: Date.parse(x.snippet.publishedAt) || 0, d: iso(x.contentDetails.duration) });
+      const pt = $('stPT'); if (pt && cur && cur.id === id) { pt.textContent = stub.t; const pm = $('stPM'); if (pm) pm.textContent = stub.cn; } render();
+    } catch (e) { toast(fr(e.message)); }
     return true;
   }
   async function smart(q) {
@@ -9188,11 +9194,16 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
     await searchAll(); if (res && res[0]) play(res[0].id);
     return true;
   }
+  const sCache = rd('uv99:st:sc', {}); setTimeout(() => { if (key) ytReady(); }, 3000);
   async function searchAll() {
-    const q = st.q.trim(); if (!q || loading) return; loading = true; res = []; render();
+    const q = st.q.trim(); if (!q || loading) return;
+    const hit = sCache[q.toLowerCase()]; if (hit && Date.now() - hit.t < 6e5) { res = hit.r; render(); return; }
+    loading = true; res = []; render();
     try {
       const j = await api('search', { part: 'snippet', q, type: 'video', maxResults: 20, safeSearch: 'strict' });
-      res = await withDur((j.items || []).map(x => ({ id: x.id.videoId, t: dec(x.snippet.title), c: x.snippet.channelId, cn: x.snippet.channelTitle, p: Date.parse(x.snippet.publishedAt) || 0 })));
+      const raw = (j.items || []).map(x => ({ id: x.id.videoId, t: dec(x.snippet.title), c: x.snippet.channelId, cn: x.snippet.channelTitle, p: Date.parse(x.snippet.publishedAt) || 0, d: 0 }));
+      res = raw; render(); res = await withDur(raw);
+      sCache[q.toLowerCase()] = { t: Date.now(), r: res }; try { const ks = Object.keys(sCache).sort((a, b) => sCache[b].t - sCache[a].t); ks.slice(20).forEach(k => delete sCache[k]); wr('uv99:st:sc', sCache); } catch (e) {}
       const sq = rd('uv99:st:sq', { d: '', n: 0 }); if (sq.d !== today()) { sq.d = today(); sq.n = 0; } sq.n++; wr('uv99:st:sq', sq);
       if (sq.n >= 90) toast('Aaj ki search quota lagbhag khatam (' + sq.n + '/100)');
     } catch (e) { res = null; toast(fr(e.message)); }
@@ -9200,9 +9211,11 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
   }
 
   /* ---------- player ---------- */
+  let ytP = null;
   function ytReady() {
-    return new Promise(res => {
-      if (window.YT && YT.Player) return res();
+    if (window.YT && YT.Player) return Promise.resolve();
+    if (ytP) return ytP;
+    return ytP = new Promise(res => {
       const s = document.createElement('script'); s.src = 'https://www.youtube.com/iframe_api'; document.head.appendChild(s);
       const p = window.onYouTubeIframeAPIReady; window.onYouTubeIframeAPIReady = () => { try { p && p(); } catch (e) {} res(); };
     });
@@ -9320,7 +9333,7 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
     ov.innerHTML = '<div class="stv-hd"><button class="stv-ib" id="stX" aria-label="Close">&#10005;</button><span class="stv-lg">&#9654;</span><h2>Study Tube</h2><button class="stv-ib" id="stS" aria-label="Settings">&#9881;</button></div>' +
       '<div class="stv-pl" id="stP"><div class="stv-vw"><div id="stYT"></div></div><div class="stv-pm"><div class="stv-pt" id="stPT"></div><div class="stv-pmeta" id="stPM"></div><div class="stv-pr"><span id="stSp" style="display:contents"></span><button class="stv-cl" id="stCl">Close player</button></div></div></div>' +
       '<div class="stv-sc" id="stSc"><div class="stv-bar"><div class="stv-q"><span>&#128269;</span><input id="stQ" type="search" placeholder="Search ya koi bhi link paste karo" autocomplete="off" autocapitalize="off" spellcheck="false"></div><button class="stv-ib" id="stR" aria-label="Refresh">&#8635;</button></div><div class="stv-chips" id="stCh"></div><div id="stL"></div></div><div class="stv-sh" id="stSh"></div>';
-    document.body.appendChild(ov); fit(); $('stX').style.display = 'none'; mark('navStudy');
+    document.body.appendChild(ov); fit(); $('stX').style.display = 'none'; mark('navStudy'); ytReady();
     ov.addEventListener('keydown', e => e.stopPropagation()); ov.addEventListener('keyup', e => e.stopPropagation());
     ov.addEventListener('click', async e => {
       const t = e.target, b = t.closest('button'), c = t.closest('.stv-c');
@@ -9534,6 +9547,112 @@ apply()});
 q.addEventListener('input',function(e){var k=e.target.dataset.k;if(k){S[k]=+e.target.value;S.p='custom';apply()}});
 apply();setInterval(listen,4000)}
 new MutationObserver(function(){var P=document.getElementById('stP');if(P&&P.querySelector('.stv-pr'))build(P)}).observe(document.body,{childList:true,subtree:true});
+})();
+</script>
+<style id="studytube-speed">
+*{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
+.stv-c,.uvh-card{content-visibility:auto;contain-intrinsic-size:auto 250px}
+.stage,.panel,#stSc{contain:layout style}
+.icon-btn,.nav-item,.stfx button{transition:none!important}
+</style>
+<style>
+.stnt{margin-top:10px;background:#141829;border:1px solid #262c47;border-radius:16px;padding:10px 12px;color:#eef0ff}
+.stnt h4{margin:4px 0 8px;font-size:13px;color:#8e95b8;font-weight:600}
+.stnt textarea{width:100%;min-height:64px;background:#0b0d17;color:#eef0ff;border:1px solid #262c47;border-radius:12px;padding:10px;font-size:15px;font-family:inherit;resize:vertical}
+.stnt .bt{background:linear-gradient(135deg,#7c6cff,#ff5c8a);color:#fff;border:0;border-radius:18px;padding:10px 16px;font-size:14px;margin-top:8px}
+.stnt .it{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-top:1px solid #262c47;font-size:14.5px}
+.stnt .tm{flex:0 0 auto;background:#262c47;border-radius:12px;padding:4px 9px;font-size:13px;color:#cfc9ff}
+.stnt .tx{flex:1;word-break:break-word}.stnt .x{background:none;border:0;color:#ff7a95;font-size:16px}
+</style>
+<script>
+(function(){
+var K='st:notes',N={},vid='',t=0;
+try{N=JSON.parse(localStorage.getItem(K)||'{}')}catch(e){}
+function sv(){try{localStorage.setItem(K,JSON.stringify(N))}catch(e){}}
+function fi(){return document.querySelector('#stP .stv-vw iframe')}
+function post(o){var i=fi();if(i&&i.contentWindow)i.contentWindow.postMessage(JSON.stringify(o),'*')}
+window.addEventListener('message',function(e){try{var d=typeof e.data==='string'?JSON.parse(e.data):e.data;if(!d||!d.info)return;
+if(typeof d.info.currentTime==='number')t=d.info.currentTime;
+if(d.info.videoData&&d.info.videoData.video_id&&d.info.videoData.video_id!==vid){vid=d.info.videoData.video_id;draw()}}catch(x){}});
+function f(x){x=Math.floor(x);var h=Math.floor(x/3600),m=Math.floor(x%3600/60),s=x%60;return(h?h+':'+String(m).padStart(2,'0'):m)+':'+String(s).padStart(2,'0')}
+function draw(){var b=document.querySelector('.stnt .lst');if(!b)return;var a=N[vid]||[];
+b.innerHTML=a.length?a.map(function(n,i){return'<div class="it"><span class="tm" data-s="'+n.t+'">&#9654; '+f(n.t)+'</span><span class="tx"></span><button class="x" data-d="'+i+'">&#10005;</button></div>'}).join(''):'<div style="color:#8e95b8;font-size:13px">Abhi koi note nahi. Video chalate waqt note likho, wo isi second par save hoga.</div>';
+b.querySelectorAll('.tx').forEach(function(el,i){el.textContent=a[i].x})}
+function build(P){if(P.querySelector('.stnt'))return;var d=document.createElement('div');d.className='stnt';
+d.innerHTML='<h4>&#128221; Timestamp notes</h4><textarea placeholder="Is point ka note likho..."></textarea><button class="bt">Is time par save karo</button><div class="lst"></div>';
+var a=P.querySelector('.stfx')||P.querySelector('.stv-pr');a.parentNode.insertBefore(d,a.nextSibling);
+d.addEventListener('keydown',function(e){e.stopPropagation()});d.addEventListener('keyup',function(e){e.stopPropagation()});
+d.addEventListener('click',function(e){var tg=e.target;
+if(tg.classList.contains('bt')){var ta=d.querySelector('textarea'),v=ta.value.trim();if(!v)return;post({event:'listening',id:1,channel:'widget'});
+if(!vid){var pt=document.getElementById('stPT');vid=pt?pt.textContent:'x'}
+(N[vid]=N[vid]||[]).push({t:t,x:v});N[vid].sort(function(a,b){return a.t-b.t});sv();ta.value='';draw()}
+else if(tg.dataset.d!==undefined){N[vid].splice(+tg.dataset.d,1);sv();draw()}
+else if(tg.dataset.s!==undefined){post({event:'command',func:'seekTo',args:[+tg.dataset.s,true]});post({event:'command',func:'playVideo',args:[]})}});
+draw();setInterval(function(){post({event:'listening',id:1,channel:'widget'})},3000)}
+new MutationObserver(function(){var P=document.getElementById('stP');if(P&&P.querySelector('.stv-pr'))build(P)}).observe(document.body,{childList:true,subtree:true});
+})();
+</script>
+<style>
+.sttl{margin-top:10px;background:#141829;border:1px solid #262c47;border-radius:16px;padding:10px 12px;color:#eef0ff}
+.sttl h4{margin:4px 0;font-size:13px;color:#8e95b8;font-weight:600}
+.sttl .r{display:flex;gap:7px;flex-wrap:wrap;margin:6px 0}
+.sttl button{background:#262c47;color:#eef0ff;border:1px solid #343b5e;border-radius:18px;padding:9px 13px;font-size:14px}
+.sttl button.on{background:linear-gradient(135deg,#7c6cff,#ff5c8a);border-color:transparent}
+.sttl .m{font-size:13px;color:#cfc9ff;margin-top:4px;min-height:18px}
+</style>
+<script>
+(function(){
+var t=0,A=null,B=null,sl=null,slT=0;
+function fi(){return document.querySelector('#stP .stv-vw iframe')}
+function post(o){var i=fi();if(i&&i.contentWindow)i.contentWindow.postMessage(JSON.stringify(o),'*')}
+window.addEventListener('message',function(e){try{var d=typeof e.data==='string'?JSON.parse(e.data):e.data;
+if(d&&d.info&&typeof d.info.currentTime==='number'){t=d.info.currentTime;if(A!==null&&B!==null&&t>=B)post({event:'command',func:'seekTo',args:[A,true]})}}catch(x){}});
+function f(x){x=Math.floor(x);return Math.floor(x/60)+':'+String(x%60).padStart(2,'0')}
+function msg(q){var m=q.querySelector('.m');var a=[];if(A!==null)a.push('A '+f(A));if(B!==null)a.push('B '+f(B));
+var s=a.length?'Loop: '+a.join(' \u2192 ')+(B!==null?' (chal raha hai)':''):'';if(sl){s+=(s?' \u00b7 ':'')+'Sleep timer chalu'}m.textContent=s;
+q.querySelector('[data-k=A]').classList.toggle('on',A!==null);q.querySelector('[data-k=B]').classList.toggle('on',B!==null)}
+function build(P){if(P.querySelector('.sttl'))return;var d=document.createElement('div');d.className='sttl';
+d.innerHTML='<h4>&#128257; Section repeat (A\u2013B)</h4><div class="r"><button data-k="A">A set karo</button><button data-k="B">B set karo</button><button data-k="C">Loop band</button></div><h4>&#128564; Sleep timer</h4><div class="r"><button data-s="15">15 min</button><button data-s="30">30 min</button><button data-s="60">60 min</button><button data-s="0">Off</button></div><div class="m"></div>';
+var a=P.querySelector('.stnt')||P.querySelector('.stfx')||P.querySelector('.stv-pr');a.parentNode.insertBefore(d,a.nextSibling);
+d.addEventListener('click',function(e){var b=e.target.closest('button');if(!b)return;post({event:'listening',id:1,channel:'widget'});
+if(b.dataset.k==='A'){A=t;if(B!==null&&B<=A)B=null}
+else if(b.dataset.k==='B'){if(A===null)A=Math.max(0,t-30);B=t>A?t:A+5}
+else if(b.dataset.k==='C'){A=B=null}
+else if(b.dataset.s!==undefined){clearTimeout(sl);sl=null;var mn=+b.dataset.s;if(mn){sl=setTimeout(function(){post({event:'command',func:'pauseVideo',args:[]});sl=null;msg(d)},mn*60000)}}
+msg(d)});msg(d)}
+new MutationObserver(function(){var P=document.getElementById('stP');if(P&&P.querySelector('.stv-pr'))build(P)}).observe(document.body,{childList:true,subtree:true});
+})();
+</script>
+<script>
+/* Studytube: background play for gallery / link / offline videos */
+(function(){
+var V=null,userPause=false,ms=navigator.mediaSession;
+function title(){var t=document.title;var el=document.querySelector('.tab.active .tab-title');return (el&&el.textContent.trim())||t||'Studytube'}
+function meta(){if(!ms||typeof MediaMetadata==='undefined')return;try{ms.metadata=new MediaMetadata({title:title(),artist:'Studytube',artwork:[{src:'icon-512.png',sizes:'512x512',type:'image/png'}]})}catch(e){}}
+function handlers(){if(!ms)return;
+var h={play:function(){V&&V.play()},pause:function(){V&&V.pause()},seekbackward:function(d){if(V)V.currentTime=Math.max(0,V.currentTime-((d&&d.seekOffset)||10))},seekforward:function(d){if(V)V.currentTime=Math.min(V.duration||1e9,V.currentTime+((d&&d.seekOffset)||10))},seekto:function(d){if(V&&d.seekTime!=null)V.currentTime=d.seekTime}};
+for(var k in h){try{ms.setActionHandler(k,h[k])}catch(e){}}}
+document.addEventListener('play',function(e){var v=e.target;if(!v||v.tagName!=='VIDEO')return;V=v;userPause=false;meta();handlers();if(ms)ms.playbackState='playing'},true);
+document.addEventListener('pause',function(e){var v=e.target;if(!v||v.tagName!=='VIDEO'||v!==V)return;
+if(document.visibilityState==='visible'){userPause=true;if(ms)ms.playbackState='paused'}
+else if(!userPause&&!v.ended){setTimeout(function(){if(v.paused&&!v.ended)v.play().catch(function(){})},250)}},true);
+document.addEventListener('visibilitychange',function(){
+if(document.visibilityState==='hidden'){if(V&&!V.paused&&!V.ended)setTimeout(function(){if(V.paused&&!userPause)V.play().catch(function(){})},300)}
+else if(V&&!userPause&&V.paused&&!V.ended){V.play().catch(function(){})}});
+try{ms&&ms.setActionHandler('enterpictureinpicture',function(){if(V&&V.requestPictureInPicture)V.requestPictureInPicture().catch(function(){})})}catch(e){}
+})();
+</script>
+<script>
+/* Studytube: tells the Android WebView wrapper when media is playing (no-op in a normal browser) */
+(function(){
+var last=null;
+function tell(on,t){if(last===on)return;last=on;try{if(window.StudytubeNative&&StudytubeNative.onPlayback)StudytubeNative.onPlayback(!!on,String(t||'Studytube'))}catch(e){}}
+function ttl(){var a=document.getElementById('stPT'),b=document.querySelector('.tab.active .tab-title');return (a&&a.offsetParent&&a.textContent.trim())||(b&&b.textContent.trim())||'Studytube'}
+document.addEventListener('play',function(e){if(e.target&&e.target.tagName==='VIDEO')tell(true,ttl())},true);
+document.addEventListener('pause',function(e){if(e.target&&e.target.tagName==='VIDEO')tell(false)},true);
+document.addEventListener('ended',function(e){if(e.target&&e.target.tagName==='VIDEO')tell(false)},true);
+window.addEventListener('message',function(e){try{var d=typeof e.data==='string'?JSON.parse(e.data):e.data;
+if(d&&d.info&&typeof d.info.playerState==='number'){var st=d.info.playerState;if(st===1)tell(true,ttl());else if(st===2||st===0)tell(false)}}catch(x){}});
 })();
 </script>
 </body>
