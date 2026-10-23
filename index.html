@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nova Browser 3.0</title>
+<title>Nova Browser 1.9</title>
 <meta name="description" content="A private in-app browser with fast video download and offline playback.">
 <meta name="theme-color" content="#121212">
 <meta name="mobile-web-app-capable" content="yes">
@@ -316,6 +316,17 @@
     background:linear-gradient(to top, rgba(0,0,0,0.75), rgba(0,0,0,0));
   }
   .video-controlbar.visible { display:flex; }
+  /* UV99 v3 (sanflix-style glass bar) */
+  .video-controlbar { backdrop-filter:blur(14px) saturate(140%); -webkit-backdrop-filter:blur(14px) saturate(140%);
+    background:linear-gradient(to top, rgba(10,10,14,0.62), rgba(10,10,14,0.18)); border-top:1px solid rgba(255,255,255,0.10); border-radius:16px 16px 0 0; }
+  @media (prefers-reduced-transparency: reduce) { .video-controlbar { backdrop-filter:none; -webkit-backdrop-filter:none; background:rgba(0,0,0,0.85); } }
+  #uvNextBox { position:absolute; right:12px; bottom:96px; z-index:9; display:none; align-items:center; gap:10px; padding:10px 12px;
+    border-radius:14px; color:#fff; font-size:13px; background:rgba(20,20,26,0.55); border:1px solid rgba(255,255,255,0.18);
+    backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); }
+  #uvNextBox.visible { display:flex; }
+  #uvNextBox b { font-size:18px; min-width:22px; text-align:center; }
+  #uvNextBox button { border:0; border-radius:10px; padding:6px 10px; font-size:12px; color:#fff; background:rgba(255,255,255,0.18); }
+  #uvNextBox button.go { background:#e50914; }
   .seek-preview {
     position:absolute; bottom:100%; margin-bottom:6px; left:0;
     transform:translateX(-50%); display:none; flex-direction:column; align-items:center; gap:3px;
@@ -646,7 +657,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 3.0</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 1.1</div>
   </div>
 
   <div class="toolbar">
@@ -968,6 +979,10 @@
       <div class="row-buttons">
         <button id="loopBtn">Loop: Off</button>
         <button id="muteBtn">Mute</button>
+        <button id="uvSleepBtn">Sleep: Off</button>
+        <button id="uvAbBtn">A-B: Off</button>
+        <button id="uvSnapBtn">Snapshot</button>
+        <button id="uvAudioBtn">Audio: Default</button>
         <button id="autoDlToggleBtn" title="When on, videos download in the background for smooth offline playback. When off, videos just stream online and nothing is saved automatically.">Auto-DL: On</button>
       </div>
     </div>
@@ -1506,7 +1521,7 @@ async function offerExternalPlayback(blob, name) {
 /* ---- Quick "video folder" access from inside the player itself ---- */
 async function renderFolderOverlay() {
   const list = document.getElementById('folderList');
-  list.innerHTML = '<div class="panel-empty">Loading…</div>';
+  list.innerHTML = (window.uvShimmerRows ? window.uvShimmerRows(5) : '<div class="panel-empty">Loading…</div>');
   const items = await listOfflineVideos();
   list.innerHTML = '';
   if (items.length === 0) {
@@ -2923,7 +2938,11 @@ function bindVideoElementEvents(tab) {
     if (tab.id !== activeTabId) return;
     const videoTabs = tabs.filter(t => t.isVideo);
     const idx = videoTabs.indexOf(tab);
-    if (!settings.loop && idx >= 0 && idx < videoTabs.length - 1) activateTab(videoTabs[idx + 1].id) && videoTabs[idx + 1].el.play().catch(()=>{});
+    if (!settings.loop && idx >= 0 && idx < videoTabs.length - 1) {
+      const nt = videoTabs[idx + 1];
+      if (window.uvNextCountdown) window.uvNextCountdown(nt);
+      else activateTab(nt.id) && nt.el.play().catch(()=>{});
+    }
   });
   // Previously nothing listened for playback errors at all: a link the
   // <video> tag couldn't stream directly (wrong CORS headers, a redirect
@@ -6215,16 +6234,11 @@ function isCobaltSupportedUrl(u) {
 }
 async function resolveViaCobalt(pageUrl) {
   let lastErr = null;
-  let customBase = '', customKey = '';
-  try { customBase = (localStorage.getItem('novaCobaltUrl') || '').trim(); customKey = (localStorage.getItem('novaCobaltKey') || '').trim(); } catch (e) {}
-  const bases = (customBase ? [customBase.replace(/\/?$/, '/')] : []).concat(COBALT_INSTANCES);
-  for (const base of bases) {
+  for (const base of COBALT_INSTANCES) {
     try {
-      const hdrs = { 'Accept': 'application/json', 'Content-Type': 'application/json' };
-      if (customKey && base === bases[0] && customBase) hdrs['Authorization'] = 'Api-Key ' + customKey;
       const resp = await fetchWithTimeout(base, {
         method: 'POST',
-        headers: hdrs,
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: pageUrl, downloadMode: 'auto' })
       }, 15000);
       if (!resp.ok) { lastErr = new Error('cobalt instance returned HTTP ' + resp.status); continue; }
@@ -7903,6 +7917,1368 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
   }, { passive: true });
 })();
 
+/* ===== UV99 upgrades v2: resume, shortcuts, hold-2x, sleep, A-B, snap, mediaSession, wakeLock ===== */
+(function () {
+  const $ = id => document.getElementById(id);
+  const vt = () => { const t = getTab(activeTabId); return t && t.isVideo && t.el ? t : null; };
+  const toast = m => { try { showMiniToast(m); } catch (e) {} };
+  const fmt = s => { s = Math.floor(s); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+  const rk = t => 'uv99:pos:' + (t.title || t.url || t.el.currentSrc || 'v') + ':' + Math.round(t.el.duration || 0);
+
+  /* 1. Resume playback position */
+  setInterval(() => { const t = vt(); if (!t || t.el.paused || !(t.el.duration > 30)) return;
+    try { localStorage.setItem(rk(t), String(t.el.currentTime)); } catch (e) {} }, 3000);
+  document.addEventListener('loadedmetadata', e => {
+    const t = tabs.find(x => x.isVideo && x.el === e.target); if (!t || !(t.el.duration > 30)) return;
+    try { const p = parseFloat(localStorage.getItem(rk(t)));
+      if (p > 5 && p < t.el.duration - 10) { t.el.currentTime = p; toast('Resumed from ' + fmt(p)); } } catch (err) {}
+  }, true);
+  document.addEventListener('ended', e => { const t = tabs.find(x => x.isVideo && x.el === e.target);
+    if (t) try { localStorage.removeItem(rk(t)); } catch (err) {} }, true);
+
+  /* 2. Keyboard shortcuts */
+  document.addEventListener('keydown', e => {
+    if (isKidsLock || e.ctrlKey || e.metaKey || e.altKey || /INPUT|TEXTAREA|SELECT/.test((e.target || {}).tagName || '')) return;
+    const t = vt(); if (!t) return; const v = t.el; const k = e.key; let used = true;
+    const seek = d => preciseSeek(t, Math.max(0, Math.min(v.duration || 1e9, v.currentTime + d)));
+    if (k === ' ' || k === 'k') togglePlayPauseForActiveTab();
+    else if (k === 'j') seek(-10); else if (k === 'l') seek(10);
+    else if (k === 'ArrowLeft') seek(-5); else if (k === 'ArrowRight') seek(5);
+    else if (k === 'ArrowUp') { v.volume = Math.min(1, v.volume + 0.1); toast('Volume ' + Math.round(v.volume * 100) + '%'); }
+    else if (k === 'ArrowDown') { v.volume = Math.max(0, v.volume - 0.1); toast('Volume ' + Math.round(v.volume * 100) + '%'); }
+    else if (k === 'm') { v.muted = !v.muted; toast(v.muted ? 'Muted' : 'Unmuted'); }
+    else if (k === 'f') { document.fullscreenElement ? document.exitFullscreen() : ($('stage').requestFullscreen && $('stage').requestFullscreen()); }
+    else if (k === '<' || k === '>') { v.playbackRate = Math.max(0.25, Math.min(3, v.playbackRate + (k === '>' ? 0.25 : -0.25))); toast('Speed ' + v.playbackRate + 'x'); }
+    else if (/^[0-9]$/.test(k) && v.duration) preciseSeek(t, v.duration * Number(k) / 10);
+    else used = false;
+    if (used) e.preventDefault();
+  });
+
+  /* 3. Hold anywhere on video = 2x speed while held */
+  (function () { const st = $('stage'); let tm, sx, sy, prev = 0;
+    st.addEventListener('touchstart', e => { const t = vt(); if (!t || isKidsLock || e.touches.length !== 1 ||
+      e.target.closest('button, input, select, .video-controlbar, .float-menu, .lock-overlay, .enhance-sheet')) return;
+      sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+      tm = setTimeout(() => { prev = t.el.playbackRate; t.el.playbackRate = 2; toast('\u23E9 2x while holding'); }, 500); }, { passive: true });
+    st.addEventListener('touchmove', e => { if (tm && (Math.abs(e.touches[0].clientX - sx) > 12 || Math.abs(e.touches[0].clientY - sy) > 12) && !prev) { clearTimeout(tm); tm = 0; } }, { passive: true });
+    const end = () => { clearTimeout(tm); tm = 0; if (prev) { const t = vt(); if (t) t.el.playbackRate = prev; prev = 0; } };
+    st.addEventListener('touchend', end, { passive: true }); st.addEventListener('touchcancel', end, { passive: true });
+  })();
+
+  /* 4. Extra speeds */
+  const sr = document.querySelector('.speed-row');
+  if (sr) { [1.75, 2.5, 3].forEach(s => { const b = document.createElement('button'); b.dataset.speed = s; b.textContent = s + 'x';
+      b.addEventListener('click', () => { const t = vt(); if (!t) return; t.el.playbackRate = s;
+        sr.querySelectorAll('button').forEach(x => x.classList.toggle('active-toggle', Number(x.dataset.speed) === s)); }); sr.appendChild(b); }); }
+
+  /* 5. Sleep timer */
+  let sleepT = 0, sleepIdx = 0; const opts = [0, 15, 30, 60];
+  const sb = $('uvSleepBtn'); if (sb) sb.addEventListener('click', () => { sleepIdx = (sleepIdx + 1) % opts.length; clearTimeout(sleepT);
+    const m = opts[sleepIdx]; sb.textContent = m ? 'Sleep: ' + m + 'm' : 'Sleep: Off'; sb.classList.toggle('active-toggle', !!m);
+    if (m) sleepT = setTimeout(() => { const t = vt(); if (t) t.el.pause(); sleepIdx = 0; sb.textContent = 'Sleep: Off'; sb.classList.remove('active-toggle'); toast('Sleep timer: paused'); }, m * 60000); });
+
+  /* 6. A-B repeat */
+  let A = null, B = null; const ab = $('uvAbBtn');
+  if (ab) ab.addEventListener('click', () => { const t = vt(); if (!t) return;
+    if (A === null) { A = t.el.currentTime; ab.textContent = 'A-B: A ' + fmt(A); ab.classList.add('active-toggle'); }
+    else if (B === null) { B = t.el.currentTime; if (B <= A) { B = null; return; } ab.textContent = 'A-B: ' + fmt(A) + '-' + fmt(B); }
+    else { A = B = null; ab.textContent = 'A-B: Off'; ab.classList.remove('active-toggle'); } });
+  document.addEventListener('timeupdate', e => { if (A !== null && B !== null) { const t = vt(); if (t && e.target === t.el && t.el.currentTime >= B) t.el.currentTime = A; } }, true);
+
+  /* 7. Snapshot current frame */
+  const sn = $('uvSnapBtn'); if (sn) sn.addEventListener('click', () => { const t = vt(); if (!t || !t.el.videoWidth) return;
+    try { const c = document.createElement('canvas'); c.width = t.el.videoWidth; c.height = t.el.videoHeight; c.getContext('2d').drawImage(t.el, 0, 0);
+      c.toBlob(b => { if (!b) return toast('Snapshot blocked by this video'); const a = document.createElement('a'); a.href = URL.createObjectURL(b);
+        a.download = 'frame-' + fmt(t.el.currentTime).replace(':', 'm') + 's.png'; document.body.appendChild(a); a.click(); a.remove(); toast('Frame saved'); }, 'image/png');
+    } catch (err) { toast('Snapshot blocked by this video'); } });
+
+  /* 8. Lock-screen controls + keep screen awake */
+  let wl = null;
+  document.addEventListener('play', async e => { const t = tabs.find(x => x.isVideo && x.el === e.target); if (!t) return;
+    try { if ('wakeLock' in navigator && !wl) { wl = await navigator.wakeLock.request('screen'); wl.addEventListener('release', () => { wl = null; }); } } catch (err) {}
+    try { if ('mediaSession' in navigator) { navigator.mediaSession.metadata = new MediaMetadata({ title: t.title || 'Nova Player' });
+      const h = (a, f) => { try { navigator.mediaSession.setActionHandler(a, f); } catch (x) {} };
+      h('play', () => t.el.play()); h('pause', () => t.el.pause());
+      h('seekbackward', () => preciseSeek(t, Math.max(0, t.el.currentTime - 10))); h('seekforward', () => preciseSeek(t, t.el.currentTime + 10));
+      h('seekto', d => preciseSeek(t, d.seekTime)); } } catch (err) {} }, true);
+  document.addEventListener('pause', () => { if (wl) { wl.release().catch(() => {}); wl = null; } }, true);
+})();
+
+/* ===== UV99 upgrades v3 (step 1: sanflix): next-video 10s countdown, audio-track selector ===== */
+(function () {
+  const $ = id => document.getElementById(id);
+  const toast = m => { try { showMiniToast(m); } catch (e) {} };
+  const vt = () => { const t = getTab(activeTabId); return t && t.isVideo && t.el ? t : null; };
+
+  /* A. Next-video countdown (10s, cancel / play now) */
+  const st = $('stage'); let box = null, timer = 0, left = 0, target = null;
+  function ensureBox() {
+    if (box || !st) return box;
+    box = document.createElement('div'); box.id = 'uvNextBox';
+    box.innerHTML = '<span>Next video in</span><b id="uvNextSec">10</b><button class="go" id="uvNextGo">Play now</button><button id="uvNextCancel">Cancel</button>';
+    st.appendChild(box);
+    $('uvNextGo').addEventListener('click', () => go());
+    $('uvNextCancel').addEventListener('click', () => stop());
+    return box;
+  }
+  function stop() { clearInterval(timer); timer = 0; target = null; if (box) box.classList.remove('visible'); }
+  function go() { const t = target; stop(); if (!t || !tabs.includes(t)) return; try { activateTab(t.id); t.el.play().catch(() => {}); } catch (e) {} }
+  window.uvNextCountdown = function (nt) {
+    if (isKidsLock) { target = nt; go(); return; }
+    ensureBox(); if (!box) { target = nt; go(); return; }
+    stop(); target = nt; left = 10; $('uvNextSec').textContent = left; box.classList.add('visible');
+    timer = setInterval(() => { left--; $('uvNextSec').textContent = Math.max(left, 0); if (left <= 0) go(); }, 1000);
+  };
+  // Any manual play/seek/tab-switch on the current video cancels the countdown
+  document.addEventListener('play', () => { if (timer) stop(); }, true);
+  document.addEventListener('seeking', () => { if (timer) stop(); }, true);
+  ['prevBtn', 'nextBtn'].forEach(id => { const b = $(id); if (b) b.addEventListener('click', () => { if (timer) stop(); }, true); });
+
+  /* B. Audio-track selector (multi-audio MKV/MP4; browsers expose el.audioTracks only where supported) */
+  const ab = $('uvAudioBtn');
+  const label = (tr, i) => (tr.label || tr.language || ('Track ' + (i + 1)));
+  function refreshAudioBtn() {
+    if (!ab) return; const t = vt(); const tr = t && t.el.audioTracks;
+    if (!tr || tr.length < 2) { ab.textContent = 'Audio: Default'; ab.classList.remove('active-toggle'); return; }
+    for (let i = 0; i < tr.length; i++) if (tr[i].enabled) { ab.textContent = 'Audio: ' + label(tr[i], i); break; }
+    ab.classList.add('active-toggle');
+  }
+  if (ab) ab.addEventListener('click', () => {
+    const t = vt(); if (!t) return; const tr = t.el.audioTracks;
+    if (!tr || tr.length < 2) return toast('No extra audio tracks in this video (or browser does not expose them)');
+    let cur = 0; for (let i = 0; i < tr.length; i++) if (tr[i].enabled) cur = i;
+    const nx = (cur + 1) % tr.length; for (let i = 0; i < tr.length; i++) tr[i].enabled = (i === nx);
+    refreshAudioBtn(); toast('Audio: ' + label(tr[nx], nx));
+  });
+  document.addEventListener('loadedmetadata', () => setTimeout(refreshAudioBtn, 300), true);
+  document.addEventListener('click', e => { if (e.target.closest && e.target.closest('[data-etab="playback"]')) refreshAudioBtn(); }, true);
+})();
+
+/* ===== UV99 upgrades v4 (step 2: Youtube-Clone-KMP): Shorts/Reels swipe view, shimmer loading, watch history, pull-to-refresh ===== */
+(function () {
+  const $ = id => document.getElementById(id);
+  const toast = m => { try { showMiniToast(m); } catch (e) {} };
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const titleHtml = s => (typeof maskMode !== 'undefined' && maskMode) ? maskLabel() : esc(s);
+  const vt = () => { const t = getTab(activeTabId); return t && t.isVideo && t.el ? t : null; };
+
+  /* ---- styles ---- */
+  const css = document.createElement('style');
+  css.textContent = `
+  @keyframes uvSh { 0% { background-position:-220px 0; } 100% { background-position:220px 0; } }
+  .uv-sh { background:linear-gradient(90deg,#2a2a2a 25%,#3a3a3a 37%,#2a2a2a 63%); background-size:440px 100%; animation:uvSh 1.2s infinite linear; border-radius:8px; }
+  .uv-sh-row { display:flex; align-items:center; gap:10px; padding:11px 8px; border-bottom:1px solid #272727; }
+  .uv-sh-row .a { width:34px; height:34px; border-radius:9px; flex-shrink:0; }
+  .uv-sh-row .b { flex:1; display:flex; flex-direction:column; gap:7px; }
+  .uv-sh-row .b i { display:block; height:10px; } .uv-sh-row .b i:first-child { width:70%; } .uv-sh-row .b i:last-child { width:40%; height:8px; }
+  #uvReels, #uvHistory { position:fixed; inset:0; z-index:70; }
+  #uvReels { background:#000; overflow-y:scroll; scroll-snap-type:y mandatory; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
+  .uv-slide { position:relative; height:100vh; height:100dvh; scroll-snap-align:start; scroll-snap-stop:always; display:flex; align-items:center; justify-content:center; background:#000; }
+  .uv-slide video { width:100%; height:100%; object-fit:contain; background:#000; }
+  .uv-cap { position:absolute; left:14px; right:70px; bottom:34px; color:#fff; font-size:14px; line-height:1.35; text-shadow:0 1px 4px #000; pointer-events:none; }
+  .uv-cap small { display:block; opacity:.7; font-size:11px; margin-top:3px; }
+  .uv-prog { position:absolute; left:0; right:0; bottom:0; height:18px; display:flex; align-items:flex-end; cursor:pointer; }
+  .uv-prog div { height:3px; width:100%; background:rgba(255,255,255,.25); } .uv-prog div b { display:block; height:100%; width:0; background:#fff; }
+  .uv-flash { position:absolute; font-size:54px; color:#fff; opacity:0; pointer-events:none; transition:opacity .25s; text-shadow:0 2px 10px #000; }
+  .uv-flash.show { opacity:.9; }
+  .uv-rbtn { position:fixed; top:max(12px, env(safe-area-inset-top)); z-index:72; width:40px; height:40px; border-radius:50%; border:0; color:#fff; font-size:18px; background:rgba(30,30,34,.55); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }
+  .uv-count { position:fixed; top:max(20px, calc(env(safe-area-inset-top) + 8px)); left:0; right:0; text-align:center; z-index:71; color:#fff; font-size:12px; opacity:.75; pointer-events:none; }
+  #uvHistory { background:rgba(0,0,0,.72); display:flex; align-items:flex-end; justify-content:center; }
+  .uv-hbar { height:3px; background:#333; border-radius:2px; margin-top:5px; } .uv-hbar b { display:block; height:100%; background:#e50914; border-radius:2px; }
+  .uv-head-btn { background:none; border:none; color:#bbb; font-size:12px; padding:4px 8px; cursor:pointer; }
+  `;
+  document.head.appendChild(css);
+
+  /* ---- shimmer skeleton rows ---- */
+  window.uvShimmerRows = n => Array.from({ length: n }, () => '<div class="uv-sh-row"><div class="a uv-sh"></div><div class="b"><i class="uv-sh"></i><i class="uv-sh"></i></div></div>').join('');
+
+  /* ---- add Shorts + History rows into the folder sheet ---- */
+  const anchor = $('folderOpenFromPhoneRow');
+  function mkRow(id, icon, title, meta, fn) {
+    const r = document.createElement('div'); r.className = 'folder-row'; r.id = id; r.style.cursor = 'pointer';
+    r.innerHTML = '<span class="fr-icon">' + icon + '</span><span class="fr-text"><div class="fr-title">' + title + '</div><div class="fr-meta">' + meta + '</div></span>';
+    r.addEventListener('click', fn); return r;
+  }
+  if (anchor && anchor.parentNode) {
+    const p = anchor.parentNode;
+    const r2 = mkRow('uvShortsRow', '&#127916;', 'Shorts view', 'Swipe up/down through your downloaded videos', () => { closeFolderOverlay(); openReels(); });
+    const r3 = mkRow('uvHistoryRow', '&#128337;', 'Watch history', 'Videos you played recently, with progress', () => { closeFolderOverlay(); openHistory(); });
+    p.insertBefore(r3, anchor.nextSibling); p.insertBefore(r2, anchor.nextSibling);
+  }
+
+  /* ---- pull-to-refresh on the downloads list ---- */
+  (function () { const l = $('folderList'); if (!l) return; let y0 = null;
+    l.addEventListener('touchstart', e => { y0 = (l.scrollTop <= 0 && e.touches.length === 1) ? e.touches[0].clientY : null; }, { passive: true });
+    l.addEventListener('touchend', e => { if (y0 === null) return; const dy = (e.changedTouches[0].clientY - y0); y0 = null;
+      if (dy > 80 && l.scrollTop <= 0) { toast('Refreshing\u2026'); renderFolderOverlay(); } }, { passive: true });
+  })();
+
+  /* ================= Shorts / Reels ================= */
+  let reels = null, reelsEsc = null;
+  async function openReels() {
+    if (reels) return;
+    const all = await listOfflineVideos();
+    const probe = document.createElement('video');
+    const items = all.filter(it => it.blob && (!it.blob.type || probe.canPlayType(it.blob.type) !== ''));
+    if (!items.length) return toast('No playable downloaded videos yet');
+    const mt = vt(); if (mt) try { mt.el.pause(); } catch (e) {}
+    let muted = false;
+    reels = document.createElement('div'); reels.id = 'uvReels';
+    const closeB = document.createElement('button'); closeB.className = 'uv-rbtn'; closeB.style.left = '12px'; closeB.innerHTML = '&#10005;';
+    const muteB = document.createElement('button'); muteB.className = 'uv-rbtn'; muteB.style.right = '12px'; muteB.innerHTML = '&#128266;';
+    const cnt = document.createElement('div'); cnt.className = 'uv-count';
+    document.body.appendChild(reels); document.body.appendChild(closeB); document.body.appendChild(muteB); document.body.appendChild(cnt);
+    const slides = items.map((it, i) => {
+      const s = document.createElement('div'); s.className = 'uv-slide';
+      s.innerHTML = '<video playsinline loop preload="none"></video><div class="uv-cap">' + titleHtml(it.title || it.url) + '<small>' +
+        new Date(it.time).toLocaleDateString() + (it.size ? ' \u00B7 ' + formatBytes(it.size) : '') + '</small></div>' +
+        '<div class="uv-flash">&#9654;</div><div class="uv-prog"><div><b></b></div></div>';
+      const v = s.querySelector('video'), bar = s.querySelector('.uv-prog b'), fl = s.querySelector('.uv-flash');
+      v.addEventListener('timeupdate', () => { if (v.duration) bar.style.width = (v.currentTime / v.duration * 100) + '%'; });
+      s.querySelector('.uv-prog').addEventListener('click', e => { e.stopPropagation(); if (!v.duration) return;
+        const r = e.currentTarget.getBoundingClientRect(); v.currentTime = v.duration * Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); });
+      s.addEventListener('click', () => { if (v.paused) { v.play().catch(() => {}); fl.innerHTML = '&#9654;'; } else { v.pause(); fl.innerHTML = '&#10074;&#10074;'; }
+        fl.classList.add('show'); setTimeout(() => fl.classList.remove('show'), 450); });
+      reels.appendChild(s); s._v = v; s._it = it; s._url = null; return s;
+    });
+    const load = i => { const s = slides[i]; if (!s || s._url) return; s._url = URL.createObjectURL(s._it.blob); s._v.src = s._url; };
+    const unload = i => { const s = slides[i]; if (!s || !s._url) return; s._v.pause(); s._v.removeAttribute('src'); s._v.load(); URL.revokeObjectURL(s._url); s._url = null; };
+    let cur = -1;
+    const activate = i => { if (i === cur) return; cur = i;
+      slides.forEach((s, k) => { if (Math.abs(k - i) <= 1) load(k); else unload(k); if (k !== i) s._v.pause(); });
+      const v = slides[i]._v; v.muted = muted; v.play().catch(() => {}); cnt.textContent = (i + 1) + ' / ' + slides.length; };
+    const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting && e.intersectionRatio >= 0.65) activate(slides.indexOf(e.target)); }), { root: reels, threshold: [0.65] });
+    slides.forEach(s => io.observe(s));
+    muteB.addEventListener('click', () => { muted = !muted; muteB.innerHTML = muted ? '&#128263;' : '&#128266;'; if (cur >= 0) slides[cur]._v.muted = muted; });
+    function close() { io.disconnect(); slides.forEach((s, k) => unload(k)); reels.remove(); closeB.remove(); muteB.remove(); cnt.remove(); reels = null;
+      window.removeEventListener('keydown', reelsEsc, true); reelsEsc = null; }
+    closeB.addEventListener('click', close);
+    reelsEsc = e => { if (!reels) return;
+      if (e.key === 'Escape') { close(); e.stopImmediatePropagation(); e.preventDefault(); }
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { reels.scrollBy({ top: (e.key === 'ArrowDown' ? 1 : -1) * innerHeight, behavior: 'smooth' }); e.stopImmediatePropagation(); e.preventDefault(); }
+      else if (e.key === ' ' && cur >= 0) { slides[cur].click(); e.stopImmediatePropagation(); e.preventDefault(); }
+      else if (e.key === 'm') { muteB.click(); e.stopImmediatePropagation(); } };
+    window.addEventListener('keydown', reelsEsc, true);
+    activate(0);
+  }
+  window.uvOpenReels = openReels;
+
+  /* ================= Watch history ================= */
+  const HK = 'uv99:history';
+  const loadH = () => { try { return JSON.parse(localStorage.getItem(HK) || '[]'); } catch (e) { return []; } };
+  const saveH = a => { try { localStorage.setItem(HK, JSON.stringify(a.slice(0, 200))); } catch (e) {} };
+  const keyOf = t => (t.title || (t.history && t.history[t.historyIndex]) || '');
+  function record(t) {
+    if (!t || !t.el) return; const k = keyOf(t); if (!k) return;
+    const u = (t.history && t.history[t.historyIndex]) || ''; const a = loadH(); const i = a.findIndex(x => x.k === k);
+    const e = { k, title: t.title || k, url: /^https?:/i.test(u) ? u : '', pos: t.el.currentTime || 0, dur: t.el.duration || 0, time: Date.now() };
+    if (i >= 0) a.splice(i, 1); a.unshift(e); saveH(a);
+  }
+  document.addEventListener('play', e => { const t = tabs.find(x => x.isVideo && x.el === e.target); if (t) record(t); }, true);
+  document.addEventListener('pause', e => { const t = tabs.find(x => x.isVideo && x.el === e.target); if (t) record(t); }, true);
+  setInterval(() => { const t = vt(); if (t && !t.el.paused) record(t); }, 5000);
+  const ago = ms => { const s = Math.floor((Date.now() - ms) / 1000); if (s < 60) return 'just now'; if (s < 3600) return Math.floor(s / 60) + 'm ago';
+    if (s < 86400) return Math.floor(s / 3600) + 'h ago'; return Math.floor(s / 86400) + 'd ago'; };
+
+  async function openHistory() {
+    if ($('uvHistory')) return;
+    const ov = document.createElement('div'); ov.id = 'uvHistory';
+    ov.innerHTML = '<div class="folder-card"><div class="folder-card-head"><span>Watch history</span><span><button class="uv-head-btn" id="uvHClear">Clear all</button><button id="uvHClose" style="background:none;border:none;color:#aaa;font-size:20px;padding:4px 8px;">&#10005;</button></span></div><div class="folder-list" id="uvHList"></div></div>';
+    document.body.appendChild(ov);
+    const closeH = () => ov.remove();
+    ov.addEventListener('click', e => { if (e.target === ov) closeH(); });
+    $('uvHClose').addEventListener('click', closeH);
+    $('uvHClear').addEventListener('click', () => { saveH([]); paint(); toast('History cleared'); });
+    const list = $('uvHList');
+    function paint() {
+      const a = loadH();
+      if (!a.length) { list.innerHTML = '<div class="panel-empty">Nothing watched yet. Videos you play will show up here.</div>'; return; }
+      list.innerHTML = '';
+      a.forEach(h => {
+        const pct = h.dur > 0 ? Math.min(100, Math.round(h.pos / h.dur * 100)) : 0;
+        const r = document.createElement('div'); r.className = 'folder-row';
+        r.innerHTML = '<span class="fr-icon">&#128337;</span><span class="fr-text"><div class="fr-title">' + titleHtml(h.title) + '</div><div class="fr-meta">' + ago(h.time) + (pct ? ' \u00B7 ' + pct + '% watched' : '') +
+          '</div>' + (pct ? '<div class="uv-hbar"><b style="width:' + pct + '%"></b></div>' : '') + '</span><button class="fr-del" title="Remove">&#10005;</button>';
+        r.querySelector('.fr-text').addEventListener('click', async () => {
+          const offs = await listOfflineVideos(); const hit = offs.find(o => (o.title || o.url) === h.title || o.title === h.k);
+          if (hit) { closeH(); playOfflineVideo(hit); enterPlayerMode(); }
+          else if (h.url) { closeH(); createTab(h.url, true, {}); enterPlayerMode(); }
+          else toast('This one was opened from your phone \u2014 pick it again from "Open a video from your phone"');
+        });
+        r.querySelector('.fr-del').addEventListener('click', e => { e.stopPropagation(); saveH(loadH().filter(x => x.k !== h.k)); paint(); });
+        list.appendChild(r);
+      });
+    }
+    list.innerHTML = window.uvShimmerRows(4); setTimeout(paint, 250);
+  }
+  window.uvOpenHistory = openHistory;
+})();
+
+/* ===== UV99 upgrades v5 (step 3: 04aminanawaz): category chips + live search + count + empty state for downloads folder, premium polish ===== */
+(function () {
+  const $ = id => document.getElementById(id);
+  const list = $('folderList'); if (!list || !list.parentNode) return;
+  const css = document.createElement('style');
+  css.textContent = `
+  .folder-card { background:linear-gradient(180deg,rgba(34,34,40,.96),rgba(18,18,22,.98)); border:1px solid rgba(255,255,255,.08); border-radius:20px; box-shadow:0 24px 60px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.06); -webkit-backdrop-filter:blur(18px) saturate(1.3); backdrop-filter:blur(18px) saturate(1.3); }
+  .folder-row { border-radius:12px; transition:background .15s, transform .15s; }
+  .folder-row:active { background:rgba(255,255,255,.06); transform:scale(.99); }
+  .uv-fbar { padding:4px 12px 6px; }
+  .uv-fsearch { display:flex; align-items:center; gap:8px; background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.1); border-radius:999px; padding:0 12px; height:38px; transition:border-color .2s, box-shadow .2s; }
+  .uv-fsearch:focus-within { border-color:#7c9cff; box-shadow:0 0 0 3px rgba(124,156,255,.22); }
+  .uv-fsearch input { flex:1; min-width:0; background:none; border:none; outline:none; color:#fff; font-size:14px; }
+  .uv-fsearch button { background:rgba(255,255,255,.12); border:none; color:#ddd; width:22px; height:22px; border-radius:50%; font-size:11px; padding:0; }
+  .uv-chips { display:flex; gap:8px; overflow-x:auto; padding:10px 0 4px; scrollbar-width:none; }
+  .uv-chips::-webkit-scrollbar { display:none; }
+  .uv-chip { flex:0 0 auto; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.06); color:#ddd; font-size:12.5px; font-weight:500; padding:6px 13px; border-radius:999px; white-space:nowrap; transition:all .18s; }
+  .uv-chip b { opacity:.6; font-weight:500; margin-left:5px; }
+  .uv-chip.on { background:linear-gradient(135deg,#7c9cff,#a77bff); border-color:transparent; color:#fff; box-shadow:0 4px 14px rgba(124,156,255,.35); }
+  .uv-fcount { font-size:11px; color:#8a8a95; padding:4px 4px 0; }
+  .uv-nores { text-align:center; color:#9a9aa5; font-size:13px; padding:28px 12px; }`;
+  document.head.appendChild(css);
+
+  const bar = document.createElement('div'); bar.className = 'uv-fbar'; bar.id = 'uvFBar'; bar.style.display = 'none';
+  bar.innerHTML = '<div class="uv-fsearch"><span>&#128269;</span><input id="uvFQ" type="search" placeholder="Search downloads" autocomplete="off" autocapitalize="off" spellcheck="false"><button id="uvFQx" hidden aria-label="Clear">&#10005;</button></div><div class="uv-chips" id="uvChips"></div><div class="uv-fcount" id="uvFCount"></div>';
+  list.parentNode.insertBefore(bar, list);
+
+  const DAY = 864e5, MB = 1048576;
+  const typeOf = it => ((it.blob && it.blob.type) || it.title || it.url || '').toLowerCase();
+  const CATS = [
+    ['all', 'All', () => true],
+    ['liked', '\u2665 Liked', it => !!(window.uvLikes && window.uvLikes.has(it.id))],
+    ['today', 'Today', it => Date.now() - it.time < DAY],
+    ['week', 'This week', it => Date.now() - it.time < 7 * DAY],
+    ['large', 'Large 100MB+', it => it.size >= 100 * MB],
+    ['small', 'Small <20MB', it => it.size > 0 && it.size < 20 * MB],
+    ['mp4', 'MP4', it => /mp4/.test(typeOf(it))],
+    ['webm', 'WebM', it => /webm/.test(typeOf(it))],
+    ['ts', 'HLS / TS', it => /mp2t|\.ts\b|mpegurl|\.m3u8/.test(typeOf(it))]
+  ];
+  let cat = 'all', q = '', items = [];
+  const input = $('uvFQ'), clr = $('uvFQx'), chips = $('uvChips'), cnt = $('uvFCount');
+
+  function buildChips() {
+    if (!CATS.some(c => c[0] === cat && (c[0] === 'all' || items.some(c[2])))) cat = 'all';
+    chips.innerHTML = '';
+    CATS.forEach(c => {
+      const n = items.filter(c[2]).length;
+      if (c[0] !== 'all' && !n) return;
+      const b = document.createElement('button');
+      b.className = 'uv-chip' + (c[0] === cat ? ' on' : '');
+      b.innerHTML = c[1] + '<b>' + n + '</b>';
+      b.addEventListener('click', () => { cat = c[0]; buildChips(); apply(); });
+      chips.appendChild(b);
+    });
+  }
+  function apply() {
+    const rows = Array.from(list.children).filter(r => r.classList && r.classList.contains('folder-row'));
+    const old = list.querySelector('.uv-nores'); if (old) old.remove();
+    if (!rows.length || rows.length !== items.length) { bar.style.display = rows.length ? '' : 'none'; return; }
+    bar.style.display = '';
+    const fn = CATS.find(c => c[0] === cat)[2], needle = q.trim().toLowerCase();
+    let shown = 0;
+    rows.forEach((r, i) => {
+      const t = ((r.querySelector('.fr-title') || {}).textContent || '').toLowerCase(); // uses displayed (masked) title
+      const ok = fn(items[i]) && (!needle || needle.split(/\s+/).every(w => t.includes(w)));
+      r.style.display = ok ? '' : 'none'; if (ok) shown++;
+    });
+    cnt.textContent = shown === rows.length ? rows.length + ' video' + (rows.length === 1 ? '' : 's') : shown + ' of ' + rows.length + ' videos';
+    if (!shown) { const d = document.createElement('div'); d.className = 'uv-nores'; d.textContent = 'No videos match your search'; list.appendChild(d); }
+  }
+  let tm; input.addEventListener('input', () => { clr.hidden = !input.value; clearTimeout(tm); tm = setTimeout(() => { q = input.value; apply(); }, 80); });
+  clr.addEventListener('click', () => { input.value = ''; q = ''; clr.hidden = true; apply(); input.focus(); });
+  ['keydown', 'keyup', 'keypress'].forEach(ev => input.addEventListener(ev, e => e.stopPropagation())); // player shortcuts must not fire while typing
+  input.addEventListener('keydown', e => { if (e.key === 'Escape') { if (input.value) { input.value = ''; q = ''; clr.hidden = true; apply(); } else input.blur(); } });
+
+  const orig = window.renderFolderOverlay;
+  if (typeof orig === 'function') {
+    window.renderFolderOverlay = async function () {
+      await orig.apply(this, arguments);
+      try { items = await listOfflineVideos(); } catch (e) { items = []; }
+      buildChips(); apply();
+    };
+  }
+  window.uvFolderRefresh = () => { buildChips(); apply(); };
+})();
+
+/* ===== UV99 upgrades v5b (step 4: techreagan): search history (uv99:searches) + suggestions dropdown on the address bar ===== */
+(function () {
+  const inp = document.getElementById('urlInput'); if (!inp) return;
+  const SK = 'uv99:searches', MAX = 50;
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const load = () => { try { const a = JSON.parse(localStorage.getItem(SK) || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } };
+  const save = a => { try { localStorage.setItem(SK, JSON.stringify(a.slice(0, MAX))); } catch (e) {} };
+  const isMasked = () => { try { return !!maskMode; } catch (e) { return false; } };
+  const looksLikeUrl = r => /^[a-z][a-z0-9+.-]*:\/\//i.test(r) || /^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?([\/?#]\S*)?$/i.test(r.replace(/\s+/g, ''));
+  function record(raw) {
+    const r = String(raw || '').replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim();
+    if (!r || r.length > 120 || looksLikeUrl(r) || isMasked()) return;
+    const a = load().filter(x => x.q.toLowerCase() !== r.toLowerCase());
+    a.unshift({ q: r, t: Date.now() }); save(a);
+  }
+  const origLoad = window.loadUrl;
+  if (typeof origLoad === 'function') window.loadUrl = function (tabId, rawUrl) { try { record(rawUrl); } catch (e) {} return origLoad.apply(this, arguments); };
+
+  const css = document.createElement('style');
+  css.textContent = `
+  #uvSug { position:fixed; z-index:99990; display:none; background:linear-gradient(180deg,rgba(36,36,44,.97),rgba(20,20,26,.98)); border:1px solid rgba(255,255,255,.1); border-radius:16px; box-shadow:0 18px 44px rgba(0,0,0,.55); -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px); max-height:48vh; overflow-y:auto; padding:6px; }
+  #uvSug.on { display:block; animation:uvSugIn .16s ease-out; }
+  @keyframes uvSugIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:none; } }
+  #uvSug .uv-sh-h { display:flex; justify-content:space-between; align-items:center; font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:#8a8a95; padding:6px 10px 4px; }
+  #uvSug .uv-sh-h button { background:none; border:none; color:#9db4ff; font-size:11px; padding:2px 4px; }
+  #uvSug .uv-sg { display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:11px; color:#eee; font-size:14px; }
+  #uvSug .uv-sg:active, #uvSug .uv-sg.sel { background:rgba(255,255,255,.08); }
+  #uvSug .uv-sg .t { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #uvSug .uv-sg .t b { color:#9db4ff; font-weight:600; }
+  #uvSug .uv-sg i { font-style:normal; opacity:.55; }
+  #uvSug .uv-sg button { background:none; border:none; color:#9a9aa5; font-size:15px; padding:4px 8px; }`;
+  document.head.appendChild(css);
+  const box = document.createElement('div'); box.id = 'uvSug'; document.body.appendChild(box);
+  let sel = -1, rows = [];
+
+  function place() { const r = inp.closest('.url-wrap') ? inp.closest('.url-wrap').getBoundingClientRect() : inp.getBoundingClientRect();
+    box.style.left = Math.max(6, r.left) + 'px'; box.style.top = (r.bottom + 6) + 'px'; box.style.width = Math.min(window.innerWidth - 12, Math.max(r.width, 260)) + 'px'; }
+  function hide() { box.classList.remove('on'); sel = -1; }
+  function go(q) { inp.value = q; hide(); inp.blur(); try { loadUrl(activeTabId, q, true); } catch (e) {} }
+  function render() {
+    if (isMasked()) return hide();
+    const v = inp.value.trim(), vl = v.toLowerCase(), all = load();
+    // A URL already showing in the bar (the page's own address) is not a search, so only suggest while typing a non-URL or when the bar is empty
+    if (v && looksLikeUrl(v)) return hide();
+    const m = (v ? all.filter(x => x.q.toLowerCase().includes(vl)) : all).slice(0, 8);
+    if (!m.length) return hide();
+    rows = m;
+    box.innerHTML = '<div class="uv-sh-h"><span>' + (v ? 'Suggestions' : 'Recent searches') + '</span><button id="uvSgClr">Clear all</button></div>' +
+      m.map((x, i) => {
+        const t = esc(x.q), k = v ? t.replace(new RegExp('(' + esc(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'ig'), '<b>$1</b>') : t;
+        return '<div class="uv-sg" data-i="' + i + '"><i>&#128340;</i><span class="t">' + k + '</span><button data-a="fill" title="Edit">&#8598;</button><button data-a="del" title="Remove">&#10005;</button></div>';
+      }).join('');
+    place(); box.classList.add('on'); sel = -1;
+  }
+  box.addEventListener('pointerdown', e => e.preventDefault()); // keep focus in the input so the tap isn't swallowed by blur
+  box.addEventListener('click', e => {
+    if (e.target.id === 'uvSgClr') { save([]); return hide(); }
+    const r = e.target.closest('.uv-sg'); if (!r) return; const x = rows[+r.dataset.i]; if (!x) return;
+    const a = e.target.getAttribute && e.target.getAttribute('data-a');
+    if (a === 'del') { save(load().filter(y => y.q !== x.q)); return render(); }
+    if (a === 'fill') { inp.value = x.q; inp.focus(); return render(); }
+    go(x.q);
+  });
+  inp.addEventListener('focus', () => setTimeout(render, 0));
+  inp.addEventListener('input', render);
+  inp.addEventListener('blur', () => setTimeout(hide, 120));
+  inp.addEventListener('keydown', e => {
+    if (!box.classList.contains('on')) return;
+    const els = box.querySelectorAll('.uv-sg'); if (!els.length) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); sel = (sel + (e.key === 'ArrowDown' ? 1 : -1) + els.length) % els.length; els.forEach((n, i) => n.classList.toggle('sel', i === sel)); inp.value = rows[sel].q; }
+    else if (e.key === 'Escape') hide();
+  });
+  window.addEventListener('resize', () => { if (box.classList.contains('on')) place(); });
+  window.uvSearchHistory = { load, record };
+})();
+
+/* ===== UV99 upgrades v6 (step 5: Hasnain-laghari-007/youtube): like/favourite toggle for downloaded videos + "Liked" chip (uv99:likes) ===== */
+(function () {
+  const LK = 'uv99:likes';
+  const read = () => { try { const a = JSON.parse(localStorage.getItem(LK) || '[]'); return Array.isArray(a) ? a.map(String) : []; } catch (e) { return []; } };
+  const write = a => { try { localStorage.setItem(LK, JSON.stringify(a)); } catch (e) {} };
+  const likes = window.uvLikes = {
+    has: id => read().includes(String(id)),
+    toggle: id => { id = String(id); const a = read(), i = a.indexOf(id); if (i >= 0) a.splice(i, 1); else a.unshift(id); write(a); return i < 0; },
+    count: () => read().length
+  };
+  const css = document.createElement('style');
+  css.textContent = `
+  .uv-heart { background:none; border:none; font-size:19px; line-height:1; padding:6px 7px; color:#8a8a95; flex-shrink:0; transition:color .15s, transform .15s; }
+  .uv-heart.on { color:#ff5d7a; text-shadow:0 0 12px rgba(255,93,122,.55); }
+  .uv-heart.pop { animation:uvPop .32s cubic-bezier(.3,1.6,.5,1); }
+  @keyframes uvPop { 0% { transform:scale(.7); } 60% { transform:scale(1.35); } 100% { transform:scale(1); } }`;
+  document.head.appendChild(css);
+  const orig = window.renderFolderOverlay;
+  if (typeof orig !== 'function') return;
+  window.renderFolderOverlay = async function () {
+    await orig.apply(this, arguments);
+    try {
+      const list = document.getElementById('folderList');
+      const items = await listOfflineVideos();
+      const rows = Array.from(list.children).filter(r => r.classList && r.classList.contains('folder-row'));
+      if (rows.length !== items.length) return;
+      rows.forEach((r, i) => {
+        if (r.querySelector('.uv-heart')) return;
+        const id = items[i].id, on = likes.has(id);
+        const b = document.createElement('button');
+        b.className = 'uv-heart' + (on ? ' on' : ''); b.innerHTML = on ? '&#9829;' : '&#9825;'; b.title = on ? 'Remove from liked' : 'Like';
+        b.addEventListener('click', e => {
+          e.stopPropagation();
+          const now = likes.toggle(id);
+          b.classList.toggle('on', now); b.innerHTML = now ? '&#9829;' : '&#9825;'; b.title = now ? 'Remove from liked' : 'Like';
+          b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop');
+          try { showMiniToast(now ? 'Added to Liked' : 'Removed from Liked'); } catch (x) {}
+          if (window.uvFolderRefresh) window.uvFolderRefresh();
+        });
+        const del = r.querySelector('.fr-del'); r.insertBefore(b, del || null);
+      });
+      if (window.uvFolderRefresh) window.uvFolderRefresh();
+    } catch (e) {}
+  };
+})();
+
+/* ===== UV99 upgrades v7 (step 6a: youtube-dummy "Future Improvements": accessibility/keyboard nav, reduced motion): focus rings, aria-labels, Esc closes folder, dialog roles ===== */
+(function () {
+  const css = document.createElement('style');
+  css.textContent = `
+  button:focus-visible, [role="button"]:focus-visible, .folder-row:focus-visible, .uv-chip:focus-visible, .uv-sg:focus-visible { outline:2px solid #9db4ff; outline-offset:2px; border-radius:10px; }
+  input:focus-visible { outline:none; }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; scroll-behavior:auto !important; } }`;
+  document.head.appendChild(css);
+
+  // Icon-only buttons get a screen-reader name from their tooltip (title); folder rows become keyboard-operable
+  function label(root) {
+    root.querySelectorAll('button:not([aria-label])').forEach(b => { const t = b.getAttribute('title'); if (t) b.setAttribute('aria-label', t); });
+    root.querySelectorAll('.folder-row:not([tabindex])').forEach(r => {
+      r.setAttribute('tabindex', '0'); r.setAttribute('role', 'button');
+      const t = r.querySelector('.fr-title'); if (t) r.setAttribute('aria-label', t.textContent);
+    });
+  }
+  label(document);
+  let pend = 0;
+  new MutationObserver(() => { if (pend) return; pend = requestAnimationFrame(() => { pend = 0; label(document); }); }).observe(document.body, { childList: true, subtree: true });
+
+  // Enter / Space on a focused folder row = tap its title area (same as touch), but not when the heart/delete button has focus
+  document.addEventListener('keydown', e => {
+    const r = e.target && e.target.classList && e.target.classList.contains('folder-row') ? e.target : null;
+    if (r && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); const t = r.querySelector('.fr-text') || r; t.click(); }
+  });
+  // Esc closes the downloads sheet
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    const ov = document.getElementById('folderOverlay');
+    if (ov && ov.classList.contains('visible')) { e.preventDefault(); try { closeFolderOverlay(); } catch (x) {} }
+  });
+  ['folderOverlay', 'uvSug'].forEach(id => { const n = document.getElementById(id); if (n && id === 'folderOverlay') { n.setAttribute('role', 'dialog'); n.setAttribute('aria-label', 'Downloaded videos'); } });
+})();
+
+/* ===== UV99 upgrades v8 (step 6b: Mahdi-mahmoody/youtube-clone, home-page clone): Home / Library grid, real thumbnails, duration badge, continue-watching rail, sort incl. most-watched. + step 6d (krll-corp/microtube README: upload metadata title/description/tags, sha256 content-addressed storage): tags + note per video, tag chips/search, duplicate finder + step 6e (adrianhajdin/project_youtube_clone; README has no features, idea from the tutorial's video page with suggested-videos column): Up next / Suggested sheet in the player + step 7b: source Follow (domain chips) and Remove-extra-copies + step 8: the MAIN home screen (#emptyHint) is now a YouTube-style feed (#uvFeed: red logo, chips, full-width cards, Shorts shelf, continue watching), old shortcuts moved to a Tools section ===== */
+(function () {
+  const $ = id => document.getElementById(id);
+  const toast = m => { try { showMiniToast(m); } catch (e) {} };
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const masked = () => typeof maskMode !== 'undefined' && !!maskMode;
+  const rd = (k, d) => { try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? d : v; } catch (e) { return d; } };
+  const wr = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+  const obj = v => (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+  const DAY = 864e5;
+
+  /* ---- play counter (uv99:plays) for "Most watched" ---- */
+  const PK = 'uv99:plays';
+  const plays = window.uvPlays = {
+    get: id => obj(rd(PK, {}))[String(id)] || 0,
+    bump: id => { const m = obj(rd(PK, {})); m[String(id)] = (m[String(id)] || 0) + 1; wr(PK, m); },
+    drop: id => { const m = obj(rd(PK, {})); delete m[String(id)]; wr(PK, m); }
+  };
+  const op = window.playOfflineVideo;
+  if (typeof op === 'function') window.playOfflineVideo = function (item) { try { if (item && item.id != null) plays.bump(item.id); } catch (e) {} return op.apply(this, arguments); };
+
+  /* ---- tags + note per saved video (uv99:meta) ---- */
+  const MK = 'uv99:meta';
+  const meta = window.uvMeta = {
+    get: id => { const m = obj(rd(MK, {}))[String(id)]; return m && typeof m === 'object' ? { tags: Array.isArray(m.tags) ? m.tags : [], note: String(m.note || '') } : { tags: [], note: '' }; },
+    set: (id, tagStr, note) => {
+      const a = obj(rd(MK, {})), tags = [...new Set(String(tagStr || '').split(/[\s,]+/).map(t => t.replace(/^#+/, '').toLowerCase().slice(0, 24)).filter(Boolean))].slice(0, 12), n = String(note || '').trim().slice(0, 300);
+      if (!tags.length && !n) delete a[String(id)]; else a[String(id)] = { tags, note: n }; wr(MK, a);
+    },
+    drop: id => { const a = obj(rd(MK, {})); delete a[String(id)]; wr(MK, a); }
+  };
+
+  /* ---- followed sources (domains) ---- */
+  const FWK = 'uv99:follow';
+  const follow = window.uvFollow = {
+    list: () => { const a = rd(FWK, []); return Array.isArray(a) ? a : []; },
+    has: d => follow.list().includes(d),
+    toggle: d => { const a = follow.list(), i = a.indexOf(d); if (i >= 0) a.splice(i, 1); else a.unshift(d); wr(FWK, a.slice(0, 50)); return i < 0; }
+  };
+
+  /* ---- content fingerprint (first+last 256KB + size, SHA-256; FNV fallback without secure context) ---- */
+  const FK = 'uv99:fp';
+  async function fingerprint(it) {
+    try {
+      const b = it.blob; if (!b || !b.slice) return '';
+      const n = b.size, A = await b.slice(0, 262144).arrayBuffer(), Z = n > 524288 ? await b.slice(n - 262144).arrayBuffer() : new ArrayBuffer(0);
+      const u = new Uint8Array(A.byteLength + Z.byteLength + 8); u.set(new Uint8Array(A), 0); u.set(new Uint8Array(Z), A.byteLength); new DataView(u.buffer).setFloat64(u.length - 8, n);
+      if (window.crypto && crypto.subtle) { const d = new Uint8Array(await crypto.subtle.digest('SHA-256', u)); return 's' + Array.from(d.slice(0, 12), x => x.toString(16).padStart(2, '0')).join(''); }
+      let h = 2166136261; for (let i = 0; i < u.length; i += 7) { h ^= u[i]; h = Math.imul(h, 16777619) >>> 0; } return 'f' + h.toString(16) + '_' + n;
+    } catch (e) { return ''; }
+  }
+  async function computeFps(list, token) {
+    const m = obj(rd(FK, {})); let changed = false;
+    for (const it of list) {
+      if (token !== fpToken || !root) break; const id = String(it.id); if (m[id] && m[id].n === it.size && m[id].h) continue;
+      const h = await fingerprint(it); if (h) { m[id] = { n: it.size, h }; changed = true; } await new Promise(r => setTimeout(r, 0));
+    }
+    if (changed) wr(FK, m);
+    if (root && token === fpToken) { buildDup(); chips(); if (st.f === 'dups') render(); }
+  }
+  function buildDup() {
+    const m = obj(rd(FK, {})), g = {}; dupKey = {};
+    items.forEach(it => { const f = m[String(it.id)]; if (f && f.n === it.size && f.h) (g[f.h] = g[f.h] || []).push(it.id); });
+    Object.keys(g).forEach(h => { if (g[h].length > 1) g[h].forEach(id => { dupKey[id] = h; }); });
+  }
+  function tagsHtml(it) {
+    if (masked()) return ''; const t = meta.get(it.id).tags.slice(0, 3), d = !!dupKey[it.id]; if (!t.length && !d) return '';
+    return '<div class="uvh-tags">' + (d ? '<span class="dup">Duplicate</span>' : '') + t.map(x => '<span>#' + esc(x) + '</span>').join('') + '</div>';
+  }
+
+  /* ---- thumbnail cache (own IndexedDB, separate from the videos DB) ---- */
+  let tdb = null;
+  const openT = () => tdb || (tdb = new Promise((res, rej) => { try { const r = indexedDB.open('uv99-thumbs', 1); r.onupgradeneeded = () => r.result.createObjectStore('t', { keyPath: 'id' }); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); } catch (e) { rej(e); } }));
+  const tget = async id => { try { const db = await openT(); return await new Promise(res => { const q = db.transaction('t').objectStore('t').get(id); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); }); } catch (e) { return null; } };
+  const tput = async rec => { try { const db = await openT(); db.transaction('t', 'readwrite').objectStore('t').put(rec); } catch (e) {} };
+  const tdel = async id => { try { const db = await openT(); db.transaction('t', 'readwrite').objectStore('t').delete(id); } catch (e) {} };
+
+  function gen(it) {
+    return new Promise(resolve => {
+      if (!it.blob) return resolve(null);
+      const v = document.createElement('video'), u = URL.createObjectURL(it.blob); let done = false, dur = 0, to;
+      const fin = r => { if (done) return; done = true; clearTimeout(to); try { v.onloadedmetadata = v.onseeked = v.onerror = null; v.removeAttribute('src'); v.load(); } catch (e) {} URL.revokeObjectURL(u); resolve(r); };
+      to = setTimeout(() => fin(null), 8000);
+      v.muted = true; v.playsInline = true; v.preload = 'metadata'; v.setAttribute('playsinline', '');
+      v.onerror = () => fin(null);
+      v.onloadedmetadata = () => { dur = isFinite(v.duration) ? v.duration : 0; try { v.currentTime = dur > 1 ? Math.min(dur * 0.1, 10) : 0.01; } catch (e) { fin(null); } };
+      v.onseeked = () => {
+        try {
+          const w = v.videoWidth, h = v.videoHeight; if (!w || !h) return fin(null);
+          const c = document.createElement('canvas'); c.width = 320; c.height = 180; const x = c.getContext('2d');
+          const s = Math.max(320 / w, 180 / h), dw = w * s, dh = h * s; x.drawImage(v, (320 - dw) / 2, (180 - dh) / 2, dw, dh);
+          c.toBlob(b => fin(b ? { blob: b, dur } : null), 'image/jpeg', 0.72);
+        } catch (e) { fin(null); }
+      };
+      v.src = u;
+    });
+  }
+
+  const mem = new Map(), tq = []; let busy = false;
+  const fmtDur = d => { d = Math.round(d || 0); if (!d) return ''; const h = Math.floor(d / 3600), m = Math.floor(d % 3600 / 60), s = d % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0'); };
+  const ago = ms => { const s = Math.floor((Date.now() - ms) / 1000); if (s < 60) return 'just now'; if (s < 3600) return Math.floor(s / 60) + 'm ago'; if (s < 86400) return Math.floor(s / 3600) + 'h ago'; return Math.floor(s / 86400) + 'd ago'; };
+  function paint(th, m) {
+    if (!th.isConnected) return;
+    if (m.url) {
+      if (!th.querySelector('img')) { const im = document.createElement('img'); im.alt = ''; im.decoding = 'async'; im.onload = () => im.classList.add('on'); im.src = m.url; th.insertBefore(im, th.firstChild); }
+      const d = th.querySelector('.uvh-dur'); if (d && m.dur) { d.textContent = fmtDur(m.dur); d.hidden = false; }
+    }
+  }
+  async function pump() {
+    if (busy) return; busy = true;
+    while (tq.length) {
+      const { it, th } = tq.shift(); if (!th.isConnected) continue;
+      const id = String(it.id); let m = mem.get(id);
+      if (!m) {
+        const r = await gen(it);
+        if (r && r.blob) { m = { url: URL.createObjectURL(r.blob), dur: r.dur }; tput({ id, blob: r.blob, dur: r.dur, ts: Date.now() }); }
+        else { m = { fail: 1 }; tput({ id, fail: 1, ts: Date.now() }); }
+        mem.set(id, m);
+      }
+      paint(th, m);
+    }
+    busy = false;
+  }
+  async function loadThumb(it, th) {
+    if (masked()) return; // never leak frames in mask mode
+    const id = String(it.id); let m = mem.get(id);
+    if (!m) {
+      const rec = await tget(id);
+      if (rec && rec.blob) m = { url: URL.createObjectURL(rec.blob), dur: rec.dur || 0 };
+      else if (rec && rec.fail && Date.now() - rec.ts < DAY) m = { fail: 1 };
+      if (m) mem.set(id, m);
+    }
+    if (m) return paint(th, m);
+    tq.push({ it, th }); pump();
+  }
+
+  /* ---- styles ---- */
+  const css = document.createElement('style');
+  css.textContent = `
+  #uvHome { position:fixed; inset:0; z-index:71; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; color:#eee;
+    background:radial-gradient(900px 420px at 8% -8%,rgba(124,156,255,.20),transparent 60%),radial-gradient(760px 380px at 100% 0,rgba(167,123,255,.15),transparent 60%),#0d0d11;
+    animation:uvhIn .28s cubic-bezier(.2,.8,.2,1); }
+  @keyframes uvhIn { from { opacity:0; transform:translateY(14px) scale(.985); } to { opacity:1; transform:none; } }
+  .uvh-head { position:sticky; top:0; z-index:3; padding:max(10px,env(safe-area-inset-top)) 14px 8px; background:linear-gradient(180deg,rgba(13,13,17,.93),rgba(13,13,17,.8)); -webkit-backdrop-filter:blur(16px) saturate(1.4); backdrop-filter:blur(16px) saturate(1.4); border-bottom:1px solid rgba(255,255,255,.06); }
+  .uvh-top { display:flex; align-items:center; gap:10px; }
+  .uvh-top h2 { margin:0; font-size:24px; font-weight:700; letter-spacing:-.02em; color:#fff; }
+  .uvh-stat { flex:1; font-size:12px; color:#8a8a95; }
+  .uvh-x { background:rgba(255,255,255,.08); border:none; color:#ddd; width:34px; height:34px; border-radius:50%; font-size:15px; }
+  .uvh-bar { display:flex; gap:8px; margin-top:10px; }
+  .uvh-bar .uv-fsearch { flex:1; min-width:0; }
+  .uvh-sort { flex:0 0 auto; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.07); color:#e6e6ee; border-radius:999px; padding:0 14px; height:38px; font-size:12.5px; font-weight:600; }
+  .uvh-body { padding:6px 14px 48px; max-width:1200px; margin:0 auto; }
+  .uvh-sec { display:flex; align-items:baseline; justify-content:space-between; margin:16px 2px 10px; }
+  .uvh-sec h3 { margin:0; font-size:15px; font-weight:650; color:#f2f2f7; }
+  .uvh-sec span { font-size:11.5px; color:#8a8a95; }
+  .uvh-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:18px 12px; }
+  @media (min-width:700px) { .uvh-grid { grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:22px 16px; } }
+  .uvh-rail { display:flex; gap:12px; overflow-x:auto; scroll-snap-type:x proximity; padding:0 14px 6px; margin:0 -14px; scrollbar-width:none; }
+  .uvh-rail::-webkit-scrollbar { display:none; }
+  .uvh-rail .uvh-card { flex:0 0 min(72vw,280px); scroll-snap-align:start; }
+  .uvh-card { cursor:pointer; min-width:0; transition:transform .18s; }
+  .uvh-card:active { transform:scale(.985); }
+  .uvh-card:focus-visible { outline:2px solid #9db4ff; outline-offset:3px; border-radius:14px; }
+  .uvh-th { position:relative; aspect-ratio:16/9; border-radius:14px; overflow:hidden; background:linear-gradient(135deg,#262632,#16161c); box-shadow:0 8px 22px rgba(0,0,0,.4), inset 0 0 0 1px rgba(255,255,255,.06); }
+  .uvh-th img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; opacity:0; transition:opacity .35s, transform .5s; }
+  .uvh-th img.on { opacity:1; }
+  .uvh-card:hover .uvh-th img { transform:scale(1.04); }
+  .uvh-ph { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:rgba(255,255,255,.26); font-size:30px; }
+  .uvh-dur, .uvh-resume { position:absolute; font-size:11px; font-weight:600; padding:2px 7px; border-radius:8px; background:rgba(10,10,14,.62); -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px); color:#fff; font-variant-numeric:tabular-nums; }
+  .uvh-dur { right:7px; bottom:9px; } .uvh-resume { left:8px; top:8px; padding:3px 9px; border-radius:999px; }
+  .uvh-prog { position:absolute; left:0; right:0; bottom:0; height:3.5px; background:rgba(255,255,255,.22); }
+  .uvh-prog b { display:block; height:100%; background:linear-gradient(90deg,#ff3b5c,#ff6a3d); }
+  .uvh-heart { position:absolute; right:6px; top:6px; width:32px; height:32px; border-radius:50%; border:none; background:rgba(10,10,14,.5); -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px); color:#ddd; font-size:17px; line-height:1; padding:0; }
+  .uvh-heart.on { color:#ff5d7a; text-shadow:0 0 12px rgba(255,93,122,.55); }
+  .uvh-info { display:flex; gap:10px; margin-top:9px; align-items:flex-start; }
+  .uvh-av { flex:0 0 auto; width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.35); }
+  .uvh-txt { flex:1; min-width:0; }
+  .uvh-t { font-size:13.5px; line-height:1.3; font-weight:600; color:#f1f1f6; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .uvh-s { font-size:11.5px; color:#8f8f9b; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .uvh-more { background:none; border:none; color:#8f8f9b; font-size:18px; padding:0 4px; line-height:1.2; }
+  .uvh-empty { text-align:center; color:#9a9aa5; font-size:13.5px; padding:60px 20px; line-height:1.6; }
+  .uvh-empty b { display:block; font-size:44px; margin-bottom:8px; }
+  .uvh-chips { padding-top:8px; }
+  .uvh-entry .fr-icon { background:linear-gradient(135deg,#7c9cff,#a77bff) !important; }
+  .uvh-tags { display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }
+  .uvh-tags span { font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:999px; background:rgba(124,156,255,.15); color:#b3c0ff; }
+  .uvh-tags .dup { background:rgba(255,170,60,.17); color:#ffc277; }
+  .uvh-ov { position:fixed; inset:0; z-index:6; display:flex; align-items:flex-end; justify-content:center; background:rgba(0,0,0,.55); -webkit-backdrop-filter:blur(5px); backdrop-filter:blur(5px); animation:uvhFade .2s; }
+  @keyframes uvhFade { from { opacity:0; } to { opacity:1; } }
+  .uvh-sheet { width:min(520px,100%); box-sizing:border-box; padding:18px 18px max(18px,env(safe-area-inset-bottom)); border-radius:22px 22px 0 0; background:rgba(26,26,34,.97); border:1px solid rgba(255,255,255,.08); border-bottom:none; box-shadow:0 -20px 50px rgba(0,0,0,.5); animation:uvhUp .26s cubic-bezier(.2,.8,.2,1); }
+  @keyframes uvhUp { from { transform:translateY(40px); opacity:.4; } to { transform:none; opacity:1; } }
+  .uvh-sheet h4 { margin:0 0 12px; font-size:15px; font-weight:650; color:#fff; line-height:1.3; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .uvh-sheet label { display:block; font-size:12px; color:#9a9aa8; margin:10px 2px 5px; } .uvh-sheet label small { color:#6f6f7c; }
+  .uvh-in { width:100%; box-sizing:border-box; padding:11px 13px; border-radius:12px; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.06); color:#f2f2f7; font:inherit; font-size:14px; outline:none; resize:none; }
+  .uvh-in:focus { border-color:#8ea6ff; box-shadow:0 0 0 3px rgba(124,156,255,.22); }
+  .uvh-sbtns { display:flex; gap:8px; align-items:center; margin-top:16px; } .uvh-sbtns span { flex:1; }
+  .uvh-sbtns button { border:none; border-radius:999px; padding:10px 18px; font-size:13px; font-weight:600; background:rgba(255,255,255,.09); color:#e8e8f0; }
+  .uvh-sbtns .uvh-save { background:linear-gradient(135deg,#7c9cff,#a77bff); color:#fff; }
+  .uvh-sbtns .uvh-del { background:rgba(255,80,100,.14); color:#ff8da0; }
+  .uvn-ov { position:fixed; inset:0; z-index:90; display:flex; align-items:flex-end; justify-content:center; background:rgba(0,0,0,.55); -webkit-backdrop-filter:blur(5px); backdrop-filter:blur(5px); animation:uvhFade .2s; }
+  .uvn-sheet { width:min(560px,100%); max-height:78vh; display:flex; flex-direction:column; box-sizing:border-box; padding:10px 14px max(14px,env(safe-area-inset-bottom)); border-radius:22px 22px 0 0; background:rgba(24,24,31,.97); border:1px solid rgba(255,255,255,.08); border-bottom:none; box-shadow:0 -20px 50px rgba(0,0,0,.5); animation:uvhUp .26s cubic-bezier(.2,.8,.2,1); color:#eee; }
+  .uvn-grab { width:38px; height:4px; border-radius:4px; background:rgba(255,255,255,.2); margin:2px auto 10px; }
+  .uvn-sheet h4 { margin:0 2px 10px; font-size:16px; font-weight:700; color:#fff; }
+  .uvn-list { overflow-y:auto; overscroll-behavior:contain; display:flex; flex-direction:column; gap:12px; padding-bottom:4px; }
+  .uvn-row { display:flex; gap:12px; align-items:flex-start; cursor:pointer; border-radius:12px; }
+  .uvn-row:focus-visible { outline:2px solid #9db4ff; outline-offset:3px; }
+  .uvn-th { flex:0 0 132px; border-radius:10px; box-shadow:none; }
+  .uvn-tx { flex:1; min-width:0; }
+  .uvn-why { display:inline-block; margin-top:5px; font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:999px; background:rgba(124,156,255,.15); color:#b3c0ff; }`;
+  document.head.appendChild(css);
+
+  /* ---- state ---- */
+  const SORTS = [
+    ['recent', 'Recent', () => (a, b) => b.time - a.time],
+    ['most', 'Most watched', () => (a, b) => (plays.get(b.id) - plays.get(a.id)) || (b.time - a.time)],
+    ['large', 'Largest', () => (a, b) => (b.size || 0) - (a.size || 0)],
+    ['az', 'A\u2013Z', () => (a, b) => String(a.title || a.url || '').localeCompare(String(b.title || b.url || ''))]
+  ];
+  let dupKey = {}, fpToken = 0;
+  let items = [], P = {}, root = null, io = null, st = { q: '', f: 'all', tag: '', src: '', sort: Math.max(0, Math.min(3, +rd('uv99:homeSort', 0) || 0)) };
+  const likedNow = it => !!(window.uvLikes && window.uvLikes.has(it.id));
+  const inProg = it => { const p = P[it.id]; return !!p && p.pct >= 2 && p.pct <= 96; };
+  const FILTERS = [['all', 'All', () => true], ['cont', 'Continue', inProg], ['liked', '\u2665 Liked', likedNow], ['new', 'Unwatched', it => !plays.get(it.id) && !P[it.id]], ['dups', 'Duplicates', it => !!dupKey[it.id]], ['fol', 'Following', it => follow.has(hostOf(it))]];
+  const hostOf = it => { try { const u = new URL(it.url); if (/^https?:$/.test(u.protocol)) return u.hostname.replace(/^www\./, ''); } catch (e) {} return 'This device'; };
+  const hue = s => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360; return h; };
+  function derive() {
+    const H = rd('uv99:history', []); P = {};
+    items.forEach(it => { const h = H.find(h => (it.title || it.url) === h.title || it.title === h.k); if (h) P[it.id] = { pct: h.dur > 0 ? Math.min(100, h.pos / h.dur * 100) : 0, pos: h.pos || 0, time: h.time }; });
+  }
+
+  function card(it, rail) {
+    const m = masked(), p = P[it.id], src = hostOf(it), title = m ? '' : String(it.title || it.url || 'Video');
+    const el = document.createElement('article'); el.className = 'uvh-card'; el.tabIndex = 0; el.setAttribute('role', 'button');
+    const h = hue(src), on = likedNow(it);
+    el.setAttribute('aria-label', m ? 'Video' : title);
+    el.innerHTML = '<div class="uvh-th"><div class="uvh-ph">&#9654;</div><span class="uvh-dur" hidden></span>' +
+      (rail && p ? '<span class="uvh-resume">Resume ' + esc(fmtDur(p.pos) || '0:00') + '</span>' : '') +
+      '<button class="uvh-heart' + (on ? ' on' : '') + '" title="' + (on ? 'Remove from liked' : 'Like') + '">' + (on ? '&#9829;' : '&#9825;') + '</button>' +
+      (p && p.pct >= 1 ? '<div class="uvh-prog"><b style="width:' + p.pct.toFixed(1) + '%"></b></div>' : '') + '</div>' +
+      '<div class="uvh-info"><span class="uvh-av" style="background:linear-gradient(135deg,hsl(' + h + ' 70% 58%),hsl(' + (h + 40) + ' 70% 46%))' + (follow.has(src) && !m ? ';box-shadow:0 0 0 2px #0d0d11,0 0 0 4px #7c9cff' : '') + '">' + (m ? '&#8226;' : esc(src.charAt(0).toUpperCase())) + '</span>' +
+      '<div class="uvh-txt"><div class="uvh-t">' + (m ? maskLabel() : esc(title)) + '</div><div class="uvh-s">' + (m ? '&#8226;&#8226;&#8226;&#8226;' : esc(src)) + '</div>' +
+      '<div class="uvh-s">' + [formatBytes(it.size), ago(it.time), plays.get(it.id) ? 'played ' + plays.get(it.id) + 'x' : ''].filter(Boolean).join(', ') + '</div>' + tagsHtml(it) + '</div>' +
+      '<button class="uvh-more" title="Options">&#8942;</button></div>';
+    const open = () => { dismissOverlay(); try { closeFolderOverlay(); } catch (e) {} window.playOfflineVideo(it); try { enterPlayerMode(); } catch (e) {} };
+    el.addEventListener('click', open);
+    el.addEventListener('keydown', e => { if (e.target === el && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); e.stopPropagation(); open(); } });
+    const hb = el.querySelector('.uvh-heart');
+    hb.addEventListener('click', e => {
+      e.stopPropagation(); if (!window.uvLikes) return;
+      const now = window.uvLikes.toggle(it.id); hb.classList.toggle('on', now); hb.innerHTML = now ? '&#9829;' : '&#9825;'; hb.title = now ? 'Remove from liked' : 'Like';
+      toast(now ? 'Added to Liked' : 'Removed from Liked'); if (window.uvFolderRefresh) window.uvFolderRefresh();
+      if (st.f === 'liked' && !now) render(); else chips();
+    });
+    el.querySelector('.uvh-more').addEventListener('click', e => { e.stopPropagation(); sheet(it); });
+    const th = el.querySelector('.uvh-th'); th._it = it; if (io) io.observe(th);
+    return el;
+  }
+
+  async function removeExtras() {
+    const g = {}; items.forEach(it => { const k = dupKey[it.id]; if (k) (g[k] = g[k] || []).push(it); });
+    const drop = []; Object.keys(g).forEach(k => { const a = g[k]; a.sort((x, y) => (plays.get(y.id) - plays.get(x.id)) || ((P[y.id] ? 1 : 0) - (P[x.id] ? 1 : 0)) || (x.time - y.time)); a.slice(1).forEach(it => drop.push(it)); });
+    if (!drop.length) return;
+    if (!confirm('Delete ' + drop.length + ' extra cop' + (drop.length === 1 ? 'y' : 'ies') + '? In each group the most-watched (or oldest) copy is kept.')) return;
+    for (const it of drop) { await deleteOfflineVideo(it.id); plays.drop(it.id); meta.drop(it.id); tdel(String(it.id)); }
+    const fp = obj(rd(FK, {})); drop.forEach(it => { delete fp[String(it.id)]; }); wr(FK, fp);
+    const ids = new Set(drop.map(i => String(i.id))); items = items.filter(i => !ids.has(String(i.id))); derive(); buildDup(); chips(); render(); toast('Removed ' + drop.length);
+  }
+
+  function sheet(it) {
+    if (!root || document.querySelector('.uvh-ov')) return;
+    const m = masked(), mt = meta.get(it.id), ov = document.createElement('div'); ov.className = 'uvh-ov';
+    ov.innerHTML = '<div class="uvh-sheet" role="dialog" aria-label="Video options"><h4></h4>' +
+      (m ? '' : '<label>Tags <small>(space separated)</small></label><input class="uvh-in" id="uvhTags" placeholder="maths trick revision" autocomplete="off" autocapitalize="off" spellcheck="false"><label>Note</label><textarea class="uvh-in" id="uvhNote" rows="3" maxlength="300" placeholder="Short description"></textarea>') +
+      '<div class="uvh-sbtns"><button class="uvh-del">Delete video</button><span></span><button class="uvh-cancel">Cancel</button>' + (m ? '' : '<button class="uvh-save">Save</button>') + '</div></div>';
+    ov.querySelector('h4').textContent = m ? maskLabel() : String(it.title || it.url || 'Video');
+    if (!m) { ov.querySelector('#uvhTags').value = mt.tags.join(' '); ov.querySelector('#uvhNote').value = mt.note; }
+    const shut = () => ov.remove();
+    ov.addEventListener('click', e => { if (e.target === ov) shut(); });
+    ov.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); shut(); } else if (e.key === 'Enter' && e.target.id === 'uvhTags') { e.preventDefault(); e.stopPropagation(); save(); } else if (e.key !== 'Tab') e.stopPropagation(); });
+    function save() { meta.set(it.id, ov.querySelector('#uvhTags').value, ov.querySelector('#uvhNote').value); shut(); chips(); render(); toast('Saved'); }
+    ov.querySelector('.uvh-cancel').addEventListener('click', shut);
+    const sv = ov.querySelector('.uvh-save'); if (sv) sv.addEventListener('click', save);
+    ov.querySelector('.uvh-del').addEventListener('click', async () => {
+      if (!confirm('Remove this video from your device?')) return;
+      await deleteOfflineVideo(it.id); plays.drop(it.id); meta.drop(it.id); tdel(String(it.id));
+      const fp = obj(rd(FK, {})); delete fp[String(it.id)]; wr(FK, fp);
+      items = items.filter(x => x.id !== it.id); shut(); derive(); buildDup(); chips(); render(); toast('Removed');
+    });
+    if (root.id !== 'uvHome') ov.style.zIndex = '90'; (root.id === 'uvHome' ? root : document.body).appendChild(ov); const f = ov.querySelector('#uvhTags') || ov.querySelector('.uvh-cancel'); if (f) setTimeout(() => f.focus(), 60);
+  }
+
+  function chips() {
+    const box = root && root.querySelector('.uvh-chips'); if (!box) return; box.innerHTML = '';
+    FILTERS.forEach(f => {
+      const n = items.filter(f[2]).length; if (f[0] !== 'all' && !n) return;
+      const b = document.createElement('button'); b.className = 'uv-chip' + (st.f === f[0] ? ' on' : ''); b.innerHTML = f[1] + '<b>' + n + '</b>';
+      b.addEventListener('click', () => { st.f = f[0]; chips(); render(); }); box.appendChild(b);
+    });
+    if (!masked()) {
+      const c = {}; items.forEach(it => meta.get(it.id).tags.forEach(t => { c[t] = (c[t] || 0) + 1; }));
+      Object.keys(c).sort((a, b) => c[b] - c[a] || a.localeCompare(b)).slice(0, 8).forEach(t => {
+        const b = document.createElement('button'); b.className = 'uv-chip' + (st.tag === t ? ' on' : ''); b.innerHTML = '#' + esc(t) + '<b>' + c[t] + '</b>';
+        b.addEventListener('click', () => { st.tag = st.tag === t ? '' : t; chips(); render(); }); box.appendChild(b);
+      });
+      if (st.tag && !c[st.tag]) st.tag = '';
+    } else st.tag = '';
+    if (!masked()) {
+      const c = {}; items.forEach(it => { const d = hostOf(it); if (d !== 'This device') c[d] = (c[d] || 0) + 1; });
+      const keys = Object.keys(c).sort((a, b) => (follow.has(b) - follow.has(a)) || c[b] - c[a] || a.localeCompare(b));
+      if (keys.length > 1 || (keys.length === 1 && st.src)) keys.slice(0, 5).forEach(d => {
+        const b = document.createElement('button'); b.className = 'uv-chip' + (st.src === d ? ' on' : ''); b.innerHTML = (follow.has(d) ? '\u2605 ' : '') + esc(d) + '<b>' + c[d] + '</b>';
+        b.addEventListener('click', () => { st.src = st.src === d ? '' : d; chips(); render(); }); box.appendChild(b);
+      });
+      if (st.src && !c[st.src]) st.src = '';
+      if (st.src) {
+        const fb = document.createElement('button'); fb.className = 'uv-chip' + (follow.has(st.src) ? ' on' : ''); fb.textContent = follow.has(st.src) ? '\u2713 Following' : '+ Follow';
+        fb.addEventListener('click', () => { const on = follow.toggle(st.src); toast(on ? 'Following ' + st.src : 'Unfollowed ' + st.src); chips(); if (st.f === 'fol') render(); }); box.appendChild(fb);
+      }
+    } else st.src = '';
+    if (!FILTERS.some(f => f[0] === st.f && (f[0] === 'all' || items.some(f[2])))) st.f = 'all';
+  }
+
+  function render() {
+    if (!root) return;
+    const body = root.querySelector('.uvh-body'); body.innerHTML = '';
+    const tot = items.reduce((s, i) => s + (i.size || 0), 0);
+    root.querySelector('.uvh-stat').textContent = items.length ? items.length + ' video' + (items.length === 1 ? '' : 's') + (tot ? ', ' + formatBytes(tot) : '') : '';
+    if (!items.length) { body.innerHTML = '<div class="uvh-empty"><b>&#127916;</b>Your library is empty.<br>Save a video with the lightning button and it will show up here.</div>'; return; }
+    if (masked() && SORTS[st.sort][0] === 'az') st.sort = 0;
+    root.querySelector('.uvh-sort').textContent = '\u21C5 ' + SORTS[st.sort][1];
+    const f = FILTERS.find(x => x[0] === st.f) || FILTERS[0], needle = st.q.trim().toLowerCase();
+    const hay = it => { if (masked()) return ''; const mt = meta.get(it.id); return (String(it.title || it.url || '') + ' ' + hostOf(it) + ' ' + mt.tags.join(' ') + ' ' + mt.note).toLowerCase(); };
+    const list = items.filter(it => f[2](it) && (!st.tag || meta.get(it.id).tags.includes(st.tag)) && (!st.src || hostOf(it) === st.src) && (!needle || needle.split(/\s+/).every(w => hay(it).includes(w)))).sort(SORTS[st.sort][2]());
+    if (st.f === 'dups') list.sort((a, b) => String(dupKey[a.id]).localeCompare(String(dupKey[b.id])) || a.time - b.time);
+    if (st.f === 'all' && !needle && !st.tag && !st.src) {
+      const rail = items.filter(inProg).sort((a, b) => P[b.id].time - P[a.id].time).slice(0, 12);
+      if (rail.length) {
+        const s = document.createElement('div'); s.className = 'uvh-sec'; s.innerHTML = '<h3>Continue watching</h3><span>' + rail.length + '</span>'; body.appendChild(s);
+        const r = document.createElement('div'); r.className = 'uvh-rail'; rail.forEach(it => r.appendChild(card(it, true))); body.appendChild(r);
+      }
+    }
+    const s2 = document.createElement('div'); s2.className = 'uvh-sec'; s2.innerHTML = '<h3>' + (st.f === 'all' && !needle && !st.tag && !st.src ? 'All videos' : 'Results') + '</h3><span>' + list.length + '</span>'; if (st.f === 'dups' && list.length) { const rb = document.createElement('button'); rb.className = 'uvh-sort'; rb.style.height = '30px'; rb.style.fontSize = '11.5px'; rb.textContent = 'Remove extra copies'; rb.addEventListener('click', removeExtras); s2.appendChild(rb); }
+    body.appendChild(s2);
+    if (!list.length) { const d = document.createElement('div'); d.className = 'uvh-empty'; d.innerHTML = '<b>&#128269;</b>No videos match.'; body.appendChild(d); return; }
+    const g = document.createElement('div'); g.className = 'uvh-grid'; list.forEach(it => g.appendChild(card(it, false)));
+    if (root.id === 'uvFeed' && st.f === 'all' && !needle && !st.tag && !st.src && items.length > 1) g.insertBefore(shelf(items), g.children[2] || null);
+    body.appendChild(g);
+  }
+
+  let prevInst = null;
+  const dismissOverlay = () => { if (root && root.id === 'uvHome') close(); };
+  function close() {
+    if (!root || root.id !== 'uvHome') return; fpToken++; root.remove(); tq.length = 0; if (io) io.disconnect();
+    const pv = prevInst; prevInst = null;
+    if (pv) { root = pv.root; io = pv.io; st = pv.st; items = pv.items; P = pv.P; } else { root = null; io = null; }
+    if (root) { derive(); chips(); render(); } // inline feed picks up likes/deletes made in the overlay
+  }
+
+  async function open() {
+    if (root && root.id === 'uvHome') return;
+    try { closeFolderOverlay(); } catch (e) {}
+    prevInst = root ? { root, io, st, items, P } : null; st = { q: '', f: 'all', tag: '', src: '', sort: st.sort }; items = []; P = {};
+    root = document.createElement('div'); root.id = 'uvHome'; root.setAttribute('role', 'dialog'); root.setAttribute('aria-label', 'Home library');
+    root.innerHTML = '<div class="uvh-head"><div class="uvh-top"><h2>Home</h2><span class="uvh-stat"></span><button class="uvh-x" title="Close">&#10005;</button></div>' +
+      '<div class="uvh-bar"><div class="uv-fsearch"><span>&#128269;</span><input type="search" placeholder="Search title, tag or note" autocomplete="off" autocapitalize="off" spellcheck="false"></div><button class="uvh-sort"></button></div>' +
+      '<div class="uv-chips uvh-chips" id="uvhChips"></div></div><div class="uvh-body">' +
+      '<div class="uvh-grid">' + Array.from({ length: 6 }, () => '<div class="uvh-card"><div class="uvh-th uv-sh"></div><div class="uvh-info"><span class="uvh-av uv-sh"></span><div class="uvh-txt"><div class="uv-sh" style="height:11px;width:80%"></div></div></div></div>').join('') + '</div></div>';
+    document.body.appendChild(root);
+    io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { io.unobserve(e.target); if (e.target._it) loadThumb(e.target._it, e.target); } }), { root, rootMargin: '300px' });
+    const input = root.querySelector('input');
+    root.querySelector('.uvh-x').addEventListener('click', close);
+    root.querySelector('.uvh-sort').addEventListener('click', () => { do { st.sort = (st.sort + 1) % SORTS.length; } while (masked() && SORTS[st.sort][0] === 'az'); wr('uv99:homeSort', st.sort); render(); });
+    let tm; input.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(() => { st.q = input.value; render(); }, 90); });
+    root.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { if (input.value) { input.value = ''; st.q = ''; render(); } else close(); }
+      if (!e.defaultPrevented && e.key !== 'Tab') e.stopPropagation(); // player shortcuts must not fire behind the Home screen
+    });
+    ['keyup', 'keypress'].forEach(ev => root.addEventListener(ev, e => e.stopPropagation()));
+    const list0 = await listOfflineVideos(); if (!root || root.id !== 'uvHome') return; items = list0;
+    derive(); st.q = ''; buildDup(); chips(); render(); computeFps(items, ++fpToken);
+  }
+  window.uvOpenHome = open;
+
+  /* ---- Up next / Suggested sheet (Playback tab button) ---- */
+  const nbtn = document.createElement('button'); nbtn.id = 'uvUpNextBtn'; nbtn.textContent = 'Up next'; nbtn.title = 'Suggested videos from your library';
+  const nanc = $('uvAudioBtn'); if (nanc && nanc.parentNode) nanc.parentNode.insertBefore(nbtn, nanc);
+  let nov = null;
+  const closeNext = () => { if (nov) { nov.remove(); nov = null; } };
+  async function upNext() {
+    if (nov) return;
+    let cur = null; try { const t = getTab(activeTabId); cur = t && t._uvItemId != null ? t._uvItemId : null; } catch (e) {}
+    const list = await listOfflineVideos(); if (nov) return; items = list; derive();
+    const me = list.find(x => String(x.id) === String(cur)), mt = me ? meta.get(me.id).tags : [], msrc = me ? hostOf(me) : '';
+    const why = it => {
+      const sh = meta.get(it.id).tags.find(t => mt.includes(t)); if (sh) return '#' + sh;
+      if (inProg(it)) return 'Resume ' + (fmtDur(P[it.id].pos) || '0:00');
+      if (me && msrc !== 'This device' && hostOf(it) === msrc) return 'Same source';
+      return (!plays.get(it.id) && !P[it.id]) ? 'New' : '';
+    };
+    const sc = it => { let s = 0; meta.get(it.id).tags.forEach(t => { if (mt.includes(t)) s += 3; }); if (me && msrc !== 'This device' && hostOf(it) === msrc) s += 2; if (inProg(it)) s += 2; if (follow.has(hostOf(it))) s += 1; if (!plays.get(it.id) && !P[it.id]) s += 1; return s; };
+    const pick = list.filter(it => !me || String(it.id) !== String(me.id)).filter(it => !(P[it.id] && P[it.id].pct > 96)).map(it => [sc(it), it]).sort((a, b) => b[0] - a[0] || b[1].time - a[1].time).slice(0, 8).map(x => x[1]);
+    nov = document.createElement('div'); nov.className = 'uvn-ov'; nov.setAttribute('role', 'dialog'); nov.setAttribute('aria-label', 'Up next');
+    nov.innerHTML = '<div class="uvn-sheet"><div class="uvn-grab"></div><h4>Up next</h4><div class="uvn-list"></div></div>';
+    const box = nov.querySelector('.uvn-list'), m = masked();
+    if (!pick.length) box.innerHTML = '<div class="uvh-empty" style="padding:30px 10px">No other saved videos yet.</div>';
+    pick.forEach(it => {
+      const p = P[it.id], w = why(it), row = document.createElement('div'); row.className = 'uvn-row'; row.tabIndex = 0; row.setAttribute('role', 'button');
+      row.innerHTML = '<div class="uvh-th uvn-th"><div class="uvh-ph">&#9654;</div><span class="uvh-dur" hidden></span>' + (p && p.pct >= 1 ? '<div class="uvh-prog"><b style="width:' + p.pct.toFixed(1) + '%"></b></div>' : '') + '</div><div class="uvn-tx"><div class="uvh-t"></div><div class="uvh-s"></div>' + (w && !m ? '<span class="uvn-why"></span>' : '') + '</div>';
+      row.querySelector('.uvh-t').textContent = m ? maskLabel() : String(it.title || it.url || 'Video');
+      row.querySelector('.uvh-s').textContent = m ? ago(it.time) : [hostOf(it), ago(it.time)].join(', ');
+      const wy = row.querySelector('.uvn-why'); if (wy) wy.textContent = w;
+      const go = () => { closeNext(); window.playOfflineVideo(it); };
+      row.addEventListener('click', go);
+      row.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); go(); } });
+      box.appendChild(row); loadThumb(it, row.querySelector('.uvn-th'));
+    });
+    nov.addEventListener('click', e => { if (e.target === nov) closeNext(); });
+    nov.addEventListener('keydown', e => { if (e.key === 'Escape') closeNext(); if (e.key !== 'Tab' && !e.defaultPrevented) e.stopPropagation(); });
+    ['keyup', 'keypress'].forEach(ev => nov.addEventListener(ev, e => e.stopPropagation()));
+    document.body.appendChild(nov); const f = nov.querySelector('.uvn-row'); if (f) setTimeout(() => f.focus(), 60);
+  }
+  window.uvUpNext = upNext; nbtn.addEventListener('click', upNext);
+
+  /* ================= YouTube-style main home screen (#emptyHint -> #uvFeed) ================= */
+  function shelf(list) {
+    const s = document.createElement('section'); s.className = 'uvf-shorts';
+    s.innerHTML = '<div class="uvf-sh-h"><span class="uvf-sh-ico">&#9654;</span><h3>Shorts</h3></div><div class="uvh-rail uvf-sh-rail"></div>';
+    const rail = s.querySelector('.uvf-sh-rail'), m = masked();
+    list.slice().sort((a, b) => b.time - a.time).slice(0, 10).forEach(it => {
+      const c = document.createElement('div'); c.className = 'uvf-sc'; c.tabIndex = 0; c.setAttribute('role', 'button');
+      c.innerHTML = '<div class="uvh-th uvf-sth"><div class="uvh-ph">&#9654;</div><div class="uvf-st"></div></div>';
+      c.querySelector('.uvf-st').textContent = m ? maskLabel() : String(it.title || it.url || 'Video');
+      const go = () => { if (window.uvOpenReels) window.uvOpenReels(); };
+      c.addEventListener('click', go); c.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); go(); } });
+      rail.appendChild(c); const th = c.querySelector('.uvf-sth'); th._it = it; if (io) io.observe(th);
+    });
+    return s;
+  }
+  const css2 = document.createElement('style');
+  css2.textContent = `
+  .empty-tab-hint.uvf-on { background:#0f0f0f; padding-bottom:0; }
+  .empty-tab-hint.uvf-on > .home-header, .empty-tab-hint.uvf-on > .home-search, .empty-tab-hint.uvf-on > .home-hint-text { display:none; }
+  .empty-tab-hint.uvf-on > .home-grid-card { margin:0 12px 24px; background:#1a1a1a; border-color:#262626; border-radius:16px; }
+  #uvFeed { color:#f1f1f1; flex:0 0 auto; }
+  #uvFeed .uvh-head { background:rgba(15,15,15,.96); border-bottom:none; padding:max(10px,env(safe-area-inset-top)) 12px 0; }
+  #uvFeed .uvh-top { gap:8px; align-items:center; }
+  .uvf-logo { width:32px; height:22px; border-radius:7px; background:#ff0033; color:#fff; font-size:10px; display:flex; align-items:center; justify-content:center; box-shadow:0 2px 10px rgba(255,0,51,.35); }
+  #uvFeed .uvh-top h2 { font-size:20px; font-weight:800; letter-spacing:-.05em; }
+  #uvFeed .uvh-bar { margin-top:8px; }
+  #uvFeed .uv-fsearch { background:#121212; border:1px solid #303030; height:36px; }
+  #uvFeed .uv-fsearch:focus-within { border-color:#3ea6ff; box-shadow:none; }
+  #uvFeed .uvh-sort { background:#272727; border:none; border-radius:8px; height:36px; }
+  #uvFeed .uvh-chips { padding:10px 0 10px; }
+  #uvFeed .uv-chip { background:#272727; color:#f1f1f1; border:none; border-radius:8px; padding:7px 12px; font-size:13px; box-shadow:none; }
+  #uvFeed .uv-chip.on { background:#f1f1f1; color:#0f0f0f; box-shadow:none; }
+  #uvFeed .uvh-body { padding:2px 0 18px; max-width:none; }
+  #uvFeed .uvh-sec { margin:12px 14px 8px; }
+  #uvFeed .uvh-sec h3 { font-size:16px; }
+  #uvFeed .uvh-grid { grid-template-columns:1fr; gap:20px 0; }
+  #uvFeed .uvh-th { border-radius:0; box-shadow:none; }
+  #uvFeed .uvh-info { padding:0 12px; margin-top:11px; gap:12px; }
+  #uvFeed .uvh-av { width:38px; height:38px; font-size:15px; }
+  #uvFeed .uvh-t { font-size:15px; font-weight:500; line-height:1.32; }
+  #uvFeed .uvh-s { font-size:12.5px; }
+  #uvFeed .uvh-dur { background:rgba(0,0,0,.82); -webkit-backdrop-filter:none; backdrop-filter:none; border-radius:4px; right:8px; bottom:8px; }
+  #uvFeed .uvh-prog { height:4px; background:rgba(255,255,255,.3); } #uvFeed .uvh-prog b { background:#f03; }
+  #uvFeed .uvh-rail { padding:0 12px; margin:0; } #uvFeed .uvh-rail .uvh-th { border-radius:12px; }
+  #uvFeed .uvh-rail .uvh-info { padding:0; }
+  #uvFeed .uvh-empty { padding:50px 24px 30px; }
+  .uvf-shorts { grid-column:1/-1; padding:6px 0 4px; border-top:8px solid #0a0a0a; border-bottom:8px solid #0a0a0a; margin:2px 0; background:#0f0f0f; }
+  .uvf-sh-h { display:flex; align-items:center; gap:8px; padding:12px 14px 10px; } .uvf-sh-h h3 { margin:0; font-size:18px; font-weight:700; color:#fff; }
+  .uvf-sh-ico { width:22px; height:22px; border-radius:6px; background:#ff0033; color:#fff; font-size:9px; display:flex; align-items:center; justify-content:center; }
+  .uvf-shorts .uvh-rail { gap:8px; padding-bottom:12px; }
+  .uvf-sc { flex:0 0 126px; scroll-snap-align:start; cursor:pointer; border-radius:12px; } .uvf-sc:focus-visible { outline:2px solid #3ea6ff; outline-offset:2px; }
+  #uvFeed .uvf-sth { aspect-ratio:9/16; border-radius:12px; }
+  .uvf-st { position:absolute; left:0; right:0; bottom:0; padding:28px 9px 9px; font-size:12.5px; font-weight:600; color:#fff; line-height:1.25; background:linear-gradient(transparent,rgba(0,0,0,.78)); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .uvf-tools { margin:6px 14px 10px; }
+  @media (min-width:700px) { #uvFeed .uvh-grid { grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:26px 16px; padding:0 14px; } #uvFeed .uvh-th { border-radius:12px; } #uvFeed .uvh-info { padding:0; } }`;
+  document.head.appendChild(css2);
+
+  let feedBusy = false, feedTimer = null;
+  function mountFeed() {
+    const host = $('emptyHint'); if (!host || $('uvFeed') || (root && root.id === 'uvHome')) return;
+    const f = document.createElement('div'); f.id = 'uvFeed'; f.className = 'uvh-inline';
+    f.innerHTML = '<div class="uvh-head"><div class="uvh-top"><span class="uvf-logo">&#9654;</span><h2>Nova</h2><span class="uvh-stat"></span></div>' +
+      '<div class="uvh-bar"><div class="uv-fsearch"><span>&#128269;</span><input type="search" placeholder="Search your videos" autocomplete="off" autocapitalize="off" spellcheck="false"></div><button class="uvh-sort"></button></div>' +
+      '<div class="uv-chips uvh-chips" id="uvfChips"></div></div><div class="uvh-body"><div class="uvh-grid">' +
+      Array.from({ length: 3 }, () => '<div class="uvh-card"><div class="uvh-th uv-sh"></div><div class="uvh-info"><span class="uvh-av uv-sh"></span><div class="uvh-txt"><div class="uv-sh" style="height:12px;width:80%"></div></div></div></div>').join('') + '</div></div>';
+    host.insertBefore(f, host.firstChild); host.classList.add('uvf-on');
+    const gc = host.querySelector('.home-grid-card');
+    if (gc) { const t = document.createElement('div'); t.className = 'uvh-sec uvf-tools'; t.innerHTML = '<h3>Tools</h3>'; host.insertBefore(t, gc); }
+    root = f; st = { q: '', f: 'all', tag: '', src: '', sort: st.sort }; items = []; P = {};
+    io = new IntersectionObserver((es, o) => es.forEach(e => { if (e.isIntersecting) { o.unobserve(e.target); if (e.target._it) loadThumb(e.target._it, e.target); } }), { root: host, rootMargin: '400px' });
+    const input = f.querySelector('input');
+    f.querySelector('.uvh-sort').addEventListener('click', () => { do { st.sort = (st.sort + 1) % SORTS.length; } while (masked() && SORTS[st.sort][0] === 'az'); wr('uv99:homeSort', st.sort); render(); });
+    let tm; input.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(() => { st.q = input.value; render(); }, 90); });
+    ['keydown', 'keyup', 'keypress'].forEach(ev => input.addEventListener(ev, e => e.stopPropagation()));
+  }
+  function refreshFeed() {
+    clearTimeout(feedTimer);
+    feedTimer = setTimeout(async () => {
+      const host = $('emptyHint'); if (!host || host.style.display === 'none') return;
+      if (root && root.id === 'uvHome') return;
+      if (!$('uvFeed')) mountFeed(); if (!root || root.id !== 'uvFeed' || feedBusy) return;
+      feedBusy = true;
+      try { const list = await listOfflineVideos(); if (root && root.id === 'uvFeed') { items = list; derive(); buildDup(); chips(); render(); computeFps(items, ++fpToken); } } catch (e) {} finally { feedBusy = false; }
+    }, 200);
+  }
+  const ueh = window.updateEmptyHint;
+  if (typeof ueh === 'function') window.updateEmptyHint = function () { const r = ueh.apply(this, arguments); refreshFeed(); return r; };
+  const mb = $('maskModeBtn'); if (mb) mb.addEventListener('click', () => setTimeout(() => { if (root && root.id === 'uvFeed') { chips(); render(); } }, 150));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshFeed(); });
+  setTimeout(refreshFeed, 600);
+
+  /* ---- entry row at the top of the downloads sheet ---- */
+  const anchor = $('folderOpenFromPhoneRow');
+  if (anchor && anchor.parentNode) {
+    const r = document.createElement('div'); r.className = 'folder-row uvh-entry'; r.id = 'uvHomeRow'; r.style.cursor = 'pointer';
+    r.innerHTML = '<span class="fr-icon">&#127968;</span><span class="fr-text"><div class="fr-title">Home / Library</div><div class="fr-meta">Thumbnail grid, continue watching, sort</div></span>';
+    r.addEventListener('click', open); anchor.parentNode.insertBefore(r, anchor);
+  }
+})();
+
+/* ===== UV99 upgrades v9 (step 6c, MY-TUBE README had no usable features; did the pending item instead): heart / Like button inside the player (Playback tab) ===== */
+(function () {
+  const $ = id => document.getElementById(id);
+  const toast = m => { try { showMiniToast(m); } catch (e) {} };
+  const css = document.createElement('style');
+  css.textContent = '#uvHeartBtn.on { color:#ff5d7a; border-color:rgba(255,93,122,.5); background:rgba(255,93,122,.14); text-shadow:0 0 12px rgba(255,93,122,.45); }' +
+    '#uvHeartBtn.pop { animation:uvPop .32s cubic-bezier(.3,1.6,.5,1); }';
+  document.head.appendChild(css);
+  const anchor = $('uvAudioBtn'); if (!anchor || !anchor.parentNode) return;
+  const btn = document.createElement('button'); btn.id = 'uvHeartBtn'; btn.textContent = '\u2661 Like'; btn.title = 'Like this saved video';
+  anchor.parentNode.insertBefore(btn, anchor);
+  const cur = () => { try { return getTab(activeTabId); } catch (e) { return null; } };
+  function refresh() {
+    const t = cur(), id = t && t._uvItemId, on = id != null && !!(window.uvLikes && window.uvLikes.has(id));
+    btn.classList.toggle('on', on); btn.textContent = on ? '\u2665 Liked' : '\u2661 Like';
+  }
+  // remember which saved item each player tab belongs to
+  const op = window.playOfflineVideo;
+  if (typeof op === 'function') window.playOfflineVideo = function (item) {
+    const r = op.apply(this, arguments);
+    try { const t = cur(); if (t && t.isLocalFile && item && item.id != null) t._uvItemId = item.id; } catch (e) {}
+    setTimeout(refresh, 50); return r;
+  };
+  btn.addEventListener('click', () => {
+    const t = cur(), id = t && t._uvItemId;
+    if (id == null || !window.uvLikes) return toast('Like works for videos saved in your downloads folder');
+    const now = window.uvLikes.toggle(id); refresh();
+    btn.classList.remove('pop'); void btn.offsetWidth; btn.classList.add('pop');
+    toast(now ? 'Added to Liked' : 'Removed from Liked'); if (window.uvFolderRefresh) window.uvFolderRefresh();
+  });
+  document.addEventListener('loadedmetadata', () => setTimeout(refresh, 200), true);
+  document.addEventListener('click', e => { if (e.target.closest && e.target.closest('[data-etab="playback"]')) refresh(); }, true);
+})();
+
+/* ===== UV99 upgrades v15 (Study Tube: study-only YouTube feed. Allowlist of channels, no Shorts/home feed/comments/recommendations; YouTube Data API v3 + IFrame player (youtube-nocookie, rel=0); speed, resume, daily watch limit) ===== */
+(function () {
+  const $ = id => document.getElementById(id);
+  const rd = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } };
+  const wr = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+  const toast = m => { try { showMiniToast(m); } catch (e) {} };
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const dec = s => { const t = document.createElement('textarea'); t.innerHTML = s; return t.value; };
+  const iso = s => { const m = /PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/.exec(s || ''); return m ? (+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0) : 0; };
+  const fd = s => { s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); };
+  const ago = t => { const d = (Date.now() - t) / 864e5; return d < 1 ? 'today' : d < 2 ? 'yesterday' : d < 30 ? Math.floor(d) + ' days ago' : d < 365 ? Math.floor(d / 30) + ' mo ago' : Math.floor(d / 365) + ' y ago'; };
+  const today = () => new Date().toISOString().slice(0, 10);
+  const DEF_KEY = 'AIzaSyDRM-yw8kFqRYkZFwOXVgBghp460W2SewY';
+  let key = rd('uv99:st:key', '') || DEF_KEY, chans = rd('uv99:st:chans', []), cache = rd('uv99:st:cache', { t: 0, v: [] }), prog = rd('uv99:st:prog', {});
+  let lim = rd('uv99:st:lim', 0), rate = rd('uv99:st:rate', 1), day = rd('uv99:st:day', { d: '', s: 0 });
+  if (day.d !== today()) day = { d: today(), s: 0 };
+  let st = { q: '', ch: '' }, res = null, ov = null, yt = null, tick = null, cur = null, loading = false;
+  const fr = m => /quota/i.test(m) ? 'Aaj ki YouTube limit khatam, kal try karo' : /key|forbidden|referer|403|api/i.test(m) ? 'Feed load nahi hua, thodi der baad try karo' : String(m).slice(0, 90);
+  const left = () => lim ? lim * 60 - day.s : 1e9;
+  let auto = rd('uv99:st:auto', true), opn = rd('uv99:st:open', true);
+  const mark = id => document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.id === id));
+  function fit() { const n = $('bottomNav'); if (!ov) return; ov.style.bottom = n && n.offsetHeight ? Math.max(0, window.innerHeight - n.getBoundingClientRect().top) + 'px' : '0px'; }
+
+  async function api(ep, p) {
+    const u = new URL('https://www.googleapis.com/youtube/v3/' + ep);
+    Object.keys(p).forEach(k => u.searchParams.set(k, p[k])); u.searchParams.set('key', key);
+    const r = await fetch(u), j = await r.json();
+    if (!r.ok) throw new Error((j.error && j.error.message) || ('HTTP ' + r.status));
+    return j;
+  }
+  async function withDur(list) {
+    for (let i = 0; i < list.length; i += 50) {
+      const ch = list.slice(i, i + 50), j = await api('videos', { part: 'contentDetails', id: ch.map(x => x.id).join(',') }), m = {};
+      (j.items || []).forEach(x => { m[x.id] = iso(x.contentDetails.duration); });
+      ch.forEach(x => { x.d = m[x.id] || 0; });
+    }
+    return list.filter(x => x.d > 60); /* drops Shorts + live/upcoming */
+  }
+  async function refresh(force) {
+    if (!key || !chans.length || loading) return render();
+    if (!force && Date.now() - cache.t < 18e5 && cache.v.length) return render();
+    loading = true; render(); let emsg = '';
+    try {
+      let all = [];
+      await Promise.all(chans.map(async c => {
+        try {
+          const j = await api('playlistItems', { part: 'snippet', playlistId: c.up, maxResults: 15 });
+          (j.items || []).forEach(x => { const s = x.snippet; if (s.title === 'Private video' || s.title === 'Deleted video') return; all.push({ id: s.resourceId.videoId, t: s.title, c: c.id, p: Date.parse(s.publishedAt) || 0 }); });
+        } catch (e) { emsg = e.message; }
+      }));
+      all = await withDur(all);
+      const keep = cache.v.filter(o => o.x && !all.some(a => a.id === o.id));
+      all = all.concat(keep).sort((a, b) => b.p - a.p);
+      cache = { t: Date.now(), v: all.slice(0, 250) }; wr('uv99:st:cache', cache);
+    } catch (e) { emsg = e.message; }
+    loading = false; render(); if (emsg) toast(fr(emsg));
+  }
+  async function addChan(v, tag) {
+    v = (v || '').trim(); if (!v) throw new Error('Enter @handle / channel URL');
+    const m = /(UC[\w-]{22})/.exec(v), h = /@([\w.\-]+)/.exec(v), p = { part: 'snippet,contentDetails' };
+    if (m) p.id = m[1]; else p.forHandle = '@' + (h ? h[1] : v.replace(/^@/, '').replace(/\s+/g, ''));
+    const j = await api('channels', p), x = (j.items || [])[0];
+    if (!x) throw new Error('Channel not found: paste its @handle or URL');
+    if (chans.some(c => c.id === x.id)) throw new Error('Already added');
+    chans.push({ id: x.id, n: x.snippet.title, img: (x.snippet.thumbnails.default || {}).url || '', up: x.contentDetails.relatedPlaylists.uploads, tag: (tag || '').trim() });
+    wr('uv99:st:chans', chans); cache.t = 0;
+  }
+  async function deep() {
+    if (!st.ch || !st.q.trim() || loading) return; loading = true; render();
+    try {
+      const j = await api('search', { part: 'snippet', channelId: st.ch, q: st.q, type: 'video', maxResults: 15 });
+      let n = (j.items || []).map(x => ({ id: x.id.videoId, t: dec(x.snippet.title), c: st.ch, p: Date.parse(x.snippet.publishedAt) || 0, x: 1 })).filter(x => !cache.v.some(o => o.id === x.id));
+      n = await withDur(n); cache.v = cache.v.concat(n); wr('uv99:st:cache', cache); toast(n.length + ' videos added');
+    } catch (e) { toast(fr(e.message)); }
+    loading = false; render();
+  }
+
+  async function searchAll() {
+    const q = st.q.trim(); if (!q || loading) return; loading = true; res = []; render();
+    try {
+      const j = await api('search', { part: 'snippet', q, type: 'video', maxResults: 20, safeSearch: 'strict' });
+      res = await withDur((j.items || []).map(x => ({ id: x.id.videoId, t: dec(x.snippet.title), c: x.snippet.channelId, cn: x.snippet.channelTitle, p: Date.parse(x.snippet.publishedAt) || 0 })));
+      const sq = rd('uv99:st:sq', { d: '', n: 0 }); if (sq.d !== today()) { sq.d = today(); sq.n = 0; } sq.n++; wr('uv99:st:sq', sq);
+      if (sq.n >= 90) toast('Aaj ki search quota lagbhag khatam (' + sq.n + '/100)');
+    } catch (e) { res = null; toast(fr(e.message)); }
+    loading = false; render();
+  }
+
+  /* ---------- player ---------- */
+  function ytReady() {
+    return new Promise(res => {
+      if (window.YT && YT.Player) return res();
+      const s = document.createElement('script'); s.src = 'https://www.youtube.com/iframe_api'; document.head.appendChild(s);
+      const p = window.onYouTubeIframeAPIReady; window.onYouTubeIframeAPIReady = () => { try { p && p(); } catch (e) {} res(); };
+    });
+  }
+  function save() {
+    if (!yt || !cur || !yt.getCurrentTime) return;
+    try { prog[cur.id] = { p: yt.getCurrentTime(), d: yt.getDuration(), t: Date.now() }; wr('uv99:st:prog', prog); } catch (e) {}
+  }
+  function onState(e) {
+    clearInterval(tick);
+    if (e.data === 1) {
+      try { if (yt.getPlaybackRate() !== rate) yt.setPlaybackRate(rate); } catch (x) {}
+      tick = setInterval(() => {
+        save(); day.s += 5; wr('uv99:st:day', day);
+        if (left() <= 0) { try { yt.pauseVideo(); } catch (x) {} toast('Daily study limit reached. Break time!'); }
+      }, 5000);
+    } else { save(); if (e.data === 0 && cur) { const d = yt.getDuration(); prog[cur.id] = { p: d, d, t: Date.now() }; wr('uv99:st:prog', prog); render(); } }
+  }
+  function onErr() { const m = $('stPT'); if (m) m.insertAdjacentHTML('afterend', '<div class="stv-er">This video blocks embedding, so it cannot play here.</div>'); }
+  async function play(id) {
+    if (left() <= 0) return toast('Daily study limit reached');
+    const v = cache.v.concat(res || []).find(x => x.id === id); if (!v) return; cur = v;
+    const c = chans.find(x => x.id === v.c) || {};
+    $('stP').style.display = 'block'; $('stPT').textContent = v.t; $('stPM').textContent = (c.n || v.cn || '') + ' \u00b7 ' + ago(v.p);
+    const er = ov.querySelector('.stv-er'); if (er) er.remove();
+    spd(); await ytReady();
+    const sv = prog[id], start = sv && sv.d && sv.p < sv.d - 15 ? Math.floor(sv.p) : 0;
+    if (yt && yt.loadVideoById) yt.loadVideoById({ videoId: id, startSeconds: start });
+    else yt = new YT.Player('stYT', { host: 'https://www.youtube-nocookie.com', width: '100%', height: '100%', videoId: id,
+      playerVars: { rel: 0, modestbranding: 1, playsinline: 1, iv_load_policy: 3, autoplay: 1, start, fs: 1 },
+      events: { onReady: e => { try { e.target.setPlaybackRate(rate); } catch (x) {} }, onStateChange: onState, onError: onErr } });
+    $('stSc').scrollTop = 0; render();
+  }
+  function stop() {
+    clearInterval(tick); save(); try { yt && yt.destroy(); } catch (e) {} yt = null; cur = null;
+    const p = $('stP'); if (p) { p.style.display = 'none'; p.querySelector('.stv-vw').innerHTML = '<div id="stYT"></div>'; }
+  }
+  function spd() {
+    $('stSp').innerHTML = [1, 1.25, 1.5, 1.75, 2].map(r => '<button class="stv-sp' + (r === rate ? ' on' : '') + '" data-r="' + r + '">' + r + 'x</button>').join('');
+  }
+
+  /* ---------- UI ---------- */
+  const css = document.createElement('style');
+  css.textContent = `
+  #stOv { position:fixed; inset:0; z-index:85; background:#0f0f0f; color:#f1f1f1; display:flex; flex-direction:column; padding-top:env(safe-area-inset-top,0px); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }
+  .stv-hd { display:flex; align-items:center; gap:10px; padding:8px 12px; background:rgba(15,15,15,.92); backdrop-filter:blur(10px); border-bottom:1px solid #272727; }
+  .stv-hd h2 { margin:0; font-size:19px; font-weight:700; flex:1; }
+  .stv-lg { width:32px; height:22px; border-radius:7px; background:#ff0033; color:#fff; font-size:10px; display:flex; align-items:center; justify-content:center; }
+  .stv-ib { width:38px; height:38px; border-radius:50%; border:none; background:#272727; color:#fff; font-size:16px; cursor:pointer; }
+  .stv-pl { display:none; background:#000; }
+  .stv-vw { position:relative; width:100%; aspect-ratio:16/9; max-height:56vh; margin:0 auto; background:#000; }
+  .stv-vw iframe, .stv-vw > div { position:absolute; inset:0; width:100%; height:100%; border:0; }
+  .stv-pm { padding:10px 14px 8px; background:#0f0f0f; }
+  .stv-pt { font-size:15px; font-weight:600; line-height:1.3; } .stv-pmeta { font-size:12px; color:#aaa; margin-top:3px; }
+  .stv-pr { display:flex; gap:6px; margin-top:9px; flex-wrap:wrap; align-items:center; }
+  .stv-sp, .stv-ch, .stv-cl { border:none; background:#272727; color:#f1f1f1; border-radius:8px; padding:7px 12px; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap; }
+  .stv-sp.on, .stv-ch.on { background:#f1f1f1; color:#0f0f0f; } .stv-cl { margin-left:auto; background:#3a1d1d; color:#ff8a8a; }
+  .stv-er { margin:8px 14px 0; padding:9px 12px; border-radius:10px; background:#3a1d1d; color:#ffb4b4; font-size:13px; }
+  .stv-sc { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; padding-bottom:calc(20px + env(safe-area-inset-bottom,0px)); }
+  .stv-bar { display:flex; gap:8px; padding:10px 12px 4px; }
+  .stv-q { flex:1; display:flex; align-items:center; gap:8px; background:#1e1e1e; border:1px solid #303030; border-radius:22px; padding:0 14px; height:40px; }
+  .stv-q input { flex:1; min-width:0; background:none; border:none; outline:none; color:#fff; font-size:15px; }
+  .stv-chips { display:flex; gap:8px; overflow-x:auto; padding:8px 12px 10px; scrollbar-width:none; } .stv-chips::-webkit-scrollbar { display:none; }
+  .stv-c { margin-bottom:18px; cursor:pointer; }
+  .stv-th { position:relative; aspect-ratio:16/9; background:#222; overflow:hidden; } .stv-th img { width:100%; height:100%; object-fit:cover; display:block; }
+  .stv-du { position:absolute; right:7px; bottom:9px; background:rgba(0,0,0,.82); font-size:12px; font-weight:600; padding:2px 5px; border-radius:5px; font-style:normal; }
+  .stv-pb { position:absolute; left:0; bottom:0; height:3px; background:#ff0033; }
+  .stv-in { display:flex; gap:10px; padding:10px 12px 0; } .stv-av { width:36px; height:36px; border-radius:50%; object-fit:cover; background:#333; flex-shrink:0; }
+  .stv-t { font-size:14.5px; font-weight:600; line-height:1.3; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .stv-m { font-size:12px; color:#aaa; margin-top:3px; }
+  .stv-c.now .stv-t { color:#ff6b81; }
+  .stv-em { padding:36px 22px; text-align:center; color:#aaa; font-size:14px; line-height:1.5; }
+  .stv-dp { display:block; margin:6px auto 0; padding:10px 16px; border:none; border-radius:20px; background:#272727; color:#fff; font-size:13px; cursor:pointer; }
+  .stv-sh { display:none; position:absolute; inset:0; background:rgba(0,0,0,.6); align-items:flex-end; justify-content:center; z-index:3; }
+  .stv-sb { width:100%; max-width:560px; max-height:88%; overflow-y:auto; background:#1a1a1a; border-radius:18px 18px 0 0; padding:16px 16px calc(18px + env(safe-area-inset-bottom,0px)); }
+  .stv-sb h3 { margin:0 0 6px; } .stv-sb label { display:block; margin:14px 0 5px; font-size:13px; font-weight:600; color:#ddd; } .stv-sb small { color:#999; font-size:12px; line-height:1.4; display:block; margin-top:4px; }
+  .stv-sb input, .stv-sb select { width:100%; background:#262626; border:1px solid #3a3a3a; color:#fff; border-radius:10px; padding:10px 12px; font-size:14px; margin-top:4px; }
+  .stv-cr { display:flex; align-items:center; gap:10px; padding:6px 0; } .stv-cr img { width:30px; height:30px; border-radius:50%; } .stv-cr span { flex:1; font-size:14px; } .stv-cr button { background:none; border:none; color:#ff8a8a; font-size:16px; padding:6px 10px; cursor:pointer; }
+  .stv-act { display:flex; gap:10px; margin-top:16px; } .stv-act button, .stv-add button { flex:1; border:none; border-radius:10px; padding:11px; font-size:14px; font-weight:700; cursor:pointer; background:#272727; color:#fff; } .stv-act button:first-child, .stv-add button { background:#ff0033; }
+  .stv-sk { height:190px; margin:0 0 18px; background:linear-gradient(90deg,#1c1c1c,#2a2a2a,#1c1c1c); background-size:200% 100%; animation:stvsh 1.2s infinite linear; } @keyframes stvsh { to { background-position:-200% 0; } }
+  .stv-ent { margin-left:8px; border:none; border-radius:16px; background:#272727; color:#fff; font-size:13px; font-weight:700; padding:7px 12px; cursor:pointer; flex-shrink:0; }
+  @media (min-width:800px) { #stL { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:0 16px; padding:0 14px; } .stv-in { padding:10px 0 0; } }`;
+  document.head.appendChild(css);
+
+  function card(v, cm) {
+    const c = cm[v.c] || { n: v.cn }, p = prog[v.id], pc = p && p.d ? Math.min(100, p.p / p.d * 100) : 0;
+    return '<div class="stv-c' + (cur && cur.id === v.id ? ' now' : '') + '" data-i="' + v.id + '"><div class="stv-th"><img loading="lazy" src="https://i.ytimg.com/vi/' + v.id + '/mqdefault.jpg" alt=""><i class="stv-du">' + fd(v.d) + '</i>' + (pc > 1 ? '<i class="stv-pb" style="width:' + pc + '%"></i>' : '') + '</div><div class="stv-in">' + (c.img ? '<img class="stv-av" src="' + esc(c.img) + '" alt="">' : '<span class="stv-av"></span>') + '<div><div class="stv-t">' + esc(v.t) + '</div><div class="stv-m">' + esc(c.n) + (c.tag ? ' \u00b7 ' + esc(c.tag) : '') + ' \u00b7 ' + ago(v.p) + (pc > 96 ? ' \u00b7 \u2713 watched' : '') + '</div></div></div></div>';
+  }
+  function render() {
+    const L = $('stL'), C = $('stCh'); if (!L) return;
+    const cm = {}; chans.forEach(c => { cm[c.id] = c; });
+    C.innerHTML = chans.length ? '<button class="stv-ch' + (st.ch ? '' : ' on') + '" data-c="">All</button>' + chans.map(c => '<button class="stv-ch' + (st.ch === c.id ? ' on' : '') + '" data-c="' + c.id + '">' + esc(c.n) + '</button>').join('') : '';
+    if (!key || !chans.length) { L.innerHTML = '<div class="stv-em">Apne study channels add karo (upar &#9881; dabao). Sirf wahi channels dikhenge: no Shorts, no home feed, no comments.</div>'; return; }
+    if (left() <= 0) { L.innerHTML = '<div class="stv-em">Daily study limit reached. Take a break; it resets tomorrow (change it in settings).</div>'; return; }
+    const q = st.q.trim().toLowerCase();
+    const vs = res !== null ? res : cache.v.filter(v => (!st.ch || v.c === st.ch) && cm[v.c] && (!q || (v.t + ' ' + cm[v.c].n + ' ' + (cm[v.c].tag || '')).toLowerCase().includes(q)));
+    let h = (res !== null ? '<div class="stv-em" style="padding:10px 14px;text-align:left">Poore YouTube ke results <button class="stv-sp" data-back="1" style="margin-left:8px">Study feed par wapas</button></div>' : '') + (res === null && opn && q && !loading ? '<button class="stv-dp" data-all="1">\uD83D\uDD0E "' + esc(st.q) + '" poore YouTube par search karo</button>' : '') + (loading ? '<div class="stv-sk"></div><div class="stv-sk"></div>' : '');
+    h += vs.map(v => card(v, cm)).join('');
+    if (!vs.length && !loading) h += '<div class="stv-em">No videos' + (q ? ' match "' + esc(st.q) + '"' : ' yet. Tap refresh') + '.</div>';
+    if (res === null && q && !loading) h += st.ch ? '<button class="stv-dp" data-deep="1">Search "' + esc(st.q) + '" on YouTube in this channel only</button>' : '<div class="stv-em" style="padding:8px">Pick a channel chip to search deeper in that channel.</div>';
+    L.innerHTML = h;
+  }
+  function sheet() {
+    const s = $('stSh'); s.style.display = 'flex';
+    s.innerHTML = '<div class="stv-sb"><h3>Study Tube settings</h3><label>Allowed channels (nothing else is shown)</label><div>' +
+      (chans.map((c, i) => '<div class="stv-cr"><img src="' + esc(c.img) + '" alt=""><span>' + esc(c.n) + (c.tag ? ' \u00b7 ' + esc(c.tag) : '') + '</span><button data-rm="' + i + '">&#10005;</button></div>').join('') || '<small>No channels yet</small>') +
+      '</div><div class="stv-add" style="display:flex;gap:8px;margin-top:8px"><input id="stA" placeholder="@handle, channel URL or UC id"><input id="stT" placeholder="Subject" style="max-width:110px"><button id="stAd" style="max-width:70px">Add</button></div><label>Daily watch limit</label><select id="stLm">' +
+      [[0, 'Off'], [30, '30 min'], [60, '1 hour'], [90, '90 min'], [120, '2 hours'], [180, '3 hours'], [240, '4 hours']].map(o => '<option value="' + o[0] + '"' + (o[0] === lim ? ' selected' : '') + '>' + o[1] + '</option>').join('') +
+      '</select><label style="display:flex;gap:8px;align-items:center"><input id="stAu" type="checkbox" style="width:auto;margin:0"' + (auto ? ' checked' : '') + '> Open Study Tube when the app starts</label><label style="display:flex;gap:8px;align-items:center"><input id="stOp" type="checkbox" style="width:auto;margin:0"' + (opn ? ' checked' : '') + '> Open search: koi bhi YouTube video search kar sako</label><div class="stv-act"><button id="stSv">Save &amp; refresh</button><button id="stCx">Close</button></div></div>';
+  }
+  function close() { stop(); if (ov) { ov.remove(); ov = null; } }
+  function open() {
+    if (ov) return;
+    ov = document.createElement('div'); ov.id = 'stOv';
+    ov.innerHTML = '<div class="stv-hd"><button class="stv-ib" id="stX" aria-label="Close">&#10005;</button><span class="stv-lg">&#9654;</span><h2>Study Tube</h2><button class="stv-ib" id="stS" aria-label="Settings">&#9881;</button></div>' +
+      '<div class="stv-pl" id="stP"><div class="stv-vw"><div id="stYT"></div></div><div class="stv-pm"><div class="stv-pt" id="stPT"></div><div class="stv-pmeta" id="stPM"></div><div class="stv-pr"><span id="stSp" style="display:contents"></span><button class="stv-cl" id="stCl">Close player</button></div></div></div>' +
+      '<div class="stv-sc" id="stSc"><div class="stv-bar"><div class="stv-q"><span>&#128269;</span><input id="stQ" type="search" placeholder="Search study videos" autocomplete="off" autocapitalize="off" spellcheck="false"></div><button class="stv-ib" id="stR" aria-label="Refresh">&#8635;</button></div><div class="stv-chips" id="stCh"></div><div id="stL"></div></div><div class="stv-sh" id="stSh"></div>';
+    document.body.appendChild(ov); fit(); $('stX').style.display = 'none'; mark('navStudy');
+    ov.addEventListener('keydown', e => e.stopPropagation()); ov.addEventListener('keyup', e => e.stopPropagation());
+    ov.addEventListener('click', async e => {
+      const t = e.target, b = t.closest('button'), c = t.closest('.stv-c');
+      if (t.id === 'stSh') { t.style.display = 'none'; return; }
+      if (!b && c) return play(c.dataset.i);
+      if (!b) return;
+      if (b.id === 'stX') close(); else if (b.id === 'stS') sheet(); else if (b.id === 'stR') refresh(true);
+      else if (b.id === 'stCl') stop(), render();
+      else if (b.id === 'stCx') $('stSh').style.display = 'none';
+      else if (b.dataset.c !== undefined && b.classList.contains('stv-ch')) { st.ch = b.dataset.c; res = null; render(); }
+      else if (b.dataset.r) { rate = +b.dataset.r; wr('uv99:st:rate', rate); try { yt && yt.setPlaybackRate(rate); } catch (x) {} spd(); }
+      else if (b.dataset.deep) deep(); else if (b.dataset.all) searchAll(); else if (b.dataset.back) { res = null; render(); }
+      else if (b.dataset.rm) { chans.splice(+b.dataset.rm, 1); wr('uv99:st:chans', chans); cache.t = 0; sheet(); }
+      else if (b.id === 'stAd') {
+        b.textContent = '...';
+        try { await addChan($('stA').value, $('stT').value); sheet(); toast('Channel added'); } catch (x) { b.textContent = 'Add'; toast(fr(x.message)); }
+      } else if (b.id === 'stSv') {
+        lim = +$('stLm').value; auto = $('stAu').checked; opn = $('stOp').checked; wr('uv99:st:open', opn); wr('uv99:st:lim', lim); wr('uv99:st:auto', auto);
+        $('stSh').style.display = 'none'; cache.t = 0; refresh(true);
+      }
+    });
+    let tm; $('stQ').addEventListener('input', e => { clearTimeout(tm); tm = setTimeout(() => { st.q = e.target.value; if (!st.q.trim()) res = null; render(); }, 120); });
+    $('stQ').addEventListener('keydown', e => { if (e.key === 'Enter' && opn) searchAll(); });
+    render(); if (key && chans.length) refresh(false);
+  }
+  window.addEventListener('keydown', e => {
+    if (!ov) return;
+    if (e.key === 'Escape') { const sh = $('stSh'); if (sh && sh.style.display === 'flex') sh.style.display = 'none'; else if (cur) { stop(); render(); } else { close(); mark('navHome'); } e.stopImmediatePropagation(); return; }
+    if (!/INPUT|SELECT|TEXTAREA/.test((e.target.tagName || ''))) e.stopImmediatePropagation();
+  }, true);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
+  window.uvOpenStudy = open;
+
+  /* entry button on the YouTube-style home feed (re-ensured whenever the feed refreshes) */
+  function ensureBtn() {
+    const t = document.querySelector('#uvFeed .uvh-top'); if (!t || $('stBtn')) return;
+    const b = document.createElement('button'); b.id = 'stBtn'; b.className = 'stv-ent'; b.innerHTML = '&#128218; Study'; b.addEventListener('click', open); t.appendChild(b);
+  }
+  const ueh = window.updateEmptyHint;
+  if (typeof ueh === 'function') window.updateEmptyHint = function () { const r = ueh.apply(this, arguments); setTimeout(ensureBtn, 450); return r; };
+  setTimeout(ensureBtn, 900); setInterval(ensureBtn, 4000);
+
+  /* separate "Study" tab in the bottom nav (first item) + opens by default on app start */
+  const nav = $('bottomNav');
+  if (nav && !$('navStudy')) {
+    const b = document.createElement('button'); b.className = 'nav-item'; b.id = 'navStudy'; b.innerHTML = '<span class="nav-icon">&#128218;</span>Study';
+    b.addEventListener('click', () => { if (ov) { mark('navStudy'); return; } open(); });
+    nav.insertBefore(b, nav.firstChild);
+    nav.querySelectorAll('.nav-item').forEach(x => { if (x.id !== 'navStudy') x.addEventListener('click', () => { if (ov) close(); }); });
+  }
+  window.addEventListener('resize', fit);
+  if (auto) setTimeout(() => { if (!ov) open(); }, 350);
+})();
+
 /* ================= Boot ================= */
 // Prevent this page itself from ever being redirected/opened elsewhere.
 window.open = function () { return null; };
@@ -7957,242 +9333,5 @@ loadPersistedData().then(async () => {
 })();
 
 </script>
-<style id="nova-yt-css">
-.stage .ytshim{position:absolute;top:0;left:0;width:100%;height:100%;background:#000;display:none;overflow:hidden}
-.stage .ytshim.active-frame{display:block;filter:brightness(var(--b,1)) contrast(var(--c,1)) saturate(var(--s,1)) blur(var(--denoise,0px)) url(#sharpenFilter)}
-.stage .ytshim iframe{display:block;position:absolute;top:50%;left:50%;border:0;pointer-events:none;background:#000;transform-origin:50% 50%}
-.stage .ytshim .ytfb{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:#ccc;text-align:center;padding:24px;font-size:14px;line-height:1.5;background:#000;z-index:3}
-.stage .ytshim .ytfb a{background:#c62828;color:#fff;padding:10px 20px;border-radius:99px;text-decoration:none;font-weight:600;pointer-events:auto}
-#ytPanel{max-height:min(340px,48vh)}
-#ytPanel .yrow{display:flex;gap:6px;margin:4px 0 6px}
-#ytPanel input[type=text]{flex:1;min-width:0;background:#121212;color:#eee;border:1px solid #3a3a3a;border-radius:8px;padding:8px 10px;font-size:13px}
-#ytPanel .yb{background:#2a2a2a;color:#eee;border:1px solid #3a3a3a;border-radius:8px;padding:7px 12px;font-size:13px;cursor:pointer;flex-shrink:0}
-#ytPanel .yb.go{background:#c62828;border-color:#c62828;color:#fff}
-#ytPanel .opt{font-size:12px;color:#aaa;display:flex;gap:6px;align-items:center;margin:2px 0 6px}
-#ytPanel .panel-row span.link{color:#eee}
-</style>
-<script id="nova-yt-js">
-/* ===== YouTube link player — Nova ke poore player features ke saath ===== */
-(function(){
-const $=s=>document.querySelector(s);
-const LS=(k,d)=>{try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},SV=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
-let YQ=LS('novaYtQ','highres'),YL=LS('novaYtList',[]),EMB=LS('novaYtEmbed',true),DIR=LS('novaYtDirect',true),apiP=null,warned=false;
-const toast=m=>{try{showMiniToast(m)}catch(e){}};
-const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-function parse(t){t=(t||'').trim();if(!t)return{};let id=null,list=null;
- if(/^[\w-]{11}$/.test(t))return{id:t};
- let u;try{u=new URL(/^https?:\/\//i.test(t)?t:'https://'+t)}catch(e){return{}}
- const h=u.hostname.replace(/^(www|m|music)\./,'');if(!/^(youtube\.com|youtube-nocookie\.com|youtu\.be)$/.test(h))return{};
- list=u.searchParams.get('list');
- if(h==='youtu.be')id=u.pathname.slice(1).split('/')[0];
- else if(u.pathname==='/watch')id=u.searchParams.get('v');
- else{const m=u.pathname.match(/^\/(?:shorts|embed|live|v)\/([\w-]{11})/);if(m)id=m[1]}
- if(id&&!/^[\w-]{11}$/.test(id))id=null;if(list&&!/^[\w-]+$/.test(list))list=null;
- return{id,list}}
-const kOf=q=>q.list&&!q.id?'l:'+q.list:'v:'+q.id+(q.list?'@'+q.list:'');
-const urlOf=q=>q.id?'https://www.youtube.com/watch?v='+q.id+(q.list?'&list='+q.list:''):'https://www.youtube.com/playlist?list='+q.list;
-const ytTab=()=>{const t=getTab(activeTabId);return t&&t.yt?t:null};
-
-/* ---- UI: toolbar button, home shortcut, panel, quick button ---- */
-const btn=document.createElement('button');btn.className='icon-btn';btn.id='ytNovaBtn';btn.title='YouTube link se play';btn.innerHTML='<span style="color:#ff4040">&#9654;</span>';
-const bb=$('#bookmarksBtn');bb.parentNode.insertBefore(btn,bb);
-const hg=$('.home-grid');if(hg){const b=document.createElement('button');b.className='home-shortcut';b.dataset.target='ytNovaBtn';b.innerHTML='<span class="circle" style="background:#e53935">&#9654;</span><span class="label">YouTube</span>';hg.insertBefore(b,hg.firstChild)}
-const panel=document.createElement('div');panel.className='panel';panel.id='ytPanel';$('#apiActorsPanel').after(panel);
-panel.innerHTML='<div class="yrow"><input type="text" id="ytIn" placeholder="YouTube video / playlist / shorts link paste karo"><button class="yb go" id="ytGo">&#9654; Play</button></div>'
-+'<div class="yrow"><button class="yb" id="ytPop">&#8599; YouTube app/site me kholo</button><button class="yb" id="ytPaste">&#128203; Paste</button></div>'
-+'<label class="opt"><input type="checkbox" id="ytEmb"> Address bar me YouTube link daalo to yahin player me chalao</label>'
-+'<label class="opt"><input type="checkbox" id="ytDir"> Effects mode: video ko direct stream bana ke Nova ke normal player me chalao (saare effects chalte hain; na mile to embed)</label>'
-+'<div class="yrow"><button class="yb" id="ytDl">&#11015; Download video</button><button class="yb" id="ytCob">&#9881; Cobalt server</button></div>'
-+'<div class="yrow"><button class="yb go" id="ytSrv">&#128421; Mera server (100% tareeka)</button></div>'
-+'<div class="opt" style="opacity:.6;font-size:11px">Build: YT-SRV-3 (server + fallback)</div>'
-+'<div class="opt" style="margin:6px 0 2px">Saved YouTube (hamesha save rehta hai):</div><div id="ytList"></div>';
-const qc=$('#quickControls'),yq=document.createElement('button');yq.id='ytOutBtn';yq.title='YouTube par kholo (sirf YouTube video ke liye)';yq.innerHTML='&#8599;';yq.style.display='none';qc.insertBefore(yq,qc.firstChild);
-const _cp=window.closePanels;window.closePanels=function(){_cp&&_cp();panel.classList.remove('open')};
-
-/* ---- saved list ---- */
-function render(){const L=$('#ytList');L.innerHTML='';if(!YL.length){L.innerHTML='<div class="panel-empty">Abhi koi saved link nahi. Upar link daalke Play dabao — apne aap save ho jayega.</div>';return}
- YL.forEach((x,i)=>{const r=document.createElement('div');r.className='panel-row';r.innerHTML='<span class="link">'+(x.list&&!x.id?'&#128195; ':'&#9654; ')+esc(x.n)+'</span><button title="Hatao">&times;</button>';
-  r.querySelector('.link').onclick=()=>{panel.classList.remove('open');openYT({id:x.id,list:x.list},true)};
-  r.querySelector('button').onclick=()=>{YL.splice(i,1);SV('novaYtList',YL);render()};L.appendChild(r)})}
-async function save(q){const k=kOf(q);if(YL.some(x=>x.k===k))return;const e={k,id:q.id||null,list:q.list||null,n:q.list&&!q.id?'YouTube playlist '+q.list.slice(-6):'YouTube video '+q.id};YL.unshift(e);SV('novaYtList',YL);render();
- try{const r=await fetch('https://www.youtube.com/oembed?format=json&url='+encodeURIComponent(urlOf(q)));if(r.ok){const j=await r.json();if(j.title&&/^YouTube /.test(e.n)){e.n=j.title.slice(0,70);SV('novaYtList',YL);render()}}}catch(x){}}
-function ytName(q,t){const e=YL.find(x=>x.k===kOf(q));if(t&&e&&/^YouTube /.test(e.n)){e.n=t.slice(0,70);SV('novaYtList',YL);render()}}
-
-/* ---- YT IFrame API ---- */
-function api(){return apiP||(apiP=new Promise((res,rej)=>{if(window.YT&&YT.Player)return res();const o=window.onYouTubeIframeAPIReady;window.onYouTubeIframeAPIReady=()=>{o&&o();res()};
- const s=document.createElement('script');s.src='https://www.youtube.com/iframe_api';s.onerror=()=>{apiP=null;rej()};document.head.append(s);setTimeout(()=>{apiP=null;rej()},10000)}))}
-
-/* ---- <video> jaisa shim: Nova ka poora player (seek bar, gestures, speed, mute, loop, filters, rotate/flip/zoom, aspect) isi se chalta hai ---- */
-const QH={tiny:144,small:240,medium:360,large:480,hd720:720,hd1080:1080,hd1440:1440,hd2160:2160,highres:2160};
-function mkShim(tab,q){const el=tab.el,S=tab._ys={state:-1,dur:0,loop:!!settings.loop,meta:false,lastT:-1,err:false};
- const P=()=>tab._yp,ok=()=>{try{return P()&&P().getPlayerState!==undefined&&S.ready}catch(e){return false}};
- const g=(f,d)=>{try{return ok()?f(P()):d}catch(e){return d}};
- const def=(o)=>Object.keys(o).forEach(k=>Object.defineProperty(el,k,Object.assign({configurable:true},o[k])));
- def({
-  currentTime:{get:()=>g(p=>p.getCurrentTime()||0,0),set:v=>{g(p=>p.seekTo(Math.max(0,+v||0),true));el.dispatchEvent(new Event('timeupdate'))}},
-  duration:{get:()=>g(p=>p.getDuration()||0,0)},
-  paused:{get:()=>!(S.state===1||S.state===3)},
-  ended:{get:()=>S.state===0},
-  volume:{get:()=>g(p=>p.getVolume()/100,1),set:v=>g(p=>p.setVolume(Math.round(Math.max(0,Math.min(1,+v))*100)))},
-  muted:{get:()=>g(p=>p.isMuted(),false),set:v=>g(p=>v?p.mute():p.unMute())},
-  playbackRate:{get:()=>g(p=>p.getPlaybackRate(),1),set:v=>g(p=>{const r=p.getAvailablePlaybackRates()||[1];let b=r[0];r.forEach(x=>{if(Math.abs(x-v)<Math.abs(b-v))b=x});p.setPlaybackRate(b);el.dispatchEvent(new Event('ratechange'))})},
-  loop:{get:()=>S.loop,set:v=>{S.loop=!!v;g(p=>{if(tab._yq.list)p.setLoop(!!v)})}},
-  src:{get:()=>urlOf(tab._yq),set:v=>{}},currentSrc:{get:()=>urlOf(tab._yq)},
-  readyState:{get:()=>S.ready?4:0},error:{get:()=>null},
-  videoHeight:{get:()=>g(p=>QH[p.getPlaybackQuality()]||720,720)},videoWidth:{get:()=>Math.round(el.videoHeight*16/9)},
-  buffered:{get:()=>({length:1,start:()=>0,end:()=>g(p=>(p.getDuration()||0)*p.getVideoLoadedFraction(),0)})},
-  seekable:{get:()=>({length:1,start:()=>0,end:()=>el.duration})}
- });
- el.play=()=>{g(p=>p.playVideo());return Promise.resolve()};el.pause=()=>{g(p=>p.pauseVideo())};el.load=()=>{};
- el.requestPictureInPicture=()=>Promise.reject(new Error('no pip'));
- /* events */
- const fire=n=>el.dispatchEvent(new Event(n));
- S.fire=fire;
- tab._yi=setInterval(()=>{if(!ok())return;const t=el.currentTime;if(t!==S.lastT){S.lastT=t;fire('timeupdate')}
-  const d=el.duration;if(d&&d!==S.dur){S.dur=d;fire('durationchange');if(!S.meta){S.meta=true;fire('loadedmetadata')}}},250);
- return S}
-function ytFail(tab,q,why){const el=tab.el;try{tab._yp&&tab._yp.destroy()}catch(e){}tab._yp=null;if(tab._ys)tab._ys.ready=false;
- el.innerHTML='<div class="ytfb"><div>&#9888; '+esc(why)+'<br>Yahan nahi chal raha, par YouTube par chalega.</div><a target="_blank" rel="noopener" href="'+urlOf(q)+'">&#9654; YouTube par kholo</a></div>'}
-function killYT(tab){clearInterval(tab._yi);clearTimeout(tab._yf);try{tab._yp&&tab._yp.destroy()}catch(e){}tab._yp=null}
-
-function openYT(q,fromList){if(!q||(!q.id&&!q.list))return toast('Sahi YouTube link daalo');
- try{document.querySelectorAll('.stage video').forEach(v=>v.pause())}catch(e){}
- const old=tabs.filter(t=>t.yt);
- tabCounter++;const id='tab'+tabCounter;
- const el=document.createElement('div');el.className='ytshim';el.id=id;$('#stage').appendChild(el);
- const pid=id+'_p';el.innerHTML='<div id="'+pid+'"></div>';
- const tab={id,el,canvas:null,gl:null,isVideo:true,yt:true,_yq:q,history:[urlOf(q)],historyIndex:0,title:'YouTube',desktopMode:false,rotation:0,flipped:false,zoomScale:1,panX:0,panY:0,gestureBrightness:1,aspect:'fit',audioCtx:null,gainNode:null,sourceNode:null,isLocalFile:false};
- tabs.push(tab);const S=mkShim(tab,q);
- /* Nova ke apne listeners (play/pause/timeupdate/ended UI) */
- bindVideoElementEvents(tab);
- activateTab(id);
- old.forEach(t=>closeTab(t.id));
- if(!fromList)save(q);
- api().then(()=>{
-  const vars={autoplay:1,playsinline:1,rel:0,modestbranding:1,controls:0,disablekb:1,fs:0,iv_load_policy:3};if(q.list){vars.list=q.list;if(!q.id)vars.listType='playlist'}
-  tab._yp=new YT.Player(pid,{width:'100%',height:'100%',host:'https://www.youtube-nocookie.com',videoId:q.id||undefined,playerVars:vars,events:{
-   onReady:e=>{clearTimeout(tab._yf);S.ready=true;try{e.target.playVideo();if(q.list&&S.loop)e.target.setLoop(true)}catch(x){}
-     try{e.target.setPlaybackQuality(YQ)}catch(x){}applyAspect(tab,tab.aspect||'fit');
-     S.fire('loadedmetadata');refreshPlaybackUIForTab(tab);refreshTransportUI(tab)},
-   onStateChange:e=>{const s=e.data;S.state=s;
-     if(s===1){S.fire('play');S.fire('playing');if(!S.qset){S.qset=1;try{tab._yp.setPlaybackQuality(YQ)}catch(x){}}}else if(s===2)S.fire('pause');
-     else if(s===0){if(S.loop&&!q.list){try{tab._yp.seekTo(0);tab._yp.playVideo()}catch(x){}}else S.fire('ended')}
-     try{const d=tab._yp.getVideoData()||{};if(d.title)ytName(q,d.title)}catch(x){}
-     if(tab.id===activeTabId)refreshTransportUI(tab)},
-   onPlaybackQualityChange:()=>{S.fire('resize')},
-   onError:e=>{const c=e.data;
-     if(q.list&&(c===100||c===101||c===150)&&(S.skips=(S.skips||0)+1)<=5){try{tab._yp.nextVideo();return}catch(x){}}
-     ytFail(tab,q,c===153?'Page ka origin YouTube ko nahi mila (file se khola hai? https par host karo).':c===100?'Video private ya hata diya gaya hai.':(c===101||c===150)?'Video owner ne embed band kiya hua hai.':'Video play nahi ho paya (code '+c+').')}}});
-  tab._yf=setTimeout(()=>{if(!S.ready)ytFail(tab,q,'Player load nahi hua.')},12000)
- }).catch(()=>ytFail(tab,q,'YouTube player load nahi ho paya (internet ya blocker).'))}
-
-/* ---- Effects mode: YouTube ko cobalt se direct stream bana ke normal Nova video tab me chalao ---- */
-async function ytDirect(q){if(!q||!q.id||q.list)return false;toast('Direct stream ban rahi hai (effects ke liye)…');
- try{const log=[];const u=await tmo(ytResolveAny(q.id,log),16000);
-  if(!u){try{NovaDebug.warn('play','YouTube direct stream fail: '+log.join(' | '),q.id)}catch(x){}return false}
-  try{document.querySelectorAll('.stage video').forEach(v=>v.pause())}catch(e){}
-  const old=tabs.filter(t=>t.yt);save(q);createTab(u,true,{});old.forEach(t=>closeTab(t.id));return true}
- catch(e){try{NovaDebug.warn('play','YouTube direct stream fail: '+(e&&e.message),q.id)}catch(x){}return false}}
-const _oy=openYT;
-openYT=function(q,fromList,force){if(!DIR||force||!q||!q.id||q.list)return _oy(q,fromList);
- ytDirect(q).then(ok=>{if(!ok){toast('Direct stream nahi mili — embed player me chala raha hoon (effects limited ho sakte hain)');_oy(q,fromList)}})};
-const _yf0=ytFail;
-ytFail=function(tab,q,why){_yf0(tab,q,why);try{const fb=tab.el.querySelector('.ytfb');if(!fb||!q.id||q.list)return;
- const b=document.createElement('button');b.className='yb go';b.style.pointerEvents='auto';b.innerHTML='&#9889; Direct stream se chalao (effects ke saath)';
- b.onclick=()=>{b.disabled=true;b.textContent='Ban rahi hai…';ytDirect(q).then(ok=>{if(!ok){b.disabled=false;b.innerHTML='&#9889; Direct nahi mili — dobara try';toast('Direct stream nahi mili (cobalt busy/down ho sakta hai)')}})};
- fb.appendChild(b)}catch(e){}};
-
-/* ---- Nova ke functions ko YouTube tab ke liye theek karo ---- */
-const QPX={highres:2160,hd2160:2160,hd1440:1440,hd1080:1080,hd720:720,large:480,medium:360,small:240,tiny:144};
-const QNAME={highres:'Highest (4K tak)',hd2160:'2160p 4K',hd1440:'1440p',hd1080:'1080p HD',hd720:'720p',large:'480p',medium:'360p',small:'240p',tiny:'144p'};
-/* YouTube embed apni quality iframe ke size se chunta hai — isliye iframe ko quality ke hisaab se bada banake screen me fit karte hain */
-function ytLayout(tab){const f=tab&&tab.el.querySelector('iframe');if(!f)return;const mode=tab.aspect||'fit';
- const H=QPX[YQ]||2160,W=Math.round(H*16/9),st=$('#stage'),sw=st.clientWidth||1,sh=st.clientHeight||1;
- const w0=Math.min(sw,sh*16/9),h0=w0*9/16;let sx=w0/W,sy=h0/H;
- if(mode==='crop'){sx=sy=Math.max(sw/W,sh/H)}
- else if(mode==='stretch'){sx=sw/W;sy=sh/H}
- else if(mode==='4:3'){sx=Math.min(sw,sh*4/3)/W;sy=Math.min(sh,sw*3/4)/H}
- f.style.width=W+'px';f.style.height=H+'px';f.style.marginLeft=(-W/2)+'px';f.style.marginTop=(-H/2)+'px';
- f.style.transform='scale('+sx+','+sy+')'}
-const _aa=window.applyAspect;
-window.applyAspect=function(tab,mode){if(!tab||!tab.yt)return _aa(tab,mode);
- tab.aspect=mode;ytLayout(tab);
- document.querySelectorAll('#aspectMenu button').forEach(b=>b.classList.toggle('active-toggle',b.dataset.aspect===mode))};
-addEventListener('resize',()=>{const t=ytTab();if(t)ytLayout(t)});
-/* quality menu */
-const qm=document.createElement('div');qm.className='float-menu';qm.id='ytQMenu';$('#aspectMenu').after(qm);
-const qb=document.createElement('button');qb.id='ytQBtn';qb.title='YouTube quality';qb.style.cssText='font-size:11px;font-weight:700;display:none';qb.textContent='HD';qc.insertBefore(qb,qc.firstChild);
-function setQ(q){YQ=q;SV('novaYtQ',q);const t=ytTab();if(!t)return;
- try{t._yp.setPlaybackQuality(q==='highres'?'highres':q)}catch(e){}
- ytLayout(t);toast('Quality: '+(QNAME[q]||q)+' (YouTube video ke hisaab se milegi)');setTimeout(()=>t._ys&&t._ys.fire('resize'),1500)}
-function buildQ(){const t=ytTab();let av=[];try{av=t._yp.getAvailableQualityLevels()||[]}catch(e){}
- const order=['highres','hd2160','hd1440','hd1080','hd720','large','medium','small','tiny'];
- const list=['highres'].concat(order.slice(1).filter(k=>!av.length||av.indexOf(k)>=0||k===YQ));
- qm.innerHTML='';list.forEach(k=>{const b=document.createElement('button');b.textContent=QNAME[k];b.className=k===YQ?'active-toggle':'';b.onclick=()=>{setQ(k);qm.classList.remove('visible')};qm.appendChild(b)})}
-qb.onclick=()=>{const w=!qm.classList.contains('visible');closeFloatMenus();if(w){buildQ();qm.classList.add('visible')}};
-$('#qualityLabel').addEventListener('click',()=>{if(ytTab())qb.click()});$('#qualityLabel').style.cursor='pointer';
-const _cf=window.closeFloatMenus;window.closeFloatMenus=function(){_cf();qm.classList.remove('visible')};
-const _ug=window.updateGradingForActiveTab;window.updateGradingForActiveTab=function(){const t=getTab(activeTabId);if(t&&t.yt){tabs.forEach(x=>{if(x.isVideo&&!x.yt&&x.canvas)try{setGradingVisible(x,false)}catch(e){}});return}return _ug.apply(this,arguments)};
-const _sg=window.setGradingVisible;if(_sg)window.setGradingVisible=function(t){if(t&&t.yt)return;return _sg.apply(this,arguments)};
-const _gp=window.getPreviewVideoFor;window.getPreviewVideoFor=function(t){return t&&t.yt?null:_gp(t)};
-const _ct=window.closeTab;window.closeTab=function(id){const t=getTab(id);if(t&&t.yt)killYT(t);return _ct(id)};
-const _lu=window.loadUrl;window.loadUrl=function(id,raw,n){const t=getTab(id);if(t&&t.yt){const q=parse(raw);if(q.id||q.list)return openYT(q);createTab();return _lu(activeTabId,raw,n)}return _lu(id,raw,n)};
-const _rt=window.refreshTransportUI;window.refreshTransportUI=function(tab){_rt(tab);if(tab&&tab.yt&&tab._yq.list){$('#prevBtn').disabled=false;$('#nextBtn').disabled=false}};
-const _ev=window.ensureAudioGraph;window.ensureAudioGraph=function(t){if(t&&t.yt)return;return _ev(t)};
-['prevBtn','nextBtn'].forEach(n=>$('#'+n).addEventListener('click',e=>{const t=ytTab();if(!t||!t._yq.list||!t._yp)return;e.stopImmediatePropagation();try{n==='prevBtn'?t._yp.previousVideo():t._yp.nextVideo()}catch(x){}},true));
-$('#pipBtn').addEventListener('click',e=>{if(!ytTab())return;e.stopImmediatePropagation();toast('YouTube player me PiP nahi chalta — ↗ se YouTube kholo')},true);
-$('#fastLoadBtn').addEventListener('click',e=>{const t=ytTab();if(!t)return;e.stopImmediatePropagation();ytDownload(t._yq)},true);
-$('#enhanceBtnPlayer').addEventListener('click',()=>{if(ytTab()&&!warned){warned=true;toast('YouTube embed par effects limited hain. Pura effects ke liye YouTube panel me Effects mode ON rakho (direct stream).')}},true);
-yq.onclick=()=>{const t=ytTab();if(t)window.open(urlOf(t._yq),'_blank')};
-const _act=window.activateTab;window.activateTab=function(id){const r=_act(id);yq.style.display=ytTab()?'':'none';qb.style.display=ytTab()?'':'none';dlq.style.display=ytTab()?'':'none';return r};
-
-/* ---- panel events ---- */
-btn.onclick=()=>{const w=!panel.classList.contains('open');window.closePanels();if(w){render();panel.classList.add('open');$('#ytEmb').checked=EMB;$('#ytDir').checked=DIR;setTimeout(()=>$('#ytIn').focus(),50)}};
-$('#ytGo').onclick=()=>{const q=parse($('#ytIn').value);if(!q.id&&!q.list)return toast('Sahi YouTube link daalo');$('#ytIn').value='';panel.classList.remove('open');openYT(q)};
-$('#ytIn').addEventListener('keydown',e=>{if(e.key==='Enter')$('#ytGo').click()});
-$('#ytPaste').onclick=async()=>{try{const t=await navigator.clipboard.readText();$('#ytIn').value=t;const q=parse(t);if(q.id||q.list)$('#ytGo').click()}catch(e){toast('Paste nahi hua — box me long-press karke paste karo')}};
-$('#ytPop').onclick=()=>{const q=parse($('#ytIn').value);if(!q.id&&!q.list)return toast('Pehle link daalo');window.open(urlOf(q),'_blank')};
-/* ---- Download: cobalt -> Piped -> Invidious, har step ka error dikhao ---- */
-const PIPED=['https://pipedapi.kavin.rocks','https://pipedapi.adminforge.de','https://api.piped.private.coffee','https://pipedapi.leptons.xyz'];
-const INVID=['https://yewtu.be','https://inv.nadeko.net','https://invidious.nerdvpn.de','https://invidious.privacyredirect.com'];
-const tmo=(p,ms)=>Promise.race([p,new Promise((_,j)=>setTimeout(()=>j(new Error('timeout')),ms))]);
-async function jget(u){let first;
- try{const r=await tmo(fetch(u,{headers:{Accept:'application/json'}}),9000);if(!r.ok)throw new Error('HTTP '+r.status);return await r.json()}catch(e){first=e}
- if(/^HTTP/.test(first&&first.message||''))throw first;
- try{const r=await tmo(fetch('https://api.allorigins.win/raw?url='+encodeURIComponent(u)),12000);if(!r.ok)throw new Error('HTTP '+r.status);return await r.json()}
- catch(e){throw new Error((first&&first.message||'fail')+' (proxy: '+(e&&e.message||e)+')')}}
-async function ytResolveAny(id,log){const page='https://www.youtube.com/watch?v='+id;
- let srv='';try{srv=(localStorage.getItem('novaYtServer')||'').trim().replace(/\/+$/,'')}catch(e){}
- if(srv){try{const r=await tmo(fetch(srv+'/health'),4000);if(!r.ok)throw new Error('HTTP '+r.status);return srv+'/stream?id='+id}catch(e){log.push('mera server ('+srv+'): '+(e&&e.message||e))}}
- const jobs=[(async()=>{const r=await tmo(resolveViaCobalt(page),20000);if(r&&r.url)return r.url;throw new Error('khali jawab')})().catch(e=>{log.push('cobalt: '+(e&&e.message||e));throw e})];
- PIPED.forEach(b=>jobs.push((async()=>{const d=await jget(b+'/streams/'+id);
-   const m=(d.videoStreams||[]).filter(v=>!v.videoOnly&&v.url);m.sort((x,y)=>(y.height||0)-(x.height||0));if(m[0])return m[0].url;if(d.hls)return d.hls;throw new Error('muxed stream nahi mili')})().catch(e=>{log.push(new URL(b).host+': '+(e&&e.message||e));throw e})));
- INVID.forEach(b=>jobs.push((async()=>{const d=await jget(b+'/api/v1/videos/'+id+'?local=true');
-   const f=(d.formatStreams||[]).filter(x=>x.url);f.sort((x,y)=>parseInt(y.resolution||0)-parseInt(x.resolution||0));if(f[0])return f[0].url.startsWith('http')?f[0].url:b+f[0].url;throw new Error('stream nahi mili')})().catch(e=>{log.push(new URL(b).host+': '+(e&&e.message||e));throw e})));
- try{return await Promise.any(jobs)}catch(e){return null}}
-async function ytDownload(q){if(!q||!q.id)return toast('Download ke liye single video ka link chahiye');
- openDirectDlOverlay('');const st=document.getElementById('directDlStatus'),inp=document.getElementById('directDlUrlInput');
- inp.value=urlOf({id:q.id});st.className='extract-status';st.textContent='Servers se direct link la raha hoon…';
- const log=[];const u=await ytResolveAny(q.id,log);
- if(!u){st.className='extract-status error';st.textContent='YouTube link nahi mil paya. Wajah: '+log.join(' | ')+'. Fix: nova_yt_server.py chalao aur 🖥 Mera server me uska URL daalo.';return}
- inp.value=u;st.textContent='Link mil gaya — download shuru…';setTimeout(()=>{const g=document.getElementById('directDlGoBtn');if(g)g.click()},100)}
-$('#ytDl').onclick=()=>{let q=parse($('#ytIn').value);if(!q.id){const t=ytTab();q=t?t._yq:{}}if(!q||!q.id)return toast('Pehle link daalo ya video chalao');panel.classList.remove('open');ytDownload(q)};
-$('#ytSrv').onclick=()=>{const u=prompt('Apne Nova YT server ka URL (jaise http://192.168.1.5:8787). Khali = band.',localStorage.getItem('novaYtServer')||'');if(u===null)return;
- try{localStorage.setItem('novaYtServer',u.trim())}catch(e){}toast(u.trim()?'Mera server save ho gaya':'Mera server band')};
-$('#ytCob').onclick=()=>{const u=prompt('Apna cobalt API server URL (khali = default). Public servers aksar band hote hain; apna host kiya hua best.',localStorage.getItem('novaCobaltUrl')||'');if(u===null)return;
- const k=u?prompt('API key (agar server maangta hai, warna khali):',localStorage.getItem('novaCobaltKey')||''):'';
- try{localStorage.setItem('novaCobaltUrl',u.trim());localStorage.setItem('novaCobaltKey',(k||'').trim())}catch(e){}toast(u.trim()?'Cobalt server save ho gaya':'Default cobalt servers use honge')};
-const dlq=document.createElement('button');dlq.id='ytDlBtn';dlq.title='Is YouTube video ko download karo';dlq.innerHTML='&#11015;';dlq.style.display='none';qc.insertBefore(dlq,qc.firstChild);
-dlq.onclick=()=>{const t=ytTab();if(t)ytDownload(t._yq)};
-$('#ytEmb').onchange=e=>{EMB=e.target.checked;SV('novaYtEmbed',EMB)};
-$('#ytDir').onchange=e=>{DIR=e.target.checked;SV('novaYtDirect',DIR)};
-function grab(e){if(!EMB)return false;const v=$('#urlInput').value,q=parse(v);if((q.id||q.list)&&/[\/.]/.test(v)){e.preventDefault();e.stopImmediatePropagation();$('#urlInput').blur();openYT(q);return true}return false}
-$('#urlInput').addEventListener('keydown',e=>{if(e.key==='Enter')grab(e)},true);
-$('#goBtn').addEventListener('click',grab,true);
-$('#urlInput').addEventListener('search',grab,true);
-render();
-})();
-</script>
-
 </body>
 </html>
