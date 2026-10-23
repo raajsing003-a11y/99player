@@ -3,13 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nova Browser 1.9</title>
-<meta name="description" content="A private in-app browser with fast video download and offline playback.">
-<meta name="theme-color" content="#121212">
+<title>Studytube</title>
+<meta name="description" content="Studytube — study videos, notes aur offline learning, sab ek jagah.">
+<meta name="theme-color" content="#0b0d17">
+<meta name="application-name" content="Studytube">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Nova">
+<meta name="apple-mobile-web-app-title" content="Studytube">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png" sizes="192x192" type="image/png">
 <link rel="icon" href="icon-512.png" sizes="512x512" type="image/png">
@@ -19,11 +20,11 @@
   html, body { margin:0; padding:0; height:100%; overflow:hidden; }
   body {
     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-    background:#121212; color:#eee;
+    background:#0b0d17; color:#eee;
   }
   .app {
     display:flex; flex-direction:column; height:100vh; height:100dvh;
-    background:#121212;
+    background:#0b0d17;
   }
   .app.player-mode .tabbar,
   .app.player-mode .toolbar,
@@ -75,7 +76,7 @@
   }
   .kids-badge {
     position:relative; z-index:2;
-    background:rgba(217,119,87,0.85); color:#fff; font-size:10.5px;
+    background:rgba(124,108,255,0.85); color:#fff; font-size:10.5px;
     padding:0 10px; height:42px; border-radius:21px; display:none;
     align-items:center; flex-shrink:0; white-space:nowrap;
   }
@@ -127,7 +128,7 @@
     position:absolute; bottom:22px; right:16px; z-index:6;
     display:none; align-items:center; gap:6px;
     padding:12px 18px; border-radius:26px; border:none;
-    background:#d97757; color:#fff; font-size:13.5px; font-weight:600;
+    background:#7c6cff; color:#fff; font-size:13.5px; font-weight:600;
     cursor:pointer; box-shadow:0 4px 14px rgba(0,0,0,0.4);
     backdrop-filter:blur(6px);
   }
@@ -149,7 +150,7 @@
   }
   .tabbar-brand .logo-dot {
     width:7px; height:7px; border-radius:50%;
-    background:conic-gradient(from 200deg,#d97757,#e8c07d,#7ab8d9,#8e7ad9,#d97757);
+    background:conic-gradient(from 200deg,#7c6cff,#e8c07d,#7ab8d9,#8e7ad9,#7c6cff);
     flex-shrink:0;
   }
   .app.player-mode .tabbar-brand, .app.immersive-mode .tabbar-brand { display:none; }
@@ -160,7 +161,7 @@
     cursor:pointer; flex-shrink:0; border:1px solid transparent; border-bottom:none;
   }
   .tab.active { background:#2f2f2f; color:#fff; border-color:#3a3a3a; }
-  .tab.video-tab.active { border-bottom:2px solid #d97757; margin-bottom:-1px; }
+  .tab.video-tab.active { border-bottom:2px solid #7c6cff; margin-bottom:-1px; }
   .tab-icon { flex-shrink:0; font-size:11px; opacity:.85; }
   .tab-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:95px; }
   .tab-close { opacity:.5; padding:0 2px; font-size:14px; }
@@ -189,7 +190,7 @@
   }
   .icon-btn:active { background:#4a4a4a; }
   .icon-btn:disabled { opacity:.3; cursor:default; }
-  .icon-btn.active-toggle { background:#d97757; color:#fff; }
+  .icon-btn.active-toggle { background:#7c6cff; color:#fff; }
   #downloadsBtn, #offlineBtn { background:#3d3327; box-shadow:inset 0 0 0 1px #6b4a2a; }
   #maskModeBtn.active-toggle { background:#7a5cd9; }
   .url-wrap { position:relative; flex:1 1 auto; min-width:0; display:flex; }
@@ -206,7 +207,7 @@
     color:#ccc; font-size:15px; cursor:pointer; display:flex; align-items:center; justify-content:center;
   }
   .url-copy-btn:active { background:rgba(255,255,255,0.12); }
-  .url-copy-btn.copied { color:#d97757; }
+  .url-copy-btn.copied { color:#7c6cff; }
   .toolbar select#engineSelect {
     padding:10px 6px; border-radius:14px; border:none;
     background:#454545; color:#ddd; font-size:11px; max-width:96px; flex-shrink:0;
@@ -214,7 +215,7 @@
   .toolbar-row2 { display:flex; gap:6px; width:100%; }
   .go-btn {
     flex:1 1 auto; padding:10px 20px; border-radius:20px; border:none;
-    background:#d97757; color:#fff; font-size:14px; font-weight:600; cursor:pointer;
+    background:#7c6cff; color:#fff; font-size:14px; font-weight:600; cursor:pointer;
   }
   .go-btn.secondary-go { background:#1a9e8f; }
   #status {
@@ -264,14 +265,14 @@
   .empty-tab-hint {
     position:absolute; inset:0; display:flex; flex-direction:column;
     overflow-y:auto; -webkit-overflow-scrolling:touch;
-    background:linear-gradient(165deg,#2b2140 0%,#1c1c2e 38%,#121212 78%);
+    background:linear-gradient(165deg,#2b2140 0%,#1c1c2e 38%,#0b0d17 78%);
     padding-bottom:24px;
   }
   .home-header { padding:30px 22px 4px; }
   .home-title { display:flex; align-items:center; gap:10px; font-size:24px; font-weight:800; color:#fff; }
   .home-title .logo-dot {
     width:28px; height:28px; border-radius:50%; flex-shrink:0;
-    background:conic-gradient(from 200deg,#d97757,#e8c07d,#7ab8d9,#8e7ad9,#d97757);
+    background:conic-gradient(from 200deg,#7c6cff,#e8c07d,#7ab8d9,#8e7ad9,#7c6cff);
   }
   .home-search {
     margin:18px 20px 0; display:flex; align-items:center; gap:10px;
@@ -306,7 +307,7 @@
     color:#fff; font-size:13px; cursor:pointer; display:flex; align-items:center; justify-content:center;
     backdrop-filter:blur(6px);
   }
-  .quick-controls button.active-toggle { background:#d97757; }
+  .quick-controls button.active-toggle { background:#7c6cff; }
   .quick-controls button:active { background:rgba(255,255,255,0.25); }
 
   /* Bottom custom transport bar */
@@ -343,7 +344,7 @@
   .seek-row { display:flex; align-items:center; gap:8px; position:relative; }
   .seek-row span { font-size:11px; color:#ddd; min-width:36px; text-align:center; flex-shrink:0; }
   .seek-row input[type="range"] {
-    flex:1; accent-color:#d97757; height:20px;
+    flex:1; accent-color:#7c6cff; height:20px;
   }
   .transport-row { display:flex; align-items:center; justify-content:center; gap:18px; }
   .transport-row button {
@@ -375,7 +376,7 @@
   .lock-ring svg { position:absolute; inset:0; width:26px; height:26px; transform:rotate(-90deg); }
   .lock-ring .ring-track { fill:none; stroke:rgba(255,255,255,0.12); stroke-width:3; }
   .lock-ring .ring-fill {
-    fill:none; stroke:#d97757; stroke-width:3; stroke-linecap:round;
+    fill:none; stroke:#7c6cff; stroke-width:3; stroke-linecap:round;
     stroke-dasharray:175.9; stroke-dashoffset:175.9;
   }
   .lock-ring .ring-fill.charging { transition:stroke-dashoffset 1.8s linear; }
@@ -405,7 +406,7 @@
   .gesture-bar-track {
     width:70px; height:4px; background:rgba(255,255,255,0.25); border-radius:2px; margin:6px auto 0;
   }
-  .gesture-bar-fill { height:100%; background:#d97757; border-radius:2px; }
+  .gesture-bar-fill { height:100%; background:#7c6cff; border-radius:2px; }
 
   /* Aspect / orientation dropdown menus */
   .float-menu {
@@ -418,7 +419,7 @@
     background:none; border:none; color:#eee; font-size:12.5px; text-align:left;
     padding:9px 10px; border-radius:8px; cursor:pointer;
   }
-  .float-menu button.active-toggle { background:#d97757; color:#fff; }
+  .float-menu button.active-toggle { background:#7c6cff; color:#fff; }
 
   /* ---------- Enhance sheet ---------- */
   .enhance-sheet {
@@ -433,7 +434,7 @@
     flex:1; padding:10px 4px; border:none; background:none; color:#999; font-size:11.5px; cursor:pointer;
     border-bottom:2px solid transparent;
   }
-  .enhance-tabs button.active { color:#fff; border-bottom-color:#d97757; }
+  .enhance-tabs button.active { color:#fff; border-bottom-color:#7c6cff; }
   .enhance-body {
     padding:10px 16px 16px; display:none; flex-direction:column; gap:18px; overflow-y:auto;
     flex:1 1 auto; min-height:0;
@@ -454,13 +455,13 @@
     background:none; border:none; color:#888; font-size:16px; line-height:1;
     padding:6px 7px; cursor:pointer; border-radius:6px;
   }
-  .slider-row .reset-btn:active { color:#d97757; background:rgba(217,119,87,0.15); }
+  .slider-row .reset-btn:active { color:#7c6cff; background:rgba(124,108,255,0.15); }
   /* touch-action:none is the actual fix for erratic/jumpy sliders on mobile:
      without it, the browser can't tell a horizontal slider-drag apart from a
      vertical list-scroll and sometimes hands the gesture to the wrong one,
      which is what caused values to jump or the wrong control to move. */
   .slider-row input[type="range"] {
-    width:100%; accent-color:#d97757; height:40px; touch-action:none;
+    width:100%; accent-color:#7c6cff; height:40px; touch-action:none;
     -webkit-tap-highlight-color:transparent;
   }
   .slider-row input[type="range"]::-webkit-slider-thumb {
@@ -476,7 +477,7 @@
     flex:1; padding:9px; border-radius:14px; border:none;
     background:#333; color:#eee; font-size:12.5px; cursor:pointer; min-width:70px;
   }
-  .row-buttons button.primary { background:#d97757; }
+  .row-buttons button.primary { background:#7c6cff; }
   .row-buttons button.active-toggle { background:#4a7c59; }
   .presets { display:flex; gap:6px; flex-wrap:wrap; }
   .presets button {
@@ -490,7 +491,7 @@
     padding:7px 11px; border-radius:10px; border:none; background:#2a2a2a; color:#ddd;
     font-size:12px; cursor:pointer;
   }
-  .speed-row button.active-toggle { background:#d97757; color:#fff; }
+  .speed-row button.active-toggle { background:#7c6cff; color:#fff; }
 
   #fileInput { display:none; }
 
@@ -507,7 +508,7 @@
   .install-banner-title { font-size:13.5px; font-weight:600; color:#fff; }
   .install-banner-sub { font-size:11px; color:#999; margin-top:2px; line-height:1.4; }
   .install-banner-btn {
-    background:#d97757; color:#fff; border:none; border-radius:12px;
+    background:#7c6cff; color:#fff; border:none; border-radius:12px;
     padding:9px 14px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0;
   }
   .install-banner-close {
@@ -533,9 +534,9 @@
     padding:11px 14px; border-radius:14px; border:1px solid #3a3a3a;
     background:#2a2a2a; color:#fff; font-size:14px; outline:none;
   }
-  .extract-card input[type="url"]:focus { border-color:#d97757; }
+  .extract-card input[type="url"]:focus { border-color:#7c6cff; }
   .extract-status {
-    font-size:12px; color:#d97757; min-height:16px; line-height:1.4;
+    font-size:12px; color:#7c6cff; min-height:16px; line-height:1.4;
     white-space:pre-wrap; word-break:break-all;
   }
   .extract-status.error { color:#e57373; }
@@ -545,7 +546,7 @@
     flex:1; padding:11px; border-radius:14px; border:none; font-size:13.5px; cursor:pointer;
   }
   .extract-buttons .secondary { background:#333; color:#eee; }
-  .extract-buttons .primary { background:#d97757; color:#fff; font-weight:600; }
+  .extract-buttons .primary { background:#7c6cff; color:#fff; font-weight:600; }
   .extract-buttons .primary:disabled { opacity:.5; cursor:default; }
   .extract-note { font-size:10.5px; color:#767676; line-height:1.5; margin-top:2px; }
 
@@ -557,13 +558,13 @@
     color:#eee; font-size:13px; cursor:pointer;
   }
   .quality-list .quality-row button.quality-pick:active { background:#333; }
-  .quality-list .quality-row button.quality-pick .badge { font-size:11px; color:#d97757; font-weight:600; }
+  .quality-list .quality-row button.quality-pick .badge { font-size:11px; color:#7c6cff; font-weight:600; }
   .quality-list .quality-row button.quality-copy {
     width:40px; height:40px; flex-shrink:0; border-radius:12px; border:1px solid #333;
     background:#262626; color:#ccc; font-size:15px; cursor:pointer;
   }
   .quality-list .quality-row button.quality-copy:active,
-  .quality-list .quality-row button.quality-copy.copied { background:#333; color:#d97757; }
+  .quality-list .quality-row button.quality-copy.copied { background:#333; color:#7c6cff; }
 
   /* ---------- Small transient toast (e.g. "Link copied") ---------- */
   .mini-toast {
@@ -622,7 +623,7 @@
   }
   .fastload-title { font-size:13.5px; color:#eee; text-align:center; }
   .fastload-bar-track { width:100%; height:8px; background:#333; border-radius:4px; overflow:hidden; }
-  .fastload-bar-fill { height:100%; width:0%; background:#d97757; transition:width .2s ease; }
+  .fastload-bar-fill { height:100%; width:0%; background:#7c6cff; transition:width .2s ease; }
   .fastload-pct { font-size:12px; color:#aaa; }
   .fastload-card .secondary { padding:9px 20px; border-radius:12px; border:none; background:#333; color:#eee; font-size:12.5px; cursor:pointer; }
 
@@ -657,7 +658,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser 1.1</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>Studytube</div>
   </div>
 
   <div class="toolbar">
@@ -673,6 +674,7 @@
     </div>
     <button class="icon-btn" id="directDlBtn" title="Direct download (no play needed)">&#11015;&#65039;</button>
     <button class="icon-btn" id="mainDebugBtn" title="Debug — why a page/video failed" style="position:relative;">&#128027;<span class="ndbg-badge" id="ndbgBadgeMain"></span></button>
+    <button class="icon-btn" id="moreBtn" title="Aur tools">&#8943;</button>
     <div class="extra-buttons">
       <button class="icon-btn" id="downloadsBtn" title="Downloads">&#8681;</button>
       <button class="icon-btn" id="offlineBtn" title="Offline library">&#128190;</button>
@@ -715,7 +717,8 @@
     <div class="refresh-indicator" id="refreshIndicator">&#8635;</div>
     <div class="empty-tab-hint" id="emptyHint">
       <div class="home-header">
-        <div class="home-title"><span class="logo-dot"></span>Nova Browser</div>
+        <div class="home-title"><span class="logo-dot"></span>Studytube</div>
+        <div class="home-tagline">Padho &middot; Dekho &middot; Offline seekho</div>
       </div>
       <div class="home-search" id="homeSearchBox"><span class="hs-icon">&#128269;</span>Search or type a URL</div>
       <div class="home-grid-card">
@@ -732,7 +735,7 @@
           <button class="home-shortcut" data-target="desktopBtn"><span class="circle" style="background:#4a4a4a">&#128421;</span><span class="label">Desktop</span></button>
         </div>
       </div>
-      <div class="home-hint-text">Search the web, paste a link, or open a video from your device.</div>
+      <div class="home-hint-text">Lecture search karo, link paste karo ya device se video kholo.</div>
     </div>
 
     <div class="player-top-left" id="playerTopLeft">
@@ -770,7 +773,7 @@
     <div class="extract-overlay" id="extractOverlay">
       <div class="extract-card">
         <div class="extract-title">Open video from a page link</div>
-        <div class="extract-sub">Paste a website link. Nova will try to find the video on that page and open it directly in the player.</div>
+        <div class="extract-sub">Paste a website link. Studytube will try to find the video on that page and open it directly in the player.</div>
         <input type="text" inputmode="url" id="extractUrlInput" placeholder="https://example.com/some-page" autocomplete="off" autocapitalize="off" autocorrect="off">
         <div class="extract-status" id="extractStatus"></div>
         <div class="quality-list" id="qualityList"></div>
@@ -1011,6 +1014,8 @@
     <button class="nav-item active" id="navHome"><span class="nav-icon">&#8962;</span>Home</button>
     <button class="nav-item" id="navDownloads"><span class="nav-icon">&#8681;</span>Downloads</button>
     <button class="nav-item" id="navFiles"><span class="nav-icon">&#128190;</span>Files</button>
+    <button class="nav-item" id="navPlayer"><span class="nav-icon">&#9654;&#65039;</span>Player</button>
+    <button class="nav-item" id="navLibrary"><span class="nav-icon">&#128218;</span>Library</button>
     <button class="nav-item" id="navTabs"><span class="nav-icon">&#9635;</span>Tabs</button>
     <button class="nav-item" id="navBookmarks"><span class="nav-icon">&#128278;</span>Saved</button>
   </div>
@@ -1019,13 +1024,74 @@
 <div class="install-banner" id="installBanner">
   <img src="icon-192.png" alt="" width="36" height="36">
   <div class="install-banner-text">
-    <div class="install-banner-title">Install Nova Browser</div>
+    <div class="install-banner-title">Install Studytube</div>
     <div class="install-banner-sub">Add to home screen for a full-screen, app-like experience.</div>
   </div>
   <button class="install-banner-btn" id="installBannerBtn">Install</button>
   <button class="install-banner-close" id="installBannerClose" title="Dismiss">&#10005;</button>
 </div>
 
+<style id="studytube-theme">
+:root{--st-bg:#0b0d17;--st-s1:#141829;--st-s2:#1c2136;--st-s3:#262c47;--st-ac:#7c6cff;--st-ac2:#ff5c8a;--st-tx:#eef0ff;--st-mu:#8e95b8}
+body,.app{background:var(--st-bg)!important;color:var(--st-tx)}
+.tabbar{background:var(--st-bg)!important;padding-top:max(8px,env(safe-area-inset-top))!important}
+.tabbar-brand{font-size:14px!important;letter-spacing:.3px;border-right-color:var(--st-s3)!important;background:linear-gradient(90deg,#a99cff,#ff8fb0);-webkit-background-clip:text;background-clip:text;color:transparent!important;-webkit-text-fill-color:transparent}
+.tabbar-brand .logo-dot{width:10px!important;height:10px!important;background:linear-gradient(135deg,var(--st-ac),var(--st-ac2))!important;box-shadow:0 0 10px rgba(124,108,255,.7)}
+.tab{background:var(--st-s1)!important;color:var(--st-mu)!important;border-radius:14px 14px 0 0!important}
+.tab.active{background:var(--st-s2)!important;color:#fff!important;border-color:var(--st-s3)!important}
+.new-tab-btn{background:var(--st-s2)!important;color:var(--st-tx)!important}
+.toolbar{background:var(--st-s2)!important;border-bottom:1px solid var(--st-s3)!important;box-shadow:0 6px 18px rgba(0,0,0,.35)}
+.extra-buttons{border-top-color:var(--st-s3)!important}
+.icon-btn{background:var(--st-s3)!important;transition:transform .12s,background .15s!important}
+.icon-btn:active{transform:scale(.9);background:#343b5e!important}
+.icon-btn.active-toggle{background:linear-gradient(135deg,var(--st-ac),var(--st-ac2))!important}
+#downloadsBtn,#offlineBtn{background:#2a2550!important;box-shadow:inset 0 0 0 1px #5b4fd6!important}
+.toolbar input[type=text]{background:var(--st-bg)!important;border:1px solid var(--st-s3)!important;font-size:15.5px!important;transition:border-color .2s,box-shadow .2s}
+.toolbar input[type=text]:focus{border-color:var(--st-ac)!important;box-shadow:0 0 0 3px rgba(124,108,255,.25)}
+.toolbar select#engineSelect{background:var(--st-s3)!important}
+.go-btn{background:linear-gradient(135deg,var(--st-ac),var(--st-ac2))!important;box-shadow:0 4px 14px rgba(124,108,255,.4);font-size:15px!important;padding:12px 20px!important}
+.panel{background:var(--st-s1)!important;border-bottom-color:var(--st-s3)!important}
+.folder-card{background:var(--st-s1)!important}
+.home-header{padding-top:max(34px,env(safe-area-inset-top))!important}
+.home-title{font-size:30px!important;letter-spacing:-.5px}
+.home-tagline{margin-top:6px;font-size:14px;color:var(--st-mu);letter-spacing:.3px}
+.empty-tab-hint{background:radial-gradient(120% 60% at 50% 0%,#1b1f3d 0%,var(--st-bg) 70%)!important}
+.home-search{background:var(--st-s2)!important;border:1px solid var(--st-s3)!important;border-radius:26px!important;padding-top:15px!important;padding-bottom:15px!important;font-size:15.5px!important;box-shadow:0 6px 20px rgba(0,0,0,.3)}
+.home-grid-card{background:var(--st-s1)!important;border:1px solid var(--st-s3);border-radius:22px!important}
+.home-shortcut{transition:transform .12s}
+.home-shortcut:active{transform:scale(.92)}
+.home-shortcut .circle{box-shadow:0 6px 14px rgba(0,0,0,.35);border-radius:18px!important}
+.home-shortcut .label{font-size:12.5px!important;color:var(--st-tx)!important}
+.home-hint-text{font-size:13px!important;color:var(--st-mu)!important}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+<style id="studytube-compact">
+.toolbar{gap:6px!important;padding:8px 8px 8px!important;flex-wrap:wrap!important}
+.toolbar-row2{display:contents!important}
+.url-wrap{order:1;flex:1 1 0!important}
+.go-btn{order:2;flex:0 0 62px!important;width:62px;padding:11px 0!important;border-radius:22px!important;font-size:14px!important}
+.nav-buttons{order:3}
+#directDlBtn{order:4}#mainDebugBtn{order:5}#moreBtn{order:6;background:var(--st-s3)!important}
+.toolbar.more-open #moreBtn{background:linear-gradient(135deg,var(--st-ac),var(--st-ac2))!important}
+.extra-buttons{order:7;display:none!important;width:100%;gap:8px!important;justify-content:flex-start}
+.toolbar.more-open .extra-buttons{display:flex!important}
+.icon-btn{width:38px!important;height:38px!important;font-size:15px!important}
+#fileInput{display:none}
+</style>
+<style id="studytube-polish">
+.bottom-nav{background:rgba(20,24,41,.96)!important;border-top:1px solid var(--st-s3)!important;backdrop-filter:blur(10px);justify-content:space-between!important;overflow-x:auto;scrollbar-width:none}
+.bottom-nav::-webkit-scrollbar{display:none}
+.nav-item{flex:1 1 0;min-width:58px;color:var(--st-mu)!important;font-size:11.5px!important;font-weight:600;padding:5px 4px!important;border-radius:14px;transition:background .15s,color .15s}
+.nav-item .nav-icon{font-size:21px!important}
+.nav-item.active{color:#fff!important;background:linear-gradient(135deg,rgba(124,108,255,.35),rgba(255,92,138,.25))}
+.uvh-head h2,.uvf-logo+h2{background:linear-gradient(90deg,#a99cff,#ff8fb0);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+*{scrollbar-width:thin;scrollbar-color:var(--st-s3) transparent}
+button{-webkit-tap-highlight-color:transparent}
+.panel-row,.folder-row{border-bottom-color:var(--st-s3)!important}
+.folder-row .fr-icon{background:var(--st-s3)!important}
+input,select,textarea{font-family:inherit}
+</style>
+<style id="studytube-nav5">#navTabs{display:none!important}.bottom-nav{overflow:visible!important}.nav-item{min-width:0!important;font-size:11px!important;white-space:nowrap}.nav-item .nav-icon{font-size:20px!important}</style>
 <script>
 /* ================= Debug panel ================= */
 // Live diagnostic log for the two things people most often ask "why did
@@ -1490,7 +1556,7 @@ function playOfflineVideo(item) {
   }
 }
 
-// Nova (like every phone browser) simply cannot decode a raw MPEG-TS blob
+// Studytube (like every phone browser) simply cannot decode a raw MPEG-TS blob
 // itself — that's a codec-support limit, not a bug that can be fixed here.
 // What we CAN do is stop dead-ending at an alert and instead hand the file
 // off to something that can actually play it: the phone's own share sheet
@@ -1743,7 +1809,8 @@ function activateTab(id) {
 function updateEmptyHint() {
   const tab = getTab(activeTabId);
   const hint = document.getElementById('emptyHint');
-  const showHint = !tab || (!tab.isVideo && tab.historyIndex < 0) || (tab.isVideo && !tab.el.src);
+  const curU = tab && tab.history ? String(tab.history[tab.historyIndex] && (tab.history[tab.historyIndex].url || tab.history[tab.historyIndex]) || '') : '';
+  const showHint = !tab || (!tab.isVideo && (tab.historyIndex < 0 || curU === 'about:blank' || curU === '')) || (tab.isVideo && !tab.el.src);
   hint.style.display = showHint ? 'flex' : 'none';
   updateGrabVideoBtn();
 }
@@ -2022,7 +2089,7 @@ function updateNavButtons() {
 
 function renderTabbar() {
   const bar = document.getElementById('tabbar');
-  bar.innerHTML = '<div class="tabbar-brand"><span class="logo-dot"></span>Nova Browser ' + NOVA_VERSION + '</div>';
+  bar.innerHTML = '<div class="tabbar-brand"><span class="logo-dot"></span>Studytube</div>';
   tabs.forEach(t => {
     const elTab = document.createElement('div');
     elTab.className = 'tab' + (t.id === activeTabId ? ' active' : '') + (t.isVideo ? ' video-tab' : '');
@@ -3915,6 +3982,9 @@ document.getElementById('navHome').addEventListener('click', () => {
   setActiveNav('navHome');
   closePanels();
   createTab();
+  try { updateEmptyHint(); } catch (e) {}
+  try { const es = document.getElementById('engineSelect'); if (es) es.value = 'bing'; } catch (e) {}
+  setTimeout(() => { const u = document.getElementById('urlInput'); if (u) u.focus(); }, 150);
 });
 document.getElementById('navDownloads').addEventListener('click', () => {
   setActiveNav('navDownloads');
@@ -8907,7 +8977,7 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
   .uvf-logo { width:32px; height:22px; border-radius:7px; background:#ff0033; color:#fff; font-size:10px; display:flex; align-items:center; justify-content:center; box-shadow:0 2px 10px rgba(255,0,51,.35); }
   #uvFeed .uvh-top h2 { font-size:20px; font-weight:800; letter-spacing:-.05em; }
   #uvFeed .uvh-bar { margin-top:8px; }
-  #uvFeed .uv-fsearch { background:#121212; border:1px solid #303030; height:36px; }
+  #uvFeed .uv-fsearch { background:#0b0d17; border:1px solid #303030; height:36px; }
   #uvFeed .uv-fsearch:focus-within { border-color:#3ea6ff; box-shadow:none; }
   #uvFeed .uvh-sort { background:#272727; border:none; border-radius:8px; height:36px; }
   #uvFeed .uvh-chips { padding:10px 0 10px; }
@@ -8940,9 +9010,10 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
 
   let feedBusy = false, feedTimer = null;
   function mountFeed() {
+    return; /* Studytube: Home = normal browser; video feed lives in Study */
     const host = $('emptyHint'); if (!host || $('uvFeed') || (root && root.id === 'uvHome')) return;
     const f = document.createElement('div'); f.id = 'uvFeed'; f.className = 'uvh-inline';
-    f.innerHTML = '<div class="uvh-head"><div class="uvh-top"><span class="uvf-logo">&#9654;</span><h2>Nova</h2><span class="uvh-stat"></span></div>' +
+    f.innerHTML = '<div class="uvh-head"><div class="uvh-top"><span class="uvf-logo">&#9654;</span><h2>Studytube</h2><span class="uvh-stat"></span></div>' +
       '<div class="uvh-bar"><div class="uv-fsearch"><span>&#128269;</span><input type="search" placeholder="Search your videos" autocomplete="off" autocapitalize="off" spellcheck="false"></div><button class="uvh-sort"></button></div>' +
       '<div class="uv-chips uvh-chips" id="uvfChips"></div></div><div class="uvh-body"><div class="uvh-grid">' +
       Array.from({ length: 3 }, () => '<div class="uvh-card"><div class="uvh-th uv-sh"></div><div class="uvh-info"><span class="uvh-av uv-sh"></span><div class="uvh-txt"><div class="uv-sh" style="height:12px;width:80%"></div></div></div></div>').join('') + '</div></div>';
@@ -9074,6 +9145,8 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
   }
   async function addChan(v, tag) {
     v = (v || '').trim(); if (!v) throw new Error('Enter @handle / channel URL');
+    const vid = ytId(v);
+    if (vid) { const jv = await api('videos', { part: 'snippet', id: vid }), iv = (jv.items || [])[0]; if (!iv) throw new Error('Video not found'); v = iv.snippet.channelId; }
     const m = /(UC[\w-]{22})/.exec(v), h = /@([\w.\-]+)/.exec(v), p = { part: 'snippet,contentDetails' };
     if (m) p.id = m[1]; else p.forHandle = '@' + (h ? h[1] : v.replace(/^@/, '').replace(/\s+/g, ''));
     const j = await api('channels', p), x = (j.items || [])[0];
@@ -9092,6 +9165,29 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
     loading = false; render();
   }
 
+  const ytId = v => { const m = /(?:youtu\.be\/|youtube(?:-nocookie)?\.com\/(?:watch\?(?:[^#\s]*&)?v=|shorts\/|embed\/|live\/|v\/))([\w-]{11})/i.exec(v || ''); return m ? m[1] : ''; };
+  const isUrl = q => /^(https?:\/\/|www\.)\S+$/i.test(q);
+  async function openLink(q) {
+    const id = ytId(q); if (!id) return false;
+    loading = true; res = []; render();
+    try {
+      const j = await api('videos', { part: 'snippet,contentDetails', id }), x = (j.items || [])[0];
+      if (!x) throw new Error('Video not found');
+      res = [{ id, t: dec(x.snippet.title), c: x.snippet.channelId, cn: x.snippet.channelTitle, p: Date.parse(x.snippet.publishedAt) || 0, d: iso(x.contentDetails.duration) }];
+      loading = false; render(); play(id);
+    } catch (e) { res = null; loading = false; render(); toast(fr(e.message)); }
+    return true;
+  }
+  async function smart(q) {
+    if (loading) return true;
+    if (await openLink(q)) return true;
+    if (!isUrl(q)) return false;
+    let t = q;
+    try { const u = new URL(/^www/i.test(q) ? 'https://' + q : q); const seg = decodeURIComponent(u.pathname).split('/').filter(Boolean).pop() || u.hostname; t = seg.replace(/\.[a-z0-9]{2,4}$/i, '').replace(/[-_+.]+/g, ' ').trim() || u.hostname; } catch (e) {}
+    st.q = t; const qi = $('stQ'); if (qi) qi.value = t;
+    await searchAll(); if (res && res[0]) play(res[0].id);
+    return true;
+  }
   async function searchAll() {
     const q = st.q.trim(); if (!q || loading) return; loading = true; res = []; render();
     try {
@@ -9213,7 +9309,7 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
     const s = $('stSh'); s.style.display = 'flex';
     s.innerHTML = '<div class="stv-sb"><h3>Study Tube settings</h3><label>Allowed channels (nothing else is shown)</label><div>' +
       (chans.map((c, i) => '<div class="stv-cr"><img src="' + esc(c.img) + '" alt=""><span>' + esc(c.n) + (c.tag ? ' \u00b7 ' + esc(c.tag) : '') + '</span><button data-rm="' + i + '">&#10005;</button></div>').join('') || '<small>No channels yet</small>') +
-      '</div><div class="stv-add" style="display:flex;gap:8px;margin-top:8px"><input id="stA" placeholder="@handle, channel URL or UC id"><input id="stT" placeholder="Subject" style="max-width:110px"><button id="stAd" style="max-width:70px">Add</button></div><label>Daily watch limit</label><select id="stLm">' +
+      '</div><div class="stv-add" style="display:flex;gap:8px;margin-top:8px"><input id="stA" placeholder="@handle, channel ya video ka link"><input id="stT" placeholder="Subject" style="max-width:110px"><button id="stAd" style="max-width:70px">Add</button></div><label>Daily watch limit</label><select id="stLm">' +
       [[0, 'Off'], [30, '30 min'], [60, '1 hour'], [90, '90 min'], [120, '2 hours'], [180, '3 hours'], [240, '4 hours']].map(o => '<option value="' + o[0] + '"' + (o[0] === lim ? ' selected' : '') + '>' + o[1] + '</option>').join('') +
       '</select><label style="display:flex;gap:8px;align-items:center"><input id="stAu" type="checkbox" style="width:auto;margin:0"' + (auto ? ' checked' : '') + '> Open Study Tube when the app starts</label><label style="display:flex;gap:8px;align-items:center"><input id="stOp" type="checkbox" style="width:auto;margin:0"' + (opn ? ' checked' : '') + '> Open search: koi bhi YouTube video search kar sako</label><div class="stv-act"><button id="stSv">Save &amp; refresh</button><button id="stCx">Close</button></div></div>';
   }
@@ -9223,7 +9319,7 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
     ov = document.createElement('div'); ov.id = 'stOv';
     ov.innerHTML = '<div class="stv-hd"><button class="stv-ib" id="stX" aria-label="Close">&#10005;</button><span class="stv-lg">&#9654;</span><h2>Study Tube</h2><button class="stv-ib" id="stS" aria-label="Settings">&#9881;</button></div>' +
       '<div class="stv-pl" id="stP"><div class="stv-vw"><div id="stYT"></div></div><div class="stv-pm"><div class="stv-pt" id="stPT"></div><div class="stv-pmeta" id="stPM"></div><div class="stv-pr"><span id="stSp" style="display:contents"></span><button class="stv-cl" id="stCl">Close player</button></div></div></div>' +
-      '<div class="stv-sc" id="stSc"><div class="stv-bar"><div class="stv-q"><span>&#128269;</span><input id="stQ" type="search" placeholder="Search study videos" autocomplete="off" autocapitalize="off" spellcheck="false"></div><button class="stv-ib" id="stR" aria-label="Refresh">&#8635;</button></div><div class="stv-chips" id="stCh"></div><div id="stL"></div></div><div class="stv-sh" id="stSh"></div>';
+      '<div class="stv-sc" id="stSc"><div class="stv-bar"><div class="stv-q"><span>&#128269;</span><input id="stQ" type="search" placeholder="Search ya koi bhi link paste karo" autocomplete="off" autocapitalize="off" spellcheck="false"></div><button class="stv-ib" id="stR" aria-label="Refresh">&#8635;</button></div><div class="stv-chips" id="stCh"></div><div id="stL"></div></div><div class="stv-sh" id="stSh"></div>';
     document.body.appendChild(ov); fit(); $('stX').style.display = 'none'; mark('navStudy');
     ov.addEventListener('keydown', e => e.stopPropagation()); ov.addEventListener('keyup', e => e.stopPropagation());
     ov.addEventListener('click', async e => {
@@ -9246,8 +9342,8 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
         $('stSh').style.display = 'none'; cache.t = 0; refresh(true);
       }
     });
-    let tm; $('stQ').addEventListener('input', e => { clearTimeout(tm); tm = setTimeout(() => { st.q = e.target.value; if (!st.q.trim()) res = null; render(); }, 120); });
-    $('stQ').addEventListener('keydown', e => { if (e.key === 'Enter' && opn) searchAll(); });
+    let tm; $('stQ').addEventListener('input', e => { clearTimeout(tm); tm = setTimeout(() => { if (isUrl(e.target.value.trim()) && !loading) { smart(e.target.value.trim()); return; } st.q = e.target.value; if (!st.q.trim()) res = null; render(); }, 120); });
+    $('stQ').addEventListener('keydown', e => { if (e.key === 'Enter') { const v = e.target.value.trim(); if (isUrl(v)) smart(v); else if (opn) searchAll(); } });
     render(); if (key && chans.length) refresh(false);
   }
   window.addEventListener('keydown', e => {
@@ -9332,6 +9428,113 @@ loadPersistedData().then(async () => {
   });
 })();
 
+</script>
+<script>
+(function(){var b=document.getElementById('moreBtn');if(!b)return;
+b.addEventListener('click',function(e){e.stopPropagation();b.closest('.toolbar').classList.toggle('more-open');});
+})();
+</script>
+<style id="studytube-lib">
+#navDownloads,#navFiles,#navBookmarks{display:none!important}
+#libSheet{position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.6);display:none;align-items:flex-end;justify-content:center}
+#libSheet.open{display:flex}
+#libSheet .lc{width:100%;max-width:520px;background:var(--st-s1);border-radius:22px 22px 0 0;padding:14px 14px calc(18px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--st-s3)}
+#libSheet h3{margin:4px 6px 12px;font-size:17px;color:#fff}
+#libSheet button.lr{width:100%;display:flex;align-items:center;gap:14px;text-align:left;background:var(--st-s2);border:1px solid var(--st-s3);color:#fff;border-radius:16px;padding:14px;margin-bottom:10px;font-size:16px}
+#libSheet .li{font-size:26px;width:40px;text-align:center}
+#libSheet .ls{display:block;font-size:12.5px;color:var(--st-mu);margin-top:2px}
+</style>
+<div id="libSheet"><div class="lc"><h3>Library</h3>
+<button class="lr" data-t="downloadsBtn"><span class="li">&#8681;</span><span>Downloads<span class="ls">Chal rahe aur poore hue downloads</span></span></button>
+<button class="lr" data-t="offlineBtn"><span class="li">&#128190;</span><span>Offline videos<span class="ls">Device mein saved videos, bina internet</span></span></button>
+<button class="lr" data-t="bookmarksBtn"><span class="li">&#128278;</span><span>Bookmarks<span class="ls">Save kiye hue pages aur links</span></span></button>
+</div></div>
+<script>
+(function(){var sh=document.getElementById('libSheet'),nb=document.getElementById('navLibrary');
+nb.addEventListener('click',function(){document.querySelectorAll('.nav-item').forEach(function(b){b.classList.toggle('active',b===nb)});sh.classList.add('open')});
+sh.addEventListener('click',function(e){if(e.target===sh){sh.classList.remove('open');return}
+var r=e.target.closest('.lr');if(r){sh.classList.remove('open');document.getElementById(r.dataset.t).click()}});
+})();
+</script>
+<script>(function(){var es=document.getElementById("engineSelect");if(es){es.value="bing";es.addEventListener("change",function(){});}})();</script>
+<style id="studytube-fix">
+.stage{background:var(--st-bg)!important}
+.toolbar{display:flex!important;flex-wrap:wrap!important;align-items:center}
+.url-wrap{order:1!important;flex:1 1 calc(100% - 76px)!important;min-width:0!important;width:calc(100% - 76px)!important}
+.go-btn{order:2!important;flex:0 0 64px!important;width:64px!important;min-width:64px!important;height:44px;padding:0!important;margin:0!important}
+.toolbar input#urlInput{min-width:0!important;height:44px;padding-right:76px!important}
+.nav-buttons,#directDlBtn,#mainDebugBtn,#moreBtn{order:3!important}
+.nav-buttons{display:flex;gap:6px}
+.extra-buttons{order:9!important;flex:1 1 100%!important}
+.tab-title{max-width:80px!important}
+.tabbar-brand{padding-right:10px!important}
+</style>
+<div id="plSheet" class="libs"><div class="lc"><h3>Video Player</h3>
+<button class="lr" data-t="openFileBtn"><span class="li">&#128247;</span><span>Gallery / device se<span class="ls">Phone ka koi bhi video chuno aur chalao</span></span></button>
+<button class="lr" data-t="extractVideoBtn"><span class="li">&#128279;</span><span>Link se<span class="ls">Video ya page ka link paste karo</span></span></button>
+<button class="lr" data-t="offlineBtn"><span class="li">&#128190;</span><span>Offline videos<span class="ls">Pehle se saved videos dobara chalao</span></span></button>
+</div></div>
+<style>#plSheet{position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.6);display:none;align-items:flex-end;justify-content:center}#plSheet.open{display:flex}
+#plSheet .lc{width:100%;max-width:520px;background:var(--st-s1);border-radius:22px 22px 0 0;padding:14px 14px calc(18px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--st-s3)}
+#plSheet h3{margin:4px 6px 12px;font-size:17px;color:#fff}
+#plSheet button.lr{width:100%;display:flex;align-items:center;gap:14px;text-align:left;background:var(--st-s2);border:1px solid var(--st-s3);color:#fff;border-radius:16px;padding:14px;margin-bottom:10px;font-size:16px}
+#plSheet .li{font-size:26px;width:40px;text-align:center}#plSheet .ls{display:block;font-size:12.5px;color:var(--st-mu);margin-top:2px}</style>
+<script>
+(function(){var sh=document.getElementById('plSheet'),nb=document.getElementById('navPlayer');
+nb.addEventListener('click',function(){document.querySelectorAll('.nav-item').forEach(function(b){b.classList.toggle('active',b===nb)});sh.classList.add('open')});
+sh.addEventListener('click',function(e){if(e.target===sh){sh.classList.remove('open');return}
+var r=e.target.closest('.lr');if(r){sh.classList.remove('open');document.getElementById(r.dataset.t).click()}});
+})();
+</script>
+<style id="stv-fx-css">
+#stP .stv-vw{overflow:hidden}
+#stP .stv-vw iframe{filter:var(--stf,none);transform:var(--stt,none);transition:filter .2s,transform .2s}
+#stP.stv-cine .stv-vw{max-height:78vh}
+.stfx{margin-top:10px;background:#141829;border:1px solid #262c47;border-radius:16px;padding:10px 12px;color:#eef0ff}
+.stfx-r{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin:6px 0}
+.stfx button{background:#262c47;color:#eef0ff;border:1px solid #343b5e;border-radius:18px;padding:9px 13px;font-size:14px}
+.stfx button.on{background:linear-gradient(135deg,#7c6cff,#ff5c8a);border-color:transparent}
+.stfx h4{margin:4px 0;font-size:13px;color:#8e95b8;font-weight:600}
+.stfx label{display:flex;align-items:center;gap:8px;font-size:13px;color:#cfd3ee;margin:6px 0}
+.stfx label span{width:78px}.stfx input[type=range]{flex:1;accent-color:#7c6cff}
+</style>
+<script>
+(function(){
+var K='st:fx',S={p:'normal',b:100,c:100,s:100,z:100,f:0,cine:0};
+try{var o=JSON.parse(localStorage.getItem(K)||'null');if(o)Object.assign(S,o);}catch(e){}
+var PR={normal:[100,100,100],vivid:[105,115,140],bright:[130,105,105],night:[80,95,80],eye:[88,95,85],bw:[100,115,0],sharp:[105,135,110],warm:[102,100,120]};
+var NM={normal:'Normal',vivid:'Vivid',bright:'Bright',night:'Night',eye:'Eye-care',bw:'B&W',sharp:'Sharp text',warm:'Warm'};
+var cur=0,pl;
+function fr(){return document.querySelector('#stP .stv-vw iframe')}
+function cmd(f,a){var i=fr();if(i&&i.contentWindow)i.contentWindow.postMessage(JSON.stringify({event:'command',func:f,args:a||[]}),'*')}
+function listen(){var i=fr();if(i&&i.contentWindow)i.contentWindow.postMessage(JSON.stringify({event:'listening',id:1,channel:'widget'}),'*')}
+window.addEventListener('message',function(e){try{var d=typeof e.data==='string'?JSON.parse(e.data):e.data;if(d&&d.info&&typeof d.info.currentTime==='number')cur=d.info.currentTime}catch(x){}});
+function apply(){var P=document.getElementById('stP');if(!P)return;
+var sep=S.p==='eye'?' sepia(.25)':S.p==='warm'?' sepia(.3)':'';
+P.style.setProperty('--stf','brightness('+S.b/100+') contrast('+S.c/100+') saturate('+S.s/100+')'+sep);
+P.style.setProperty('--stt','scale('+S.z/100+') scaleX('+(S.f?-1:1)+')');
+P.classList.toggle('stv-cine',!!S.cine);
+try{localStorage.setItem(K,JSON.stringify(S))}catch(e){}
+var q=P.querySelector('.stfx');if(q)sync(q)}
+function sync(q){q.querySelectorAll('[data-p]').forEach(function(b){b.classList.toggle('on',b.dataset.p===S.p)});
+q.querySelector('[data-t=f]').classList.toggle('on',!!S.f);q.querySelector('[data-t=cine]').classList.toggle('on',!!S.cine);
+['b','c','s','z'].forEach(function(k){q.querySelector('[data-k='+k+']').value=S[k]})}
+function build(P){if(P.querySelector('.stfx'))return;var h='<div class="stfx"><h4>Effects</h4><div class="stfx-r">';
+for(var k in NM)h+='<button data-p="'+k+'">'+NM[k]+'</button>';
+h+='</div><label><span>Brightness</span><input type="range" min="50" max="160" data-k="b"></label><label><span>Contrast</span><input type="range" min="60" max="170" data-k="c"></label><label><span>Colour</span><input type="range" min="0" max="200" data-k="s"></label><label><span>Zoom</span><input type="range" min="100" max="180" data-k="z"></label>';
+h+='<h4>Player</h4><div class="stfx-r"><button data-a="-10">&#9194; 10s</button><button data-a="10">10s &#9193;</button><button data-t="f">&#8596; Mirror</button><button data-t="cine">&#127917; Bada player</button><button data-t="reset">Reset</button></div></div>';
+var pr=P.querySelector('.stv-pr');var d=document.createElement('div');d.innerHTML=h;pr.parentNode.insertBefore(d.firstChild,pr.nextSibling);
+var q=P.querySelector('.stfx');
+q.addEventListener('click',function(e){var b=e.target.closest('button');if(!b)return;
+if(b.dataset.p){S.p=b.dataset.p;var v=PR[S.p];S.b=v[0];S.c=v[1];S.s=v[2]}
+else if(b.dataset.a){listen();cmd('seekTo',[Math.max(0,cur+ +b.dataset.a),true]);cur=Math.max(0,cur+ +b.dataset.a)}
+else if(b.dataset.t==='f')S.f=S.f?0:1;else if(b.dataset.t==='cine')S.cine=S.cine?0:1;
+else if(b.dataset.t==='reset'){S={p:'normal',b:100,c:100,s:100,z:100,f:0,cine:0}}
+apply()});
+q.addEventListener('input',function(e){var k=e.target.dataset.k;if(k){S[k]=+e.target.value;S.p='custom';apply()}});
+apply();setInterval(listen,4000)}
+new MutationObserver(function(){var P=document.getElementById('stP');if(P&&P.querySelector('.stv-pr'))build(P)}).observe(document.body,{childList:true,subtree:true});
+})();
 </script>
 </body>
 </html>

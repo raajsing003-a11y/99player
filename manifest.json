@@ -1,13 +1,12 @@
 {
-  "name": "Nova Browser",
-  "short_name": "Nova",
-  "description": "A privacy-focused browser for watching, extracting and downloading videos.",
+  "name": "Studytube",
+  "short_name": "Studytube",
+  "description": "Study videos, notes aur offline learning",
   "start_url": "./index.html",
-  "scope": "./",
   "display": "standalone",
-  "orientation": "any",
-  "background_color": "#121212",
-  "theme_color": "#121212",
+  "orientation": "portrait",
+  "background_color": "#0b0d17",
+  "theme_color": "#0b0d17",
   "icons": [
     {
       "src": "icon-192.png",
@@ -20,25 +19,6 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
-    }
-  ],
-  "file_handlers": [
-    {
-      "action": "./index.html",
-      "accept": {
-        "video/*": [
-          ".mp4",
-          ".webm",
-          ".mkv",
-          ".mov",
-          ".m4v",
-          ".avi",
-          ".3gp",
-          ".ts",
-          ".flv",
-          ".ogv"
-        ]
-      }
     }
   ]
 }
