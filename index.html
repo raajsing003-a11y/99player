@@ -9121,7 +9121,7 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
   const left = () => lim ? lim * 60 - day.s : 1e9;
   let auto = rd('uv99:st:auto', true), opn = rd('uv99:st:open', true);
   let an = rd('uv99:st:an', true), depth = 0, ign = 0, playPushed = false, lastList = [], wl = null;
-  let sTok = 0, tAuto = null, cap = 80;
+  let sTok = 0, tAuto = null, cap = 80, sNext = '', sDone = true, sBusy = false, sQq = '', sFail = 0, sT = 0, sShow = 30;
   let hist = rd('uv99:st:hist', []), mini = false, lpF = false, lpT = null, seen = rd('uv99:st:seen', {}), mp = rd('uv99:st:mp', { x: 0, y: 0 });
   let mpRaf = 0;
   function mpApply() { if (!ov || mpRaf) return; mpRaf = requestAnimationFrame(() => { mpRaf = 0; if (!ov) return; [ov.querySelector('.stv-vw'), ov.querySelector('#stMc')].forEach(n => { if (n) { n.style.setProperty('--mx', mp.x + 'px'); n.style.setProperty('--my', mp.y + 'px'); } }); }); }
@@ -9301,7 +9301,7 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
   async function openLink(q) {
     const id = ytId(q); if (!id) return false;
     const stub = { id, t: 'Loading\u2026', c: '', cn: '', p: 0, d: 0 };
-    res = [stub]; render(); play(id);
+    res = [stub]; sQq = ''; sDone = true; sNext = ''; render(); play(id);
     try {
       const j = await api('videos', { part: 'snippet,contentDetails', id }), x = (j.items || [])[0];
       if (!x) throw new Error('Video not found');
@@ -9321,24 +9321,60 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
     return true;
   }
   const sCache = rd('uv99:st:sc', {}); setTimeout(() => { if (key) ytReady(); }, 3000);
+  function sSave(q) { try { sCache[q.toLowerCase()] = { t: Date.now(), r: res, n: sNext, v2: 1 }; const ks = Object.keys(sCache).sort((a, b) => sCache[b].t - sCache[a].t); ks.slice(10).forEach(k => delete sCache[k]); wr('uv99:st:sc', sCache); } catch (e) {} }
+  /* ek page = 50 results (Shorts baad mein duration filter se hat jaate hain) */
+  async function sFetch(q) {
+    const p = { part: 'snippet', q, type: 'video', maxResults: 50, safeSearch: 'strict', fields: 'nextPageToken,items(id/videoId,snippet(title,publishedAt,channelId,channelTitle))' };
+    if (sNext) p.pageToken = sNext;
+    const j = await api('search', p);
+    sNext = j.nextPageToken || ''; sDone = !sNext;
+    const sq = rd('uv99:st:sq', { d: '', n: 0 }); if (sq.d !== today()) { sq.d = today(); sq.n = 0; } sq.n++; wr('uv99:st:sq', sq);
+    if (sq.n === 90) toast('Aaj ki search quota lagbhag khatam (' + sq.n + '/100)');
+    return (j.items || []).filter(x => x.id && x.id.videoId).map(x => ({ id: x.id.videoId, t: dec(x.snippet.title), c: x.snippet.channelId, cn: x.snippet.channelTitle, p: Date.parse(x.snippet.publishedAt) || 0, d: 0 }));
+  }
   async function searchAll() {
     const q = st.q.trim(); if (!q) return;
-    const hit = sCache[q.toLowerCase()]; if (hit && Date.now() - hit.t < 216e5) { res = hit.r; cap = 80; render(); return; }
-    const tok = ++sTok; loading = true; res = []; cap = 80; render();
+    const hit = sCache[q.toLowerCase()]; if (hit && hit.v2 && Date.now() - hit.t < 216e5) { res = hit.r; sNext = hit.n || ''; sDone = !sNext; sQq = q; sBusy = false; sShow = 30; cap = 80; render(); setTimeout(sCheck, 80); return; }
+    const tok = ++sTok; loading = true; res = []; cap = 80; sShow = 30; sNext = ''; sDone = false; sBusy = false; sQq = q; render();
     try {
-      const j = await api('search', { part: 'snippet', q, type: 'video', maxResults: 15, safeSearch: 'strict', fields: 'items(id/videoId,snippet(title,publishedAt,channelId,channelTitle))' });
-      if (tok !== sTok) return;
-      const raw = (j.items || []).filter(x => x.id && x.id.videoId).map(x => ({ id: x.id.videoId, t: dec(x.snippet.title), c: x.snippet.channelId, cn: x.snippet.channelTitle, p: Date.parse(x.snippet.publishedAt) || 0, d: 0 }));
-      res = raw; loading = false; render();   /* show titles right away; durations (and Shorts filtering) fill in behind */
-      const sq = rd('uv99:st:sq', { d: '', n: 0 }); if (sq.d !== today()) { sq.d = today(); sq.n = 0; } sq.n++; wr('uv99:st:sq', sq);
-      if (sq.n >= 90) toast('Aaj ki search quota lagbhag khatam (' + sq.n + '/100)');
-      const full = await withDur(raw);
-      if (tok !== sTok) return;
-      res = full; render();
-      sCache[q.toLowerCase()] = { t: Date.now(), r: res }; try { const ks = Object.keys(sCache).sort((a, b) => sCache[b].t - sCache[a].t); ks.slice(20).forEach(k => delete sCache[k]); wr('uv99:st:sc', sCache); } catch (e) {}
-    } catch (e) { if (tok === sTok) { res = null; toast(fr(e.message)); } }
-    if (tok === sTok) { loading = false; render(); }
+      let pages = 0, first = true;
+      while (pages < 3 && !sDone && res.length < 30) {
+        const raw = (await sFetch(q)).filter(x => !res.some(o => o.id === x.id)); pages++;
+        if (tok !== sTok) return;
+        if (first) { res = raw; loading = false; sBusy = true; render(); }   /* titles turant; durations (aur Shorts filter) peeche se */
+        const full = await withDur(raw);
+        if (tok !== sTok) return;
+        res = first ? full : res.concat(full.filter(x => !res.some(o => o.id === x.id)));
+        first = false; render();
+      }
+    } catch (e) { if (tok === sTok) { sFail = Date.now(); if (!res || !res.length) res = null; toast(fr(e.message)); } }
+    if (tok === sTok) { loading = false; sBusy = false; render(); if (res && res.length) sSave(q); setTimeout(sCheck, 80); }
   }
+  /* scroll end ke paas pahunchte hi agle results apne aap load */
+  async function sMore() {
+    if (res === null || !res.length || sBusy || loading || !sQq) return;
+    if (sShow < res.length) { sShow += 30; render(); setTimeout(sCheck, 80); return; }
+    if (sDone || Date.now() - sFail < 8000) return;
+    const tok = sTok, q = sQq; sBusy = true; render();
+    try {
+      let got = 0, pages = 0;
+      while (pages < 3 && !sDone && got < 15) {
+        const raw = (await sFetch(q)).filter(x => !res.some(o => o.id === x.id)); pages++;
+        if (tok !== sTok) return;
+        const full = await withDur(raw);
+        if (tok !== sTok) return;
+        res = res.concat(full.filter(x => !res.some(o => o.id === x.id))); got += full.length; render();
+      }
+    } catch (e) { if (tok === sTok) { sFail = Date.now(); toast(fr(e.message)); } }
+    if (tok === sTok) { sBusy = false; sShow += 30; render(); sSave(q); setTimeout(sCheck, 80); }
+  }
+  function sCheck() {
+    if (res === null || sBusy || loading || !sQq || (sDone && sShow >= res.length)) return;
+    const e = $('stEnd'); if (!e || !e.offsetParent) return;
+    if (e.getBoundingClientRect().top < window.innerHeight + 1000) sMore();
+  }
+  document.addEventListener('scroll', () => { if (sT) return; sT = setTimeout(() => { sT = 0; sCheck(); }, 120); }, true);
+  window.addEventListener('resize', () => setTimeout(sCheck, 150));
 
   /* ---------- player ---------- */
   let ytP = null;
@@ -9545,7 +9581,8 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
     const q = st.q.trim().toLowerCase();
     const vs = st.ch === '__h' ? hist.filter(v => !q || (v.t + ' ' + (v.cn || '')).toLowerCase().includes(q)) : st.ch === '__r' ? hist.filter(isPart).filter(v => !q || v.t.toLowerCase().includes(q)) : res !== null ? res : cache.v.filter(v => (!st.ch || (st.ch === '__r' ? isPart(v) : v.c === st.ch)) && cm[v.c] && (!q || (v.t + ' ' + cm[v.c].n + ' ' + (cm[v.c].tag || '')).toLowerCase().includes(q)));
     let h = (res !== null ? '<div class="stv-em" style="padding:10px 14px;text-align:left">Poore YouTube ke results <button class="stv-sp" data-back="1" style="margin-left:8px">Study feed par wapas</button></div>' : '') + (res === null && opn && q && !loading ? '<button class="stv-dp" data-all="1">\uD83D\uDD0E "' + esc(st.q) + '" poore YouTube par search karo</button>' : '') + (loading ? '<div class="stv-sk"></div><div class="stv-sk"></div>' : '');
-    lastList = vs; if (st.ch === '__h' && vs.length) h += '<button class="stv-dp" data-clh="1">Clear history</button>'; h += vs.slice(0, cap).map(v => card(v, cm)).join(''); if (vs.length > cap) h += '<button class="stv-dp" data-more="1">Aur dikhao (' + (vs.length - cap) + ')</button>';
+    lastList = vs; if (st.ch === '__h' && vs.length) h += '<button class="stv-dp" data-clh="1">Clear history</button>'; const inRes = res !== null && st.ch !== '__h' && st.ch !== '__r', lim = inRes ? sShow : cap; h += vs.slice(0, lim).map(v => card(v, cm)).join(''); if (!inRes && vs.length > lim) h += '<button class="stv-dp" data-more="1">Aur dikhao (' + (vs.length - lim) + ')</button>';
+    if (inRes && vs.length && !(vs.length === 1 && !sQq)) h += sBusy ? '<div class="stv-sk"></div><div class="stv-sk"></div>' : (sDone && vs.length <= sShow) ? '<div class="stv-em" style="padding:12px">Results khatam</div>' : '<div id="stEnd" style="height:2px"></div>';
     if (!vs.length && !loading) h += '<div class="stv-em">No videos' + (q ? ' match "' + esc(st.q) + '"' : ' yet. Tap refresh') + '.</div>';
     if (res === null && q && !loading) h += (st.ch && st.ch !== '__r' && st.ch !== '__h') ? '<button class="stv-dp" data-deep="1">Search "' + esc(st.q) + '" on YouTube in this channel only</button>' : '<div class="stv-em" style="padding:8px">Pick a channel chip to search deeper in that channel.</div>';
     if (res === null && st.ch && st.ch !== '__r' && st.ch !== '__h' && !loading && chPg[st.ch] !== 'end' && chans.some(x => x.id === st.ch)) h += '<button class="stv-dp" data-chall="1">\uD83D\uDCC2 Is channel ki aur purani videos load karo</button>';
