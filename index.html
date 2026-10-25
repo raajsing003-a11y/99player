@@ -9540,7 +9540,7 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
     const L = $('stL'), C = $('stCh'); if (!L) return;
     const cm = {}; chans.forEach(c => { cm[c.id] = c; });
     C.innerHTML = chans.length ? '<button class="stv-ch' + (st.ch ? '' : ' on') + '" data-c="">All</button><button class="stv-ch' + (st.ch === '__r' ? ' on' : '') + '" data-c="__r">&#9654; Resume</button><button class="stv-ch' + (st.ch === '__h' ? ' on' : '') + '" data-c="__h">&#128344; History</button>' + chans.map(c => '<button class="stv-ch' + (st.ch === c.id ? ' on' : '') + '" data-c="' + c.id + '">' + esc(c.n) + (st.ch !== c.id && newCnt(c.id) ? ' <i class="stv-nb">' + newCnt(c.id) + '</i>' : '') + '</button>').join('') : '';
-    if (!key || !chans.length) { L.innerHTML = '<div class="stv-em">Apne study channels add karo (upar &#9881; dabao). Sirf wahi channels dikhenge: no Shorts, no home feed, no comments.</div>'; return; }
+    if (!key || (!chans.length && res === null && !loading && !st.q.trim())) { L.innerHTML = '<div class="stv-em">Apne study channels add karo (upar &#9881; dabao). Sirf wahi channels dikhenge: no Shorts, no home feed, no comments.</div>'; return; }
     if (left() <= 0) { L.innerHTML = '<div class="stv-em">Daily study limit reached. Take a break; it resets tomorrow (change it in settings).</div>'; return; }
     const q = st.q.trim().toLowerCase();
     const vs = st.ch === '__h' ? hist.filter(v => !q || (v.t + ' ' + (v.cn || '')).toLowerCase().includes(q)) : st.ch === '__r' ? hist.filter(isPart).filter(v => !q || v.t.toLowerCase().includes(q)) : res !== null ? res : cache.v.filter(v => (!st.ch || (st.ch === '__r' ? isPart(v) : v.c === st.ch)) && cm[v.c] && (!q || (v.t + ' ' + cm[v.c].n + ' ' + (cm[v.c].tag || '')).toLowerCase().includes(q)));
@@ -10737,7 +10737,7 @@ __stvHook(org);
   applyTheme();
 
   /* ---------- Hub UI ---------- */
-  var TABS = [['dash', '📊 Progress'], ['pomo', '🍅 Focus'], ['cards', '🃏 Cards'], ['later', '🕒 Baad me'], ['set', '⚙ Settings'], ['keys', '⌨ Keys']];
+  var TABS = [['dash', '📊 Progress'], ['later', '🕒 Baad me'], ['set', '⚙ Settings'], ['keys', '⌨ Keys']];
   var hub = null, tab = 'dash', rev = null, hubSh = null, shObs = null;
 
   function dashH() {
