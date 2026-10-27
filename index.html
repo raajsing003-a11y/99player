@@ -4,15 +4,14 @@
 <link rel="preconnect" href="https://www.googleapis.com" crossorigin><link rel="preconnect" href="https://i.ytimg.com" crossorigin><link rel="dns-prefetch" href="https://www.youtube-nocookie.com">
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Studytube</title>
-<meta name="description" content="Studytube — study videos, notes aur offline learning, sab ek jagah.">
+<title>99Tube</title>
+<meta name="description" content="99Tube — study videos, notes aur offline learning, sab ek jagah.">
 <meta name="theme-color" content="#0b0d17">
-<meta name="application-name" content="Studytube">
+<meta name="application-name" content="99Tube">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Studytube">
-<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-title" content="99Tube">
 <link rel="preconnect" href="https://www.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://i.ytimg.com" crossorigin>
 <link rel="preconnect" href="https://www.youtube.com">
@@ -122,6 +121,9 @@
   .folder-row .fr-meta { font-size:11px; color:#888; margin-top:2px; }
   .folder-row .fr-del { background:none; border:none; color:#e57373; font-size:16px; padding:6px; flex-shrink:0; }
 
+  /* Focus mode: controls fade away while watching, tap the video to bring them back */
+  .app #quickControls, .app #videoControlbar, .app #playerTopLeft { transition: opacity .25s ease; }
+  .app.ui-idle #quickControls, .app.ui-idle #videoControlbar, .app.ui-idle #playerTopLeft { opacity:0 !important; pointer-events:none !important; }
   .exit-immersive-btn {
     position:relative; z-index:2;
     width:36px; height:36px; border-radius:50%; border:none; background:rgba(0,0,0,0.55);
@@ -669,7 +671,7 @@
 
 <div class="app">
   <div class="tabbar" id="tabbar">
-    <div class="tabbar-brand"><span class="logo-dot"></span>Studytube</div>
+    <div class="tabbar-brand"><span class="logo-dot"></span>99Tube</div>
   </div>
 
   <div class="toolbar">
@@ -728,7 +730,7 @@
     <div class="refresh-indicator" id="refreshIndicator">&#8635;</div>
     <div class="empty-tab-hint" id="emptyHint">
       <div class="home-header">
-        <div class="home-title"><span class="logo-dot"></span>Studytube</div>
+        <div class="home-title"><span class="logo-dot"></span>99Tube</div>
         <div class="home-tagline">Padho &middot; Dekho &middot; Offline seekho</div>
       </div>
       <div class="home-search" id="homeSearchBox"><span class="hs-icon">&#128269;</span>Search or type a URL</div>
@@ -784,7 +786,7 @@
     <div class="extract-overlay" id="extractOverlay">
       <div class="extract-card">
         <div class="extract-title">Open video from a page link</div>
-        <div class="extract-sub">Paste a website link. Studytube will try to find the video on that page and open it directly in the player.</div>
+        <div class="extract-sub">Paste a website link. 99Tube will try to find the video on that page and open it directly in the player.</div>
         <input type="text" inputmode="url" id="extractUrlInput" placeholder="https://example.com/some-page" autocomplete="off" autocapitalize="off" autocorrect="off">
         <div class="extract-status" id="extractStatus"></div>
         <div class="quality-list" id="qualityList"></div>
@@ -936,11 +938,32 @@
         <input type="range" id="selSat" min="0" max="200" value="100">
       </div>
       <div class="note">Selective color changes saturation of only the chosen hue (e.g. just reds, or just blues) &mdash; other colors stay untouched. Needs GPU rendering, so it only switches on while Vibrance or Selective color saturation are away from 100%.</div>
+      <div class="slider-row">
+        <label><span>CAS Sharpen (HD crisp)</span><span class="val-wrap"><span id="casSharpVal">0</span><button class="reset-btn" data-key="casSharp" data-default="0" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="casSharp" min="0" max="100" value="0">
+      </div>
+      <div class="slider-row">
+        <label><span>Clarity (local contrast)</span><span class="val-wrap"><span id="clarityVal">0</span><button class="reset-btn" data-key="clarity" data-default="0" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="clarity" min="0" max="100" value="0">
+      </div>
+      <div class="slider-row">
+        <label><span>Dehaze (fog/haze hatao)</span><span class="val-wrap"><span id="dehazeVal">0</span><button class="reset-btn" data-key="dehaze" data-default="0" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="dehaze" min="0" max="100" value="0">
+      </div>
+      <div class="slider-row">
+        <label><span>Tint (green &harr; magenta)</span><span class="val-wrap"><span id="tintVal">0</span><button class="reset-btn" data-key="tint" data-default="0" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="tint" min="-100" max="100" value="0">
+      </div>
+      <div class="slider-row">
+        <label><span>Vignette (cinema edges)</span><span class="val-wrap"><span id="vignetteVal">0</span><button class="reset-btn" data-key="vignette" data-default="0" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="vignette" min="0" max="100" value="0">
+      </div>
+      <div class="note">New GPU effects (CAS Sharpen, Clarity, Dehaze, Tint, Vignette) &mdash; CAS is AMD FidelityFX-style adaptive sharpening that crisps detail without halos.</div>
       <div class="note">Settings save automatically and apply to every video you open. Sharpness is simulated edge-enhancement, not true resolution upscaling.</div>
     </div>
 
     <div class="enhance-body" id="etab-quality">
-      <div class="row-buttons"><button id="autoEnhanceBtn" class="primary">Auto Enhance</button></div>
+      <div class="row-buttons"><button id="autoEnhanceBtn" class="primary">Auto Enhance</button><button id="hdBoostBtn">HD Boost</button></div>
       <div class="slider-row">
         <label><span>AI Enhance (Anime4K-style)</span><span class="val-wrap"><span id="aiEnhanceVal">0</span><button class="reset-btn" data-key="aiEnhance" data-default="0" title="Reset">&#8635;</button></span></label>
         <input type="range" id="aiEnhance" min="0" max="100" value="0">
@@ -1035,7 +1058,7 @@
 <div class="install-banner" id="installBanner">
   <img src="icon-192.png" alt="" width="36" height="36">
   <div class="install-banner-text">
-    <div class="install-banner-title">Install Studytube</div>
+    <div class="install-banner-title">Install 99Tube</div>
     <div class="install-banner-sub">Add to home screen for a full-screen, app-like experience.</div>
   </div>
   <button class="install-banner-btn" id="installBannerBtn">Install</button>
@@ -1249,7 +1272,7 @@ const DOWNLOAD_EXT_RE = /\.(pdf|zip|rar|7z|docx?|xlsx?|pptx?|csv|json|txt|png|jp
 
 let settings = { bright: 100, contrast: 100, sat: 100, sharp: 0, volBoost: 100, loop: false,
   denoise: 0, detail: 0, exposure: 0, gamma: 100, shadows: 0, highlights: 0,
-  vibrance: 100, selHue: 0, selRange: 30, selSat: 100, aiEnhance: 0, temperature: 0, skinProtect: false, skinSmooth: 0, autoDownload: true };
+  vibrance: 100, selHue: 0, selRange: 30, selSat: 100, aiEnhance: 0, temperature: 0, skinProtect: false, skinSmooth: 0, casSharp: 0, clarity: 0, dehaze: 0, tint: 0, vignette: 0, autoDownload: true };
 let customPresets = {};
 const sharpMatrix = document.getElementById('sharpenMatrix');
 
@@ -1567,7 +1590,7 @@ function playOfflineVideo(item) {
   }
 }
 
-// Studytube (like every phone browser) simply cannot decode a raw MPEG-TS blob
+// 99Tube (like every phone browser) simply cannot decode a raw MPEG-TS blob
 // itself — that's a codec-support limit, not a bug that can be fixed here.
 // What we CAN do is stop dead-ending at an alert and instead hand the file
 // off to something that can actually play it: the phone's own share sheet
@@ -1929,7 +1952,7 @@ function loadUrl(tabId, rawUrl, isNewNav) {
     tab.el.replaceWith(newEl);
     tab.el = newEl;
     tab.isVideo = true;
-    tab._corsRetried = false;
+    tab._corsRetried = false; tab._gradingGaveUp = false; tab._gradingBlobTried = false;
     tab._retryStage = 0;
     tab.aspect = tab.aspect || 'fit';
     bindVideoElementEvents(tab);
@@ -1957,7 +1980,7 @@ function loadUrl(tabId, rawUrl, isNewNav) {
     tab._savedFilename = null;
     tab._blobFallbackTried = false;
     tab._segmentBoundaries = null;
-    tab._corsRetried = false;
+    tab._corsRetried = false; tab._gradingGaveUp = false; tab._gradingBlobTried = false;
     tab._retryStage = 0;
     tab._contentUriFallbackTried = false;
     tab._gradingBlobTried = false;
@@ -2098,7 +2121,7 @@ function updateNavButtons() {
 
 function renderTabbar() {
   const bar = document.getElementById('tabbar');
-  bar.innerHTML = '<div class="tabbar-brand"><span class="logo-dot"></span>Studytube</div>';
+  bar.innerHTML = '<div class="tabbar-brand"><span class="logo-dot"></span>99Tube</div>';
   tabs.forEach(t => {
     const elTab = document.createElement('div');
     elTab.className = 'tab' + (t.id === activeTabId ? ' active' : '') + (t.isVideo ? ' video-tab' : '');
@@ -2445,6 +2468,11 @@ uniform float u_selSat;
 uniform float u_temp;
 uniform float u_skinProtect;
 uniform float u_skinSmooth;
+uniform float u_cas;
+uniform float u_clarity;
+uniform float u_dehaze;
+uniform float u_tint;
+uniform float u_vig;
 vec3 rgb2hsv(vec3 c){
   vec4 K = vec4(0.0,-1.0/3.0,2.0/3.0,-1.0);
   vec4 p2 = mix(vec4(c.bg,K.wz), vec4(c.gb,K.xy), step(c.b,c.g));
@@ -2467,6 +2495,40 @@ void main(){
   col.r = clamp(col.r + u_temp * 0.30, 0.0, 1.0);
   col.b = clamp(col.b - u_temp * 0.30, 0.0, 1.0);
   col.g = clamp(col.g + u_temp * 0.06, 0.0, 1.0);
+  // Tint: green <-> magenta balance
+  col = clamp(col + vec3(u_tint*0.05, -u_tint*0.10, u_tint*0.05), 0.0, 1.0);
+  // Dehaze: dark-channel style haze removal + gentle S-curve
+  if (u_dehaze > 0.0) {
+    float dk = min(col.r, min(col.g, col.b)) * u_dehaze * 0.8;
+    col = clamp((col - vec3(dk)) / (1.0 - dk), 0.0, 1.0);
+    col = mix(col, col*col*(3.0-2.0*col), u_dehaze*0.35);
+  }
+  // CAS (AMD FidelityFX Contrast Adaptive Sharpening style): sharpens
+  // more where local contrast is low, less where it would cause halos.
+  if (u_cas > 0.0) {
+    vec3 ca = texture2D(u_tex, v + vec2(0.0,-1.0)*u_texel).rgb;
+    vec3 cb = texture2D(u_tex, v + vec2(-1.0,0.0)*u_texel).rgb;
+    vec3 cd = texture2D(u_tex, v + vec2( 1.0,0.0)*u_texel).rgb;
+    vec3 ce = texture2D(u_tex, v + vec2(0.0, 1.0)*u_texel).rgb;
+    vec3 mn = min(min(min(ca,cb),min(cd,ce)),col);
+    vec3 mx = max(max(max(ca,cb),max(cd,ce)),col);
+    vec3 amp = sqrt(clamp(min(mn, 1.0-mx) / max(mx, vec3(0.0001)), 0.0, 1.0));
+    vec3 wgt = amp * (-1.0 / mix(8.0, 4.0, u_cas));
+    col = clamp((ca*wgt + cb*wgt + cd*wgt + ce*wgt + col) / (1.0 + 4.0*wgt), 0.0, 1.0);
+  }
+  // Clarity: large-radius unsharp mask limited to mid-tones
+  if (u_clarity > 0.0) {
+    vec2 r1 = u_texel * 3.0;
+    vec3 bl = (texture2D(u_tex, v + vec2( r1.x, 0.0)).rgb + texture2D(u_tex, v + vec2(-r1.x, 0.0)).rgb +
+               texture2D(u_tex, v + vec2(0.0,  r1.y)).rgb + texture2D(u_tex, v + vec2(0.0, -r1.y)).rgb +
+               texture2D(u_tex, v + r1).rgb + texture2D(u_tex, v - r1).rgb +
+               texture2D(u_tex, v + vec2(r1.x,-r1.y)).rgb + texture2D(u_tex, v + vec2(-r1.x,r1.y)).rgb + col) / 9.0;
+    float lum = dot(col, vec3(0.299,0.587,0.114));
+    float midMask = 1.0 - abs(lum*2.0 - 1.0)*0.7;
+    col = clamp(col + (col - bl) * u_clarity * 1.6 * midMask, 0.0, 1.0);
+  }
+  // Vignette
+  col *= 1.0 - u_vig * smoothstep(0.35, 0.95, length(v - 0.5) * 1.414);
   if (u_ai > 0.0) {
     vec3 n  = texture2D(u_tex, v + vec2(0.0,-1.0)*u_texel).rgb;
     vec3 s  = texture2D(u_tex, v + vec2(0.0, 1.0)*u_texel).rgb;
@@ -2660,7 +2722,12 @@ function initGradingGL(tab) {
     u_selSat: gl.getUniformLocation(prog, 'u_selSat'),
     u_temp: gl.getUniformLocation(prog, 'u_temp'),
     u_skinProtect: gl.getUniformLocation(prog, 'u_skinProtect'),
-    u_skinSmooth: gl.getUniformLocation(prog, 'u_skinSmooth')
+    u_skinSmooth: gl.getUniformLocation(prog, 'u_skinSmooth'),
+    u_cas: gl.getUniformLocation(prog, 'u_cas'),
+    u_clarity: gl.getUniformLocation(prog, 'u_clarity'),
+    u_dehaze: gl.getUniformLocation(prog, 'u_dehaze'),
+    u_tint: gl.getUniformLocation(prog, 'u_tint'),
+    u_vig: gl.getUniformLocation(prog, 'u_vig')
   };
   return tab.gl;
 }
@@ -2670,7 +2737,19 @@ function initGradingGL(tab) {
 // setGradingVisible() never switches the canvas on, so playback always
 // stays on the plain <video> element, no matter what the Enhance sliders
 // are set to.
-function isGradingNeeded() { return false; }
+function isGradingNeeded() {
+  // GPU (WebGL) layer is only needed for effects CSS filters can't do.
+  // Safe now: the <video> stays visible until a real frame is drawn on the
+  // canvas (see drawGradingFrame), so it can't go black. If the canvas can
+  // never be read for this video, we give up and show normal playback.
+  const t = getTab(activeTabId);
+  if (t && t._gradingGaveUp) return false;
+  return settings.vibrance !== 100 || settings.selSat !== 100 ||
+         settings.aiEnhance > 0 || settings.temperature !== 0 ||
+         !!settings.skinProtect || settings.skinSmooth > 0 ||
+         settings.casSharp > 0 || settings.clarity > 0 || settings.dehaze > 0 ||
+         settings.tint !== 0 || settings.vignette > 0;
+}
 function setGradingVisible(tab, on) {
   if (!tab || !tab.canvas) return;
   if (on) {
@@ -2739,6 +2818,9 @@ function drawGradingFrame(tab) {
     // Try once: reload the same URL with crossOrigin='anonymous', keeping
     // the current playback position, and see if that server actually
     // supports it.
+    // Saved GPU settings alone must not reload / re-download the video on
+    // open. Only try once the user actually touches an effect on this tab.
+    if (!tab._gpuRequested) return false;
     if (!tab._corsRetried) {
       retryVideoWithCors(tab);
       return true; // don't tear down the loop yet — retry is in flight
@@ -2760,6 +2842,7 @@ function drawGradingFrame(tab) {
       upgradeToBlobForGrading(tab, srcUrl);
       return true; // keep the loop alive; upgrade runs in the background
     }
+    if (tab._autoDLAbort) return true; // download still in flight - keep waiting
     return false;
   }
   gl.uniform2f(g.u_texel, 1 / vw, 1 / vh);
@@ -2771,6 +2854,11 @@ function drawGradingFrame(tab) {
   gl.uniform1f(g.u_temp, settings.temperature / 100);
   gl.uniform1f(g.u_skinProtect, settings.skinProtect ? 1.0 : 0.0);
   gl.uniform1f(g.u_skinSmooth, settings.skinSmooth / 100);
+  gl.uniform1f(g.u_cas, settings.casSharp / 100);
+  gl.uniform1f(g.u_clarity, settings.clarity / 100);
+  gl.uniform1f(g.u_dehaze, settings.dehaze / 100);
+  gl.uniform1f(g.u_tint, settings.tint / 100);
+  gl.uniform1f(g.u_vig, settings.vignette / 100);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   // Only now — after a real frame has actually landed on the canvas — swap
   // the visible layer over. Until this point the <video> stays on screen
@@ -2836,6 +2924,7 @@ async function upgradeToBlobForGrading(tab, url) {
     tab.el.src = objUrl;
     tab.el.load();
     tab._corsRetried = true; // no more CORS games needed — it's local now
+    tab._gradingGaveUp = false;
     tab.gl = null; // fresh GL/texture state bound to the new element source
     tab.el.addEventListener('loadedmetadata', () => {
       if (savedTime > 0) { try { tab.el.currentTime = savedTime; } catch (e) {} }
@@ -2911,8 +3000,9 @@ function startGradingLoop(tab) {
       // of looping forever on a canvas that will never successfully draw —
       // that was the actual bug behind "video plays but screen is black".
       gradingRAF = null;
+      tab._gradingGaveUp = true;
       setGradingVisible(tab, false);
-      if (tab.id === activeTabId) {
+      if (tab.id === activeTabId && tab._gpuRequested) {
         showMiniToast('Color/AI Enhance effects aren\u2019t available for this video \u2014 showing normal playback instead');
       }
       return;
@@ -2928,6 +3018,12 @@ function updateGradingForActiveTab() {
   setGradingVisible(tab, isGradingNeeded());
 }
 
+['input','click'].forEach(ev => document.addEventListener(ev, e => {
+  if (!e.target || !e.target.closest || !e.target.closest('.enhance-body')) return;
+  const t = getTab(activeTabId);
+  if (t && t.isVideo && !t._gpuRequested) { t._gpuRequested = true; t._gradingGaveUp = false; setTimeout(updateGradingForActiveTab, 0); }
+}, true));
+const NEWFX = ['casSharp','clarity','dehaze','tint','vignette'];
 function refreshEnhanceLabels() {
   document.getElementById('brightVal').textContent = settings.bright + '%';
   document.getElementById('contrastVal').textContent = settings.contrast + '%';
@@ -2946,6 +3042,7 @@ function refreshEnhanceLabels() {
   document.getElementById('shadowsVal').textContent = settings.shadows;
   document.getElementById('highlightsVal').textContent = settings.highlights;
   document.getElementById('skinSmoothVal').textContent = settings.skinSmooth;
+  NEWFX.forEach(k => { const el = document.getElementById(k + 'Val'); if (el) el.textContent = settings[k]; });
 }
 function applyEnhanceSettingsToUI() {
   document.getElementById('bright').value = settings.bright;
@@ -2955,6 +3052,7 @@ function applyEnhanceSettingsToUI() {
   document.getElementById('skinProtectBtn').textContent = 'Skin tone protection: ' + (settings.skinProtect ? 'On' : 'Off');
   document.getElementById('skinProtectBtn').classList.toggle('active-toggle', settings.skinProtect);
   document.getElementById('skinSmooth').value = settings.skinSmooth;
+  NEWFX.forEach(k => { const el = document.getElementById(k); if (el) el.value = settings[k]; });
   document.getElementById('vibrance').value = settings.vibrance;
   document.getElementById('selHue').value = settings.selHue;
   document.getElementById('selRange').value = settings.selRange;
@@ -3381,7 +3479,7 @@ window.addEventListener('popstate', (ev) => {
   }
   // else: nothing left to go back to at any level — let the back gesture actually exit.
 });
-if (window.top === window) { try { history.pushState({ novaAppNav: true }, ''); } catch (e) {} } // arm the very first back press (standalone only; embedded uses Study Tube's own history)
+if (window.top === window) { try { history.pushState({ novaAppNav: true }, ''); } catch (e) {} } // arm the very first back press (standalone only; embedded uses 99Tube's own history)
 // Browsers auto-suspend a tab's AudioContext when the app/tab goes to the
 // background (screen lock, app switch), and don't always resume it when
 // you come back — which silently kills audio on a boosted video tab.
@@ -5891,7 +5989,7 @@ async function playDirectFileProgressive(tab, url) {
         if (tab.el._objectUrl) { try { URL.revokeObjectURL(tab.el._objectUrl); } catch (e) {} }
         tab.el._objectUrl = msUrl;
         tab.el.src = msUrl;
-        tab._corsRetried = false; // MediaSource blob — always clean, give grading a fresh shot
+        tab._corsRetried = false; tab._gradingGaveUp = false; tab._gradingBlobTried = false; // MediaSource blob — always clean, give grading a fresh shot
         ensureAudioGraphIfBoosted(tab);
         updateVolumeGain(tab, settings.volBoost);
         applyFiltersToTab(tab);
@@ -5949,7 +6047,7 @@ async function playHlsProgressive(tab, url) {
   if (tab.el._objectUrl) { try { URL.revokeObjectURL(tab.el._objectUrl); } catch (e) {} }
   tab.el._objectUrl = msUrl;
   tab.el.src = msUrl;
-  tab._corsRetried = false; // MediaSource blob — always clean, give grading a fresh shot
+  tab._corsRetried = false; tab._gradingGaveUp = false; tab._gradingBlobTried = false; // MediaSource blob — always clean, give grading a fresh shot
   ensureAudioGraphIfBoosted(tab);
   updateVolumeGain(tab, settings.volBoost);
   applyFiltersToTab(tab);
@@ -6589,6 +6687,12 @@ document.getElementById('skinProtectBtn').addEventListener('click', () => {
   saveEnhanceSettings();
 });
 document.getElementById('skinSmooth').addEventListener('input', e => { settings.skinSmooth = Number(e.target.value); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings(); });
+NEWFX.forEach(k => document.getElementById(k).addEventListener('input', e => { settings[k] = Number(e.target.value); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings(); }));
+document.getElementById('hdBoostBtn').addEventListener('click', () => {
+  Object.assign(settings, { casSharp: 55, clarity: 30, dehaze: 15, vibrance: 115, aiEnhance: Math.max(settings.aiEnhance, 35), contrast: Math.max(settings.contrast, 105) });
+  applyEnhanceSettingsToUI(); applyFiltersToAllVideoTabs(); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings();
+  showMiniToast('HD Boost applied');
+});
 document.getElementById('vibrance').addEventListener('input', e => { settings.vibrance = Number(e.target.value); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings(); });
 document.getElementById('selHue').addEventListener('input', e => { settings.selHue = Number(e.target.value); updateSelSwatch(); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings(); });
 document.getElementById('selRange').addEventListener('input', e => { settings.selRange = Number(e.target.value); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings(); });
@@ -7458,7 +7562,7 @@ function swapTabToBlob(tab, objectUrl, blob, sourceUrl) {
   // vibrance, selective color, AI enhance, skin protect/smooth) gets a
   // completely fresh attempt against this now-local source instead of
   // staying stuck in whatever failed/gave-up state the live stream left it in.
-  tab._corsRetried = false;
+  tab._corsRetried = false; tab._gradingGaveUp = false; tab._gradingBlobTried = false;
   // Keep the blob + a filename around so a "Save to device" button can offer
   // it after the download finishes, without re-downloading anything.
   if (blob) {
@@ -7886,7 +7990,7 @@ function applyPresetValues(vals) { Object.assign(settings, vals); applyEnhanceSe
 document.querySelectorAll('.presets button[data-preset]').forEach(btn => {
   btn.addEventListener('click', () => {
     const table = {
-      reset:    { bright:100, contrast:100, sat:100, sharp:0, denoise:0, detail:0, exposure:0, gamma:100, shadows:0, highlights:0, vibrance:100, selHue:0, selRange:30, selSat:100, aiEnhance:0, temperature:0, skinProtect:false, skinSmooth:0 },
+      reset:    { bright:100, contrast:100, sat:100, sharp:0, denoise:0, detail:0, exposure:0, gamma:100, shadows:0, highlights:0, vibrance:100, selHue:0, selRange:30, selSat:100, aiEnhance:0, temperature:0, skinProtect:false, skinSmooth:0, casSharp:0, clarity:0, dehaze:0, tint:0, vignette:0 },
       clear:    { bright:105, contrast:115, sat:105, sharp:35, denoise:15, detail:20, exposure:5, gamma:105, shadows:10, highlights:5 },
       warm:     { bright:105, contrast:105, sat:120, sharp:15, denoise:10, detail:10, exposure:5, gamma:100, shadows:5, highlights:0, temperature:25 },
       vivid:    { bright:100, contrast:120, sat:150, sharp:25, denoise:5, detail:20, exposure:0, gamma:110, shadows:0, highlights:15 },
@@ -9024,10 +9128,10 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
 
   let feedBusy = false, feedTimer = null;
   function mountFeed() {
-    return; /* Studytube: Home = normal browser; video feed lives in Study */
+    return; /* 99Tube: Home = normal browser; video feed lives in Study */
     const host = $('emptyHint'); if (!host || $('uvFeed') || (root && root.id === 'uvHome')) return;
     const f = document.createElement('div'); f.id = 'uvFeed'; f.className = 'uvh-inline';
-    f.innerHTML = '<div class="uvh-head"><div class="uvh-top"><span class="uvf-logo">&#9654;</span><h2>Studytube</h2><span class="uvh-stat"></span></div>' +
+    f.innerHTML = '<div class="uvh-head"><div class="uvh-top"><span class="uvf-logo">&#9654;</span><h2>99Tube</h2><span class="uvh-stat"></span></div>' +
       '<div class="uvh-bar"><div class="uv-fsearch"><span>&#128269;</span><input type="search" placeholder="Search your videos" autocomplete="off" autocapitalize="off" spellcheck="false"></div><button class="uvh-sort"></button></div>' +
       '<div class="uv-chips uvh-chips" id="uvfChips"></div></div><div class="uvh-body"><div class="uvh-grid">' +
       Array.from({ length: 3 }, () => '<div class="uvh-card"><div class="uvh-th uv-sh"></div><div class="uvh-info"><span class="uvh-av uv-sh"></span><div class="uvh-txt"><div class="uv-sh" style="height:12px;width:80%"></div></div></div></div>').join('') + '</div></div>';
@@ -9100,7 +9204,7 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
   document.addEventListener('click', e => { if (e.target.closest && e.target.closest('[data-etab="playback"]')) refresh(); }, true);
 })();
 
-/* ===== UV99 upgrades v15 (Study Tube: study-only YouTube feed. Allowlist of channels, no Shorts/home feed/comments/recommendations; YouTube Data API v3 + IFrame player (youtube-nocookie, rel=0); speed, resume, daily watch limit) ===== */
+/* ===== UV99 upgrades v15 (99Tube: study-only YouTube feed. Allowlist of channels, no Shorts/home feed/comments/recommendations; YouTube Data API v3 + IFrame player (youtube-nocookie, rel=0); speed, resume, daily watch limit) ===== */
 (function () {
   const $ = id => document.getElementById(id);
   const rd = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } };
@@ -9216,7 +9320,7 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
       }, 400);
     });
   })();
-  /* ---- Admin ki Study Tube setting / channels => room ke sabhi members ke liye (app.js bridge: st-global-*) ---- */
+  /* ---- Admin ki 99Tube setting / channels => room ke sabhi members ke liye (app.js bridge: st-global-*) ---- */
   (function () {
     if (window.parent === window) return;
     var isAdm = false, lastSig = null, tmr = null;
@@ -9239,7 +9343,7 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
       setGv(D.v); cache.t = 0;
       try { render(); } catch (e) {} try { refresh(true); } catch (e) {} try { tmShow(); } catch (e) {}
       if (isAdm) lastSig = JSON.stringify(snapG());
-      toast('Admin ki Study Tube setting lag gayi');
+      toast('Admin ki 99Tube setting lag gayi');
     }
     window.addEventListener('message', function (e) {
       if (e.source !== window.parent) return; var m = e.data || {};
@@ -9590,18 +9694,18 @@ document.getElementById('importPresetsInput').addEventListener('change', (e) => 
   }
   function sheet() {
     const s = $('stSh'); s.style.display = 'flex';
-    s.innerHTML = '<div class="stv-sb"><h3>Study Tube settings</h3><label>Allowed channels (nothing else is shown)</label><div>' +
+    s.innerHTML = '<div class="stv-sb"><h3>99Tube settings</h3><label>Allowed channels (nothing else is shown)</label><div>' +
       (chans.map((c, i) => '<div class="stv-cr"><img src="' + esc(c.img) + '" alt=""><span>' + esc(c.n) + (c.tag ? ' \u00b7 ' + esc(c.tag) : '') + '</span><button data-rm="' + i + '">&#10005;</button></div>').join('') || '<small>No channels yet</small>') +
       '</div><div class="stv-add" style="display:flex;gap:8px;margin-top:8px"><input id="stA" placeholder="@handle, channel ya video ka link"><input id="stT" placeholder="Subject" style="max-width:110px"><button id="stAd" style="max-width:70px">Add</button></div><label>Daily watch limit</label><select id="stLm">' +
       [[0, 'Off'], [30, '30 min'], [60, '1 hour'], [90, '90 min'], [120, '2 hours'], [180, '3 hours'], [240, '4 hours']].map(o => '<option value="' + o[0] + '"' + (o[0] === lim ? ' selected' : '') + '>' + o[1] + '</option>').join('') +
-      '</select><label style="display:flex;gap:8px;align-items:center"><input id="stAu" type="checkbox" style="width:auto;margin:0"' + (auto ? ' checked' : '') + '> Open Study Tube when the app starts</label><label style="display:flex;gap:8px;align-items:center"><input id="stOp" type="checkbox" style="width:auto;margin:0"' + (opn ? ' checked' : '') + '> Open search: koi bhi YouTube video search kar sako</label><div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 2px"><button id="stBkp">&#11015; Channels backup</button><button id="stRs">&#11014; Restore</button><button id="stIm">&#128229; Subscriptions.csv</button></div><small style="opacity:.7;display:block;margin-bottom:6px">Channels is device me hamesha save rehte hain. Apne asli YouTube subscribe wale channels ek baar daalne ke liye: Google Takeout &rarr; YouTube &rarr; subscriptions.csv &rarr; yahan import.</small><input type="file" id="stFi" accept=".csv,text/csv,text/plain" hidden><input type="file" id="stFr" accept="application/json,.json" hidden><div class="stv-act"><button id="stSv">Save &amp; refresh</button><button id="stCx">Close</button></div></div>';
+      '</select><label style="display:flex;gap:8px;align-items:center"><input id="stAu" type="checkbox" style="width:auto;margin:0"' + (auto ? ' checked' : '') + '> Open 99Tube when the app starts</label><label style="display:flex;gap:8px;align-items:center"><input id="stOp" type="checkbox" style="width:auto;margin:0"' + (opn ? ' checked' : '') + '> Open search: koi bhi YouTube video search kar sako</label><div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 2px"><button id="stBkp">&#11015; Channels backup</button><button id="stRs">&#11014; Restore</button><button id="stIm">&#128229; Subscriptions.csv</button></div><small style="opacity:.7;display:block;margin-bottom:6px">Channels is device me hamesha save rehte hain. Apne asli YouTube subscribe wale channels ek baar daalne ke liye: Google Takeout &rarr; YouTube &rarr; subscriptions.csv &rarr; yahan import.</small><input type="file" id="stFi" accept=".csv,text/csv,text/plain" hidden><input type="file" id="stFr" accept="application/json,.json" hidden><div class="stv-act"><button id="stSv">Save &amp; refresh</button><button id="stCx">Close</button></div></div>';
     sheetX();
   }
   function close() { stop(); if (ov) { ov.remove(); ov = null; } while (depth > 0) popS(); }
   function open() {
     if (ov) return;
     ov = document.createElement('div'); ov.id = 'stOv';
-    ov.innerHTML = '<div class="stv-hd"><button class="stv-ib" id="stBk" aria-label="Back">&#8592;</button><button class="stv-ib" id="stX" aria-label="Close">&#10005;</button><span class="stv-lg">&#9654;</span><h2>Study Tube<small id="stTm"></small></h2><button class="stv-add2" id="stAdd">&#65291; Channel</button><button class="stv-ib" id="stS" aria-label="Settings">&#9881;</button></div>' +
+    ov.innerHTML = '<div class="stv-hd"><button class="stv-ib" id="stBk" aria-label="Back">&#8592;</button><button class="stv-ib" id="stX" aria-label="Close">&#10005;</button><span class="stv-lg">&#9654;</span><h2>99Tube<small id="stTm"></small></h2><button class="stv-add2" id="stAdd">&#65291; Channel</button><button class="stv-ib" id="stS" aria-label="Settings">&#9881;</button></div>' +
       '<div class="stv-pl" id="stP"><div class="stv-vw"><div id="stYT"></div></div><div class="stv-ti"><div class="stv-pt" id="stPT"></div><div class="stv-pmeta" id="stPM"></div></div><div class="stv-pm"><div class="stv-sr"><span id="stSN"></span><button class="stv-sbtn" id="stSb">&#65291; Subscribe</button></div><div class="stv-pr"><span id="stSp" style="display:contents"></span><button class="stv-cl" id="stCl">Close player</button></div></div></div>' +
       '<div class="stv-sc" id="stSc"><div class="stv-bar"><div class="stv-q"><span>&#128269;</span><input id="stQ" type="search" placeholder="Search ya koi bhi link paste karo" autocomplete="off" autocapitalize="off" spellcheck="false"></div><button class="stv-ib" id="stR" aria-label="Refresh">&#8635;</button></div><div class="stv-chips" id="stCh"></div><div id="stL"></div></div><div class="stv-mc" id="stMc"><div class="stv-md" id="stMd" title="Drag">&#10303;</div><button id="stMx" aria-label="Expand">&#10530;</button><button id="stMp" aria-label="Play/Pause">&#9199;</button><button id="stMk" aria-label="Close">&#10005;</button></div><div class="stv-sh" id="stSh"></div>';
     document.body.appendChild(ov); fit(); $('stX').style.display = 'none'; mark('navStudy'); ytReady(); if (depth === 0) pushS(); tmShow(); mpApply();
@@ -9751,7 +9855,7 @@ loadPersistedData().then(async () => {
 
 </script>
 <script id="stv-core">
-/* Study Tube core: ek hi halka observer (sirf #stOv par) + throttle. Pehle 7 observers + 10 intervals the = lag. */
+/* 99Tube core: ek hi halka observer (sirf #stOv par) + throttle. Pehle 7 observers + 10 intervals the = lag. */
 (function(){
   var fns=[],pend=0,obs=null,watch=null;
   function run(){pend=0;for(var i=0;i<fns.length;i++){try{fns[i]()}catch(e){}}}
@@ -10011,11 +10115,11 @@ __stvHook(function(){var P=document.getElementById('stP');if(P&&P.querySelector(
 })();
 </script>
 <script>
-/* Studytube: background play for gallery / link / offline videos */
+/* 99Tube: background play for gallery / link / offline videos */
 (function(){
 var V=null,userPause=false,ms=navigator.mediaSession;
-function title(){var t=document.title;var el=document.querySelector('.tab.active .tab-title');return (el&&el.textContent.trim())||t||'Studytube'}
-function meta(){if(!ms||typeof MediaMetadata==='undefined')return;try{ms.metadata=new MediaMetadata({title:title(),artist:'Studytube',artwork:[{src:'icon-512.png',sizes:'512x512',type:'image/png'}]})}catch(e){}}
+function title(){var t=document.title;var el=document.querySelector('.tab.active .tab-title');return (el&&el.textContent.trim())||t||'99Tube'}
+function meta(){if(!ms||typeof MediaMetadata==='undefined')return;try{ms.metadata=new MediaMetadata({title:title(),artist:'99Tube',artwork:[{src:'icon-512.png',sizes:'512x512',type:'image/png'}]})}catch(e){}}
 function handlers(){if(!ms)return;
 var h={play:function(){V&&V.play()},pause:function(){V&&V.pause()},seekbackward:function(d){if(V)V.currentTime=Math.max(0,V.currentTime-((d&&d.seekOffset)||10))},seekforward:function(d){if(V)V.currentTime=Math.min(V.duration||1e9,V.currentTime+((d&&d.seekOffset)||10))},seekto:function(d){if(V&&d.seekTime!=null)V.currentTime=d.seekTime}};
 for(var k in h){try{ms.setActionHandler(k,h[k])}catch(e){}}}
@@ -10030,11 +10134,11 @@ try{ms&&ms.setActionHandler('enterpictureinpicture',function(){if(V&&V.requestPi
 })();
 </script>
 <script>
-/* Studytube: tells the Android WebView wrapper when media is playing (no-op in a normal browser) */
+/* 99Tube: tells the Android WebView wrapper when media is playing (no-op in a normal browser) */
 (function(){
 var last=null;
-function tell(on,t){if(last===on)return;last=on;try{if(window.StudytubeNative&&StudytubeNative.onPlayback)StudytubeNative.onPlayback(!!on,String(t||'Studytube'))}catch(e){}}
-function ttl(){var a=document.getElementById('stPT'),b=document.querySelector('.tab.active .tab-title');return (a&&a.offsetParent&&a.textContent.trim())||(b&&b.textContent.trim())||'Studytube'}
+function tell(on,t){if(last===on)return;last=on;try{if(window.StudytubeNative&&StudytubeNative.onPlayback)StudytubeNative.onPlayback(!!on,String(t||'99Tube'))}catch(e){}}
+function ttl(){var a=document.getElementById('stPT'),b=document.querySelector('.tab.active .tab-title');return (a&&a.offsetParent&&a.textContent.trim())||(b&&b.textContent.trim())||'99Tube'}
 document.addEventListener('play',function(e){if(e.target&&e.target.tagName==='VIDEO')tell(true,ttl())},true);
 document.addEventListener('pause',function(e){if(e.target&&e.target.tagName==='VIDEO')tell(false)},true);
 document.addEventListener('ended',function(e){if(e.target&&e.target.tagName==='VIDEO')tell(false)},true);
@@ -10057,7 +10161,7 @@ try{document.querySelectorAll('iframe').forEach(function(f){if(f.contentWindow)f
 })();
 </script>
 <style id="stv-v2">
-/* Study Tube v2 — scroll fix, sticky video, tabs, polish */
+/* 99Tube v2 — scroll fix, sticky video, tabs, polish */
 #stOv{overscroll-behavior:contain}
 #stOv .stv-hd{padding-top:calc(8px + env(safe-area-inset-top,0px))}
 #stOv{padding-top:0!important}
@@ -10131,7 +10235,7 @@ __stvHook(org);
 })();
 </script>
 <style id="st-v3">
-/* Study Tube v3 — video sticky nahi (scroll ke saath jata hai), auto-rotate, desktop layout */
+/* 99Tube v3 — video sticky nahi (scroll ke saath jata hai), auto-rotate, desktop layout */
 .stv-pr{flex-wrap:wrap}
 /* Auto-rotate: phone landscape karte hi video poori screen bhar leta hai, portrait mein wapas normal */
 @media (orientation:landscape) and (pointer:coarse) and (max-height:520px){
@@ -10161,7 +10265,7 @@ __stvHook(org);
 @media (min-width:900px){#stOv.stv-playing:not(.stv-mini) #stRz{display:block}}
 </style>
 <script>
-/* Study Tube: video aur side panel ke beech ka divider drag karo (double-click = reset) */
+/* 99Tube: video aur side panel ke beech ka divider drag karo (double-click = reset) */
 (function(){
   var KEY='uv99:st:side';
   function clamp(w,ov){ return Math.max(260, Math.min(ov.clientWidth-340, w)); }
@@ -10184,7 +10288,7 @@ __stvHook(org);
 })();
 </script>
 <script>
-/* Study Tube v3: desktop par tools (.stv-pm) sidebar mein, mobile par video ke neeche */
+/* 99Tube v3: desktop par tools (.stv-pm) sidebar mein, mobile par video ke neeche */
 (function(){
   var mq = window.matchMedia('(min-width:900px)');
   function sync(){
@@ -10195,7 +10299,7 @@ __stvHook(org);
   }
   __stvHook(sync); window.addEventListener('resize', sync); try{ mq.addEventListener('change', sync); }catch(e){}
 })();
-/* Study Tube v3: Nova player ka orientation-lock hata do taaki Study Tube mein auto-rotate chale */
+/* 99Tube v3: Nova player ka orientation-lock hata do taaki 99Tube mein auto-rotate chale */
 (function(){
   function unlock(){ try{ screen.orientation && screen.orientation.unlock && screen.orientation.unlock(); }catch(e){} }
   var wasP=false; __stvHook(function(){ var o=document.getElementById('stOv'); var pl=!!(o&&o.classList.contains('stv-playing')); if(pl&&!wasP) unlock(); wasP=pl; });
@@ -10203,7 +10307,7 @@ __stvHook(org);
 })();
 </script>
 <style id="st-v4">
-/* Study Tube v4 — Video-player (Nova) ke features YouTube player mein */
+/* 99Tube v4 — Video-player (Nova) ke features YouTube player mein */
 .stpp{margin-top:10px;padding-top:8px;border-top:1px solid #2a2a2a}
 .stpp summary{font-size:13px;font-weight:700;color:#cfd3ff;cursor:pointer;padding:4px 0}
 .stpp .r{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
@@ -10686,7 +10790,7 @@ __stvHook(org);
 .stv-pb,#stc .sc-pg,#stc .sc-th{background:var(--st-pg,#f33)!important}
 </style>
 <script id="stx-js">
-/* Study Tube PRO add-on: Study Hub (progress/streak/heatmap), Pomodoro, SM-2 flashcards, Watch later, chapters, themes, backup, shortcuts */
+/* 99Tube PRO add-on: Study Hub (progress/streak/heatmap), Pomodoro, SM-2 flashcards, Watch later, chapters, themes, backup, shortcuts */
 (function () {
   if (window.__stHub) return; window.__stHub = 1;
   var $ = function (s, r) { return (r || document).querySelector(s); };
@@ -10765,7 +10869,7 @@ __stvHook(org);
   function saveWL() { wr('uv99:st:wl', WL); }
 
   /* ---------- theme ---------- */
-  var ACC = [['Studytube', '#7c6cff', '#ff5c8a', '#f33'], ['Blue', '#3ea6ff', '#00d4ff', '#3ea6ff'], ['Green', '#2ecc71', '#00b894', '#2ecc71'], ['Orange', '#ff8a3d', '#ff5c5c', '#ff8a3d'], ['Pink', '#ff5c8a', '#ff8fb0', '#ff5c8a'], ['Gold', '#f5c542', '#ff9f43', '#f5c542']];
+  var ACC = [['99Tube', '#7c6cff', '#ff5c8a', '#f33'], ['Blue', '#3ea6ff', '#00d4ff', '#3ea6ff'], ['Green', '#2ecc71', '#00b894', '#2ecc71'], ['Orange', '#ff8a3d', '#ff5c5c', '#ff8a3d'], ['Pink', '#ff5c8a', '#ff8fb0', '#ff5c8a'], ['Gold', '#f5c542', '#ff9f43', '#f5c542']];
   function applyTheme() {
     var T = rd('uv99:st:theme', { a: 0, am: false }), A = ACC[T.a] || ACC[0], r = document.documentElement.style;
     r.setProperty('--st-ac', A[1]); r.setProperty('--st-ac2', A[2]); r.setProperty('--st-pg', A[3]);
@@ -10855,7 +10959,7 @@ __stvHook(org);
     hub = document.createElement('div'); hub.id = 'stHub';
     hub.innerHTML = '<div class="hh"><b>📚 Study Hub</b><button data-x="1" aria-label="Close">✕</button></div><div class="ht"></div><div class="hb"></div>';
     document.body.appendChild(hub);
-    /* Escape/back ko Study Tube ke apne sheet-close logic se jodte hain: stSh ko flex rakhte hain, wo band hote hi hub band */
+    /* Escape/back ko 99Tube ke apne sheet-close logic se jodte hain: stSh ko flex rakhte hain, wo band hote hi hub band */
     hubSh = $('#stSh');
     if (hubSh) { hubSh.innerHTML = ''; hubSh.style.display = 'flex'; shObs = new MutationObserver(function () { if (hub && hubSh.style.display !== 'flex') closeHub(true); }); shObs.observe(hubSh, { attributes: true, attributeFilter: ['style'] }); }
     hub.addEventListener('click', onClick);
@@ -11223,6 +11327,33 @@ __stvHook(org);
   b.onclick=pal;document.body.appendChild(b);
   setInterval(function(){b.style.display=document.getElementById('stOv')?'none':''},800);
   window.uvPalette=pal;
+})();
+
+/* ===== Focus mode: auto-hide chrome while a video plays ===== */
+(function(){
+  const app = document.querySelector('.app');
+  let idleT = null;
+  function busy() {
+    const sheet = document.querySelector('.enhance-sheet');
+    if (sheet && sheet.offsetParent !== null && getComputedStyle(sheet).display !== 'none') return true;
+    return !!document.querySelector('.float-menu.open, .float-menu.visible, .folder-overlay.open');
+  }
+  function armIdle() {
+    clearTimeout(idleT);
+    const t = getTab(activeTabId);
+    if (!t || !t.isVideo || t.el.paused) return;
+    idleT = setTimeout(() => { if (!busy()) app.classList.add('ui-idle'); else armIdle(); }, 3500);
+  }
+  function wake() { app.classList.remove('ui-idle'); armIdle(); }
+  ['pointerdown','touchstart','input'].forEach(ev => document.addEventListener(ev, wake, true));
+  document.addEventListener('pause', () => { app.classList.remove('ui-idle'); clearTimeout(idleT); }, true);
+  document.addEventListener('play', e => {
+    const t = tabs.find(x => x.isVideo && x.el === e.target);
+    if (!t) return;
+    // first play of each video: go straight to a clean full-page view
+    if (!t._focusDone) { t._focusDone = true; app.classList.add('immersive-mode'); }
+    armIdle();
+  }, true);
 })();
 </script>
 </body>
