@@ -270,6 +270,10 @@
     filter: brightness(var(--b,1)) contrast(var(--c,1)) saturate(var(--s,1)) blur(var(--denoise,0px)) url(#sharpenFilter);
   }
   .stage video.grading-hidden { display:none !important; }
+  .stage video.active-frame.fx-fallback {
+    filter: brightness(var(--b,1)) contrast(var(--c,1)) saturate(var(--s,1)) blur(var(--denoise,0px)) url(#sharpenFilter) url(#fxFallback);
+  }
+  #fxVignette { position:absolute; inset:0; pointer-events:none; z-index:3; display:none; }
   .empty-tab-hint {
     position:absolute; inset:0; display:flex; flex-direction:column;
     overflow-y:auto; -webkit-overflow-scrolling:touch;
@@ -1952,6 +1956,14 @@ function loadUrl(tabId, rawUrl, isNewNav) {
     tab.el.replaceWith(newEl);
     tab.el = newEl;
     tab.isVideo = true;
+    // Tabs that start as a browser (iframe) tab and turn into a video tab
+    // never got a grading canvas, so every GPU effect silently did nothing.
+    if (!tab.canvas) {
+      const gc = document.createElement('canvas');
+      gc.id = tab.id + '_grade';
+      document.getElementById('stage').appendChild(gc);
+      tab.canvas = gc; tab.gl = null;
+    }
     tab._corsRetried = false; tab._gradingGaveUp = false; tab._gradingBlobTried = false;
     tab._retryStage = 0;
     tab.aspect = tab.aspect || 'fit';
@@ -2750,11 +2762,13 @@ function isGradingNeeded() {
          settings.casSharp > 0 || settings.clarity > 0 || settings.dehaze > 0 ||
          settings.tint !== 0 || settings.vignette > 0;
 }
+function gfxNote(tab, msg) { try { if (tab && tab.id === activeTabId && tab._gpuRequested) showMiniToast(msg); } catch (e) {} }
 function setGradingVisible(tab, on) {
+  if (on && tab && !tab.canvas) { gfxNote(tab, 'GPU effects: is tab me canvas nahi bana'); }
   if (!tab || !tab.canvas) return;
   if (on) {
     const g = initGradingGL(tab);
-    if (!g) { on = false; }
+    if (!g) { on = false; gfxNote(tab, 'GPU effects: is phone/browser me WebGL nahi chal raha'); }
   }
   if (on) {
     // Don't hide the real <video> or switch to the canvas yet — only once
@@ -2821,6 +2835,7 @@ function drawGradingFrame(tab) {
     // Saved GPU settings alone must not reload / re-download the video on
     // open. Only try once the user actually touches an effect on this tab.
     if (!tab._gpuRequested) return false;
+    gfxNote(tab, 'GPU effects: video ka server allow nahi kar raha, retry ho raha hai\u2026');
     if (!tab._corsRetried) {
       retryVideoWithCors(tab);
       return true; // don't tear down the loop yet — retry is in flight
@@ -2866,6 +2881,8 @@ function drawGradingFrame(tab) {
   // download is still in flight.
   if (!tab._gradingReady) {
     tab._gradingReady = true;
+    gfxNote(tab, 'GPU effects ON \u2713');
+    try { setTimeout(() => syncFallbackFx(tab), 0); } catch (e) {}
     tab.el.classList.add('grading-hidden');
     tab.canvas.classList.add('active-frame');
   }
@@ -3002,8 +3019,9 @@ function startGradingLoop(tab) {
       gradingRAF = null;
       tab._gradingGaveUp = true;
       setGradingVisible(tab, false);
+      try { syncFallbackFx(tab); } catch (e) {}
       if (tab.id === activeTabId && tab._gpuRequested) {
-        showMiniToast('Color/AI Enhance effects aren\u2019t available for this video \u2014 showing normal playback instead');
+        showMiniToast('Is video par GPU effects nahi chale \u2014 simple filter mode me effects lag rahe hain (Selective color ke bina)');
       }
       return;
     }
@@ -3016,6 +3034,7 @@ function updateGradingForActiveTab() {
   const tab = getTab(activeTabId);
   if (!tab || !tab.isVideo) { if (gradingRAF) { cancelAnimationFrame(gradingRAF); gradingRAF = null; } return; }
   setGradingVisible(tab, isGradingNeeded());
+  try { syncFallbackFx(tab); } catch (e) {}
 }
 
 ['input','click'].forEach(ev => document.addEventListener(ev, e => {
@@ -11354,6 +11373,51 @@ __stvHook(org);
     if (!t._focusDone) { t._focusDone = true; app.classList.add('immersive-mode'); }
     armIdle();
   }, true);
+})();
+
+/* ===== Fallback effects (SVG/CSS) =====
+   Browsers never let a page read pixels of a cross-origin video that has no
+   CORS headers (most sites), so the GPU shader can't run on it. These SVG
+   filters work on ANY <video>, so the main effects still apply. */
+(function(){
+  const NS='http://www.w3.org/2000/svg';
+  const holder=document.createElement('div');
+  holder.style.cssText='position:absolute;width:0;height:0;overflow:hidden';
+  holder.innerHTML='<svg xmlns="'+NS+'" width="0" height="0"><filter id="fxFallback" color-interpolation-filters="sRGB" x="0" y="0" width="100%" height="100%">'+
+   '<feColorMatrix id="fxTone" type="matrix" in="SourceGraphic" result="c1" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"/>'+
+   '<feColorMatrix id="fxSat" type="saturate" in="c1" values="1" result="c2"/>'+
+   '<feComponentTransfer id="fxHaze" in="c2" result="c3"><feFuncR type="linear" slope="1" intercept="0"/><feFuncG type="linear" slope="1" intercept="0"/><feFuncB type="linear" slope="1" intercept="0"/></feComponentTransfer>'+
+   '<feConvolveMatrix id="fxConv" in="c3" order="3" kernelMatrix="0 0 0 0 1 0 0 0 0" divisor="1" preserveAlpha="true" result="c4"/>'+
+   '<feGaussianBlur id="fxBlur" in="c4" stdDeviation="1.6" result="bl"/>'+
+   '<feComposite id="fxMix" in="c4" in2="bl" operator="arithmetic" k1="0" k2="1" k3="0" k4="0"/>'+
+   '</filter></svg>';
+  document.body.appendChild(holder);
+  const vig=document.createElement('div'); vig.id='fxVignette';
+  document.getElementById('stage').appendChild(vig);
+  const $=id=>document.getElementById(id);
+  window.syncFallbackFx = function(tab){
+    tab = tab || getTab(activeTabId);
+    if (!tab || !tab.isVideo) { vig.style.display='none'; return; }
+    const st=settings;
+    const any = st.vibrance!==100 || st.aiEnhance>0 || st.temperature!==0 || st.skinSmooth>0 ||
+      st.casSharp>0 || st.clarity>0 || st.dehaze>0 || st.tint!==0;
+    const useFx = any && !tab._gradingReady;
+    tab.el.classList.toggle('fx-fallback', useFx);
+    if (useFx) {
+      const t=st.temperature/100, ti=st.tint/100;
+      const rr=(1+0.25*t)*(1+0.06*ti), gg=1-0.15*ti, bb=(1-0.25*t)*(1+0.06*ti);
+      $('fxTone').setAttribute('values', rr.toFixed(3)+' 0 0 0 0  0 '+gg.toFixed(3)+' 0 0 0  0 0 '+bb.toFixed(3)+' 0 0  0 0 0 1 0');
+      $('fxSat').setAttribute('values', Math.max(0, 1+(st.vibrance/100-1)*0.6+st.aiEnhance/100*0.16).toFixed(3));
+      const d=st.dehaze/100, slope=1+0.4*d, icpt=-0.2*d;
+      $('fxHaze').querySelectorAll('feFuncR,feFuncG,feFuncB').forEach(f=>{f.setAttribute('slope',slope.toFixed(3));f.setAttribute('intercept',icpt.toFixed(3));});
+      const k=Math.min(1.2, st.casSharp/100*0.9 + st.clarity/100*0.5 + st.aiEnhance/100*0.3);
+      $('fxConv').setAttribute('kernelMatrix','0 '+(-k).toFixed(3)+' 0  '+(-k).toFixed(3)+' '+(1+4*k).toFixed(3)+' '+(-k).toFixed(3)+'  0 '+(-k).toFixed(3)+' 0');
+      const a=st.skinSmooth/100*0.7;
+      $('fxMix').setAttribute('k2',(1-a).toFixed(3)); $('fxMix').setAttribute('k3',a.toFixed(3));
+    }
+    if (st.vignette>0) { vig.style.display='block'; vig.style.background='radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(0,0,0,'+(st.vignette/100*0.85).toFixed(2)+') 100%)'; }
+    else vig.style.display='none';
+  };
 })();
 </script>
 </body>
