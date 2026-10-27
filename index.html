@@ -822,6 +822,8 @@
     <div class="quick-controls" id="quickControls" style="display:none;">
       <button id="enhanceBtnPlayer" title="Video enhancer"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"/></svg></button>
       <button id="pasteLinkBtnPlayer" title="Open another video from a link">&#128279;</button>
+      <button id="cmpHoldBtn" title="Dabaye rakho: original video dikhegi, chodo: HD wapas" style="font-size:10px;font-weight:800;touch-action:none;">A|B</button>
+      <button id="hdQuickBtn" title="Smart HD Quality on/off" style="font-size:11px;font-weight:800;">HD</button>
       <button id="rotateBtn" title="Rotate">&#8635;</button>
       <button id="flipBtn" title="Flip horizontal">&#8646;</button>
       <button id="pipBtn" title="Picture in picture">&#9635;</button>
@@ -896,6 +898,19 @@
 
     <div class="enhance-body active" id="etab-adjust">
       <div class="slider-row">
+        <label><span>&#10024; Smart HD Quality</span><span class="val-wrap"><span id="hdQualityVal">0</span><button class="reset-btn" data-key="hdQuality" data-default="0" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="hdQuality" min="0" max="100" value="0">
+      </div>
+      <div class="row-buttons">
+        <button data-hdmode="lecture">&#128218; Lecture</button>
+        <button data-hdmode="movie">&#127916; Movie / Series</button>
+        <button data-hdmode="dark">&#127769; Dark Scene Fix</button>
+        <button data-hdmode="anime">&#10024; Anime</button>
+        <button data-hdmode="rescue">&#128295; Low-res Rescue</button>
+        <button id="autoHdBtn">Auto HD: On</button>
+      </div>
+      <div class="note">Smart HD Quality: video ko screen ke size tak bicubic upscale karta hai (bilinear se kaafi saaf), phir edges ko halo ke bina sharpen karta hai. Slider chalate hi video 1-2 sec me HD mode me aa jaati hai. 40&ndash;70 best rehta hai; zyada karne par grain bhi tez dikhta hai.</div>
+      <div class="slider-row">
         <label><span>Sharpness / Clarity</span><span class="val-wrap"><span id="sharpVal">0</span><button class="reset-btn" data-key="sharp" data-default="0" title="Reset">&#8635;</button></span></label>
         <input type="range" id="sharp" min="0" max="100" value="0">
       </div>
@@ -962,21 +977,42 @@
         <label><span>Vignette (cinema edges)</span><span class="val-wrap"><span id="vignetteVal">0</span><button class="reset-btn" data-key="vignette" data-default="0" title="Reset">&#8635;</button></span></label>
         <input type="range" id="vignette" min="0" max="100" value="0">
       </div>
+      <div class="slider-row">
+        <label><span>Shadow lift (dark scenes)</span><span class="val-wrap"><span id="gammaVal">0</span><button class="reset-btn" data-key="gamma" data-default="0" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="gamma" min="-100" max="100" value="0">
+      </div>
+      <div class="slider-row">
+        <label><span>Denoise (noise/grain hatao)</span><span class="val-wrap"><span id="denoiseVal">0</span><button class="reset-btn" data-key="denoise" data-default="0" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="denoise" min="0" max="100" value="0">
+      </div>
+      <div class="slider-row">
+        <label><span>Movie look</span></label>
+        <select id="lookSel" style="width:100%;padding:12px;border-radius:12px;background:#2a2d3a;color:#fff;border:0;font-size:15px"><option value="0">Off</option><option value="1">Teal &amp; Orange (blockbuster)</option><option value="2">Warm Film</option><option value="3">Noir B&amp;W</option><option value="4">Vintage Faded</option><option value="5">Cold Thriller</option></select>
+      </div>
+      <div class="slider-row">
+        <label><span>Look strength</span><span class="val-wrap"><span id="lookAmtVal">70</span><button class="reset-btn" data-key="lookAmt" data-default="70" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="lookAmt" min="0" max="100" value="70">
+      </div>
+      <div class="slider-row">
+        <label><span>Film grain</span><span class="val-wrap"><span id="grainVal">0</span><button class="reset-btn" data-key="grain" data-default="0" title="Reset">&#8635;</button></span></label>
+        <input type="range" id="grain" min="0" max="100" value="0">
+      </div>
+      <div class="slider-row">
+        <label><span>Cinema bars (letterbox)</span></label>
+        <select id="letterboxSel" style="width:100%;padding:12px;border-radius:12px;background:#2a2d3a;color:#fff;border:0;font-size:15px"><option value="0">Off</option><option value="235">2.35:1 (Cinemascope)</option><option value="200">2.00:1</option><option value="185">1.85:1</option></select>
+      </div>
       <div class="note">New GPU effects (CAS Sharpen, Clarity, Dehaze, Tint, Vignette) &mdash; CAS is AMD FidelityFX-style adaptive sharpening that crisps detail without halos.</div>
       <div class="note">Settings save automatically and apply to every video you open. Sharpness is simulated edge-enhancement, not true resolution upscaling.</div>
     </div>
 
     <div class="enhance-body" id="etab-quality">
       <div class="row-buttons"><button id="autoEnhanceBtn" class="primary">Auto Enhance</button><button id="hdBoostBtn">HD Boost</button></div>
+      <div class="row-buttons"><button class="fxPreset" data-p="cinema">Cinema Mode</button><button class="fxPreset" data-p="teal">Teal-Orange</button><button class="fxPreset" data-p="warm">Warm Film</button><button class="fxPreset" data-p="noir">Noir B&amp;W</button><button class="fxPreset" data-p="vintage">Vintage</button><button class="fxPreset" data-p="cold">Cold Thriller</button><button id="fxCompareBtn">Hold: Original</button><button class="fxPreset" data-p="study">Study Text</button><button class="fxPreset" data-p="cine">Cinematic</button><button class="fxPreset" data-p="vivid">Vivid</button><button class="fxPreset" data-p="night">Night Boost</button><button class="fxPreset" data-p="off">Reset FX</button></div>
       <div class="slider-row">
         <label><span>AI Enhance (Anime4K-style)</span><span class="val-wrap"><span id="aiEnhanceVal">0</span><button class="reset-btn" data-key="aiEnhance" data-default="0" title="Reset">&#8635;</button></span></label>
         <input type="range" id="aiEnhance" min="0" max="100" value="0">
       </div>
       <div class="note">Real-time GPU line-sharpening inspired by the Anime4K algorithm: it detects edges and pushes them crisper, and renders at your screen's resolution instead of the video's, so it also acts as a smart upscale for low-res video. This is a lightweight real-time filter, not a true AI model &mdash; genuine AI super-resolution (like ESRGAN/waifu2x) needs a neural network per frame, which is too slow for live video in a browser.</div>
-      <div class="slider-row">
-        <label><span>Noise Reduction</span><span class="val-wrap"><span id="denoiseVal">0</span><button class="reset-btn" data-key="denoise" data-default="0" title="Reset">&#8635;</button></span></label>
-        <input type="range" id="denoise" min="0" max="100" value="0">
-      </div>
       <div class="slider-row">
         <label><span>Detail Boost</span><span class="val-wrap"><span id="detailVal">0</span><button class="reset-btn" data-key="detail" data-default="0" title="Reset">&#8635;</button></span></label>
         <input type="range" id="detail" min="0" max="100" value="0">
@@ -984,10 +1020,6 @@
       <div class="slider-row">
         <label><span>Exposure</span><span class="val-wrap"><span id="exposureVal">0</span><button class="reset-btn" data-key="exposure" data-default="0" title="Reset">&#8635;</button></span></label>
         <input type="range" id="exposure" min="-50" max="50" value="0">
-      </div>
-      <div class="slider-row">
-        <label><span>Gamma</span><span class="val-wrap"><span id="gammaVal">100%</span><button class="reset-btn" data-key="gamma" data-default="100" title="Reset">&#8635;</button></span></label>
-        <input type="range" id="gamma" min="50" max="200" value="100">
       </div>
       <div class="slider-row">
         <label><span>Shadows lift</span><span class="val-wrap"><span id="shadowsVal">0</span><button class="reset-btn" data-key="shadows" data-default="0" title="Reset">&#8635;</button></span></label>
@@ -1276,7 +1308,7 @@ const DOWNLOAD_EXT_RE = /\.(pdf|zip|rar|7z|docx?|xlsx?|pptx?|csv|json|txt|png|jp
 
 let settings = { bright: 100, contrast: 100, sat: 100, sharp: 0, volBoost: 100, loop: false,
   denoise: 0, detail: 0, exposure: 0, gamma: 100, shadows: 0, highlights: 0,
-  vibrance: 100, selHue: 0, selRange: 30, selSat: 100, aiEnhance: 0, temperature: 0, skinProtect: false, skinSmooth: 0, casSharp: 0, clarity: 0, dehaze: 0, tint: 0, vignette: 0, autoDownload: true };
+  vibrance: 100, selHue: 0, selRange: 30, selSat: 100, aiEnhance: 0, temperature: 0, skinProtect: false, skinSmooth: 0, casSharp: 0, clarity: 0, dehaze: 0, tint: 0, vignette: 0, gamma: 0, denoise: 0, look: 0, lookAmt: 70, grain: 0, letterbox: 0, hdQuality: 0, autoHD: true, autoDownload: true };
 let customPresets = {};
 const sharpMatrix = document.getElementById('sharpenMatrix');
 
@@ -2468,7 +2500,11 @@ function applyFiltersToAllVideoTabs() { tabs.forEach(t => { if (t.isVideo) apply
 let gradingRAF = null;
 const VERT_SRC = 'attribute vec2 p; varying vec2 v; void main(){ v = p*0.5+0.5; gl_Position = vec4(p,0.0,1.0); }';
 const FRAG_SRC = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
 precision mediump float;
+#endif
 varying vec2 v;
 uniform sampler2D u_tex;
 uniform vec2 u_texel;
@@ -2485,6 +2521,34 @@ uniform float u_clarity;
 uniform float u_dehaze;
 uniform float u_tint;
 uniform float u_vig;
+uniform float u_gamma;
+uniform mat3 u_lm;
+uniform vec3 u_lo;
+uniform float u_denoise;
+uniform float u_hd;
+// Catmull-Rom bicubic upscale (5 bilinear taps) - much crisper than the GPU's plain bilinear stretch
+vec3 sampleCR(vec2 uv){
+  vec2 sz = 1.0 / u_texel;
+  vec2 pos = uv * sz;
+  vec2 c = floor(pos - 0.5) + 0.5;
+  vec2 f = pos - c;
+  vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+  vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+  vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+  vec2 w3 = f * f * (-0.5 + 0.5 * f);
+  vec2 w12 = w1 + w2;
+  vec2 t12 = w2 / w12;
+  vec2 p0 = (c - 1.0) * u_texel;
+  vec2 p3 = (c + 2.0) * u_texel;
+  vec2 p12 = (c + t12) * u_texel;
+  float wa = w12.x * w0.y, wb = w0.x * w12.y, wc = w12.x * w12.y, wd = w3.x * w12.y, we = w12.x * w3.y;
+  vec3 r = texture2D(u_tex, vec2(p12.x, p0.y)).rgb * wa
+         + texture2D(u_tex, vec2(p0.x, p12.y)).rgb * wb
+         + texture2D(u_tex, vec2(p12.x, p12.y)).rgb * wc
+         + texture2D(u_tex, vec2(p3.x, p12.y)).rgb * wd
+         + texture2D(u_tex, vec2(p12.x, p3.y)).rgb * we;
+  return clamp(r / (wa + wb + wc + wd + we), 0.0, 1.0);
+}
 vec3 rgb2hsv(vec3 c){
   vec4 K = vec4(0.0,-1.0/3.0,2.0/3.0,-1.0);
   vec4 p2 = mix(vec4(c.bg,K.wz), vec4(c.gb,K.xy), step(c.b,c.g));
@@ -2501,6 +2565,21 @@ vec3 hsv2rgb(vec3 c){
 void main(){
   vec4 tex = texture2D(u_tex, v);
   vec3 col = tex.rgb;
+  if (u_hd > 0.0) {
+    // 1) sharper upscale
+    col = sampleCR(v);
+    // 2) luma-only adaptive sharpen (no colour fringes, noise floor so grain is not boosted, overshoot clamp = no halos)
+    vec3 lw = vec3(0.299, 0.587, 0.114);
+    vec3 bl = (texture2D(u_tex, v + vec2(u_texel.x * 1.2, 0.0)).rgb + texture2D(u_tex, v - vec2(u_texel.x * 1.2, 0.0)).rgb +
+               texture2D(u_tex, v + vec2(0.0, u_texel.y * 1.2)).rgb + texture2D(u_tex, v - vec2(0.0, u_texel.y * 1.2)).rgb) * 0.25;
+    float dl = dot(col, lw) - dot(bl, lw);
+    float gate = smoothstep(0.004, 0.035, abs(dl));
+    float add = clamp(dl * u_hd * 1.6 * gate, -0.10, 0.10);
+    col = clamp(col + vec3(add), 0.0, 1.0);
+    // 3) gentle punch back (compression flattens contrast/colour)
+    col = clamp((col - 0.5) * (1.0 + u_hd * 0.06) + 0.5, 0.0, 1.0);
+    col = clamp(mix(vec3(dot(col, lw)), col, 1.0 + u_hd * 0.10), 0.0, 1.0);
+  }
   // Warm/cool temperature: push red up & blue down for warm (positive),
   // the opposite for cool (negative) — the same channel-balance trick real
   // color-temperature sliders use, rather than a flat tint overlay.
@@ -2509,11 +2588,24 @@ void main(){
   col.g = clamp(col.g + u_temp * 0.06, 0.0, 1.0);
   // Tint: green <-> magenta balance
   col = clamp(col + vec3(u_tint*0.05, -u_tint*0.10, u_tint*0.05), 0.0, 1.0);
+  // Movie look (colour grade): out = M*col + offset
+  col = clamp(u_lm * col + u_lo, 0.0, 1.0);
   // Dehaze: dark-channel style haze removal + gentle S-curve
   if (u_dehaze > 0.0) {
     float dk = min(col.r, min(col.g, col.b)) * u_dehaze * 0.8;
     col = clamp((col - vec3(dk)) / (1.0 - dk), 0.0, 1.0);
     col = mix(col, col*col*(3.0-2.0*col), u_dehaze*0.35);
+  }
+  // Shadow lift (gamma): + brightens dark areas, - deepens them
+  col = pow(clamp(col, 0.0, 1.0), vec3(1.0 - u_gamma * 0.5));
+  // Edge-aware denoise (bilateral-style): smooths noise, keeps edges
+  if (u_denoise > 0.0) {
+    vec3 dn = col; float dw = 1.0; vec3 c2; float w2;
+    c2 = texture2D(u_tex, v + vec2( 1.5, 0.0) * u_texel).rgb; w2 = exp(-dot(c2-col, c2-col) * 40.0); dn += c2 * w2; dw += w2;
+    c2 = texture2D(u_tex, v + vec2(-1.5, 0.0) * u_texel).rgb; w2 = exp(-dot(c2-col, c2-col) * 40.0); dn += c2 * w2; dw += w2;
+    c2 = texture2D(u_tex, v + vec2(0.0,  1.5) * u_texel).rgb; w2 = exp(-dot(c2-col, c2-col) * 40.0); dn += c2 * w2; dw += w2;
+    c2 = texture2D(u_tex, v + vec2(0.0, -1.5) * u_texel).rgb; w2 = exp(-dot(c2-col, c2-col) * 40.0); dn += c2 * w2; dw += w2;
+    col = mix(col, dn / dw, u_denoise);
   }
   // CAS (AMD FidelityFX Contrast Adaptive Sharpening style): sharpens
   // more where local contrast is low, less where it would cause halos.
@@ -2739,7 +2831,12 @@ function initGradingGL(tab) {
     u_clarity: gl.getUniformLocation(prog, 'u_clarity'),
     u_dehaze: gl.getUniformLocation(prog, 'u_dehaze'),
     u_tint: gl.getUniformLocation(prog, 'u_tint'),
-    u_vig: gl.getUniformLocation(prog, 'u_vig')
+    u_vig: gl.getUniformLocation(prog, 'u_vig'),
+    u_gamma: gl.getUniformLocation(prog, 'u_gamma'),
+    u_lm: gl.getUniformLocation(prog, 'u_lm'),
+    u_lo: gl.getUniformLocation(prog, 'u_lo'),
+    u_denoise: gl.getUniformLocation(prog, 'u_denoise'),
+    u_hd: gl.getUniformLocation(prog, 'u_hd')
   };
   return tab.gl;
 }
@@ -2756,11 +2853,12 @@ function isGradingNeeded() {
   // never be read for this video, we give up and show normal playback.
   const t = getTab(activeTabId);
   if (t && t._gradingGaveUp) return false;
-  return settings.vibrance !== 100 || settings.selSat !== 100 ||
+  return settings.vibrance !== 100 || settings.selSat !== 100 || settings.hdQuality > 0 ||
          settings.aiEnhance > 0 || settings.temperature !== 0 ||
          !!settings.skinProtect || settings.skinSmooth > 0 ||
          settings.casSharp > 0 || settings.clarity > 0 || settings.dehaze > 0 ||
-         settings.tint !== 0 || settings.vignette > 0;
+         settings.tint !== 0 || settings.vignette > 0 ||
+         settings.gamma !== 0 || settings.denoise > 0 || settings.look !== 0;
 }
 function gfxNote(tab, msg) { try { if (tab && tab.id === activeTabId && tab._gpuRequested) showMiniToast(msg); } catch (e) {} }
 function setGradingVisible(tab, on) {
@@ -2800,7 +2898,7 @@ function drawGradingFrame(tab) {
   // edge-push sharpening effectively upscales it, instead of the browser's
   // plain bilinear stretch. Capped for performance.
   let tw = vw, th = vh;
-  if (settings.aiEnhance > 0) {
+  if (settings.aiEnhance > 0 || settings.hdQuality > 0) {
     const rect = tab.canvas.getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     if (rect.width && rect.height) {
@@ -2874,6 +2972,10 @@ function drawGradingFrame(tab) {
   gl.uniform1f(g.u_dehaze, settings.dehaze / 100);
   gl.uniform1f(g.u_tint, settings.tint / 100);
   gl.uniform1f(g.u_vig, settings.vignette / 100);
+  gl.uniform1f(g.u_gamma, settings.gamma / 100);
+  { const lk = window.lookMatrix(); const m = lk.m; gl.uniformMatrix3fv(g.u_lm, false, [m[0],m[3],m[6], m[1],m[4],m[7], m[2],m[5],m[8]]); gl.uniform3fv(g.u_lo, lk.o); }
+  gl.uniform1f(g.u_denoise, settings.denoise / 100);
+  gl.uniform1f(g.u_hd, (settings.hdQuality || 0) / 100);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   // Only now — after a real frame has actually landed on the canvas — swap
   // the visible layer over. Until this point the <video> stays on screen
@@ -3042,8 +3144,10 @@ function updateGradingForActiveTab() {
   const t = getTab(activeTabId);
   if (t && t.isVideo && !t._gpuRequested) { t._gpuRequested = true; t._gradingGaveUp = false; setTimeout(updateGradingForActiveTab, 0); }
 }, true));
-const NEWFX = ['casSharp','clarity','dehaze','tint','vignette'];
+const NEWFX = ['hdQuality','casSharp','clarity','dehaze','tint','vignette','gamma','denoise','lookAmt','grain'];
+const NEWSEL = ['look','letterbox'];
 function refreshEnhanceLabels() {
+  { const hb = document.getElementById('hdQuickBtn'); if (hb) hb.classList.toggle('active-toggle', settings.hdQuality > 0); }
   document.getElementById('brightVal').textContent = settings.bright + '%';
   document.getElementById('contrastVal').textContent = settings.contrast + '%';
   document.getElementById('satVal').textContent = settings.sat + '%';
@@ -3072,6 +3176,7 @@ function applyEnhanceSettingsToUI() {
   document.getElementById('skinProtectBtn').classList.toggle('active-toggle', settings.skinProtect);
   document.getElementById('skinSmooth').value = settings.skinSmooth;
   NEWFX.forEach(k => { const el = document.getElementById(k); if (el) el.value = settings[k]; });
+  NEWSEL.forEach(k => { const el = document.getElementById(k + 'Sel'); if (el) el.value = String(settings[k]); });
   document.getElementById('vibrance').value = settings.vibrance;
   document.getElementById('selHue').value = settings.selHue;
   document.getElementById('selRange').value = settings.selRange;
@@ -6707,8 +6812,54 @@ document.getElementById('skinProtectBtn').addEventListener('click', () => {
 });
 document.getElementById('skinSmooth').addEventListener('input', e => { settings.skinSmooth = Number(e.target.value); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings(); });
 NEWFX.forEach(k => document.getElementById(k).addEventListener('input', e => { settings[k] = Number(e.target.value); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings(); }));
+(function(){
+  const b = document.getElementById('cmpHoldBtn'); let snap = null;
+  const NEUTRAL = { bright:100, contrast:100, sat:100, sharp:0, hdQuality:0, casSharp:0, clarity:0, dehaze:0, denoise:0, aiEnhance:0,
+    vibrance:100, vignette:0, gamma:0, tint:0, temperature:0, look:0, skinSmooth:0, detail:0, exposure:0, shadows:0, highlights:0, selSat:100, grain:0 };
+  const refresh = () => { applyFiltersToAllVideoTabs(); updateGradingForActiveTab(); try { syncFallbackFx(getTab(activeTabId)); } catch (e) {} };
+  const down = e => { e.preventDefault(); if (snap) return; snap = { ...settings }; Object.assign(settings, NEUTRAL); refresh(); showMiniToast('Original (bina HD)'); };
+  const up = () => { if (!snap) return; Object.assign(settings, snap); snap = null; refresh(); showMiniToast('HD wapas'); };
+  b.addEventListener('pointerdown', down); ['pointerup','pointercancel','pointerleave'].forEach(ev => b.addEventListener(ev, up));
+  b.addEventListener('contextmenu', e => e.preventDefault());
+})();
+(function(){
+  const MODES = {
+    lecture: { hdQuality:65, casSharp:40, clarity:30, denoise:0 },
+    movie:   { hdQuality:50, clarity:18, vibrance:112, dehaze:6, casSharp:20, denoise:12, vignette:10, gamma:6, skinProtect:true },
+    dark:    { hdQuality:55, gamma:35, dehaze:15, denoise:25, clarity:15, casSharp:20, vibrance:108, skinProtect:true },
+    anime:   { hdQuality:70, casSharp:45, clarity:20, vibrance:118, denoise:8, aiEnhance:40 },
+    rescue:  { hdQuality:80, denoise:25, casSharp:30, clarity:20 }
+  };
+  const names = { lecture:'Lecture mode', movie:'Movie / Web Series mode', dark:'Dark Scene Fix', anime:'Anime / Animation mode', rescue:'Low-res Rescue' };
+  document.querySelectorAll('[data-hdmode]').forEach(b => b.addEventListener('click', () => {
+    Object.assign(settings, MODES[b.dataset.hdmode]);
+    const t = getTab(activeTabId); if (t && t.isVideo) { t._gpuRequested = true; t._gradingGaveUp = false; }
+    applyEnhanceSettingsToUI(); applyFiltersToAllVideoTabs(); saveEnhanceSettings();
+    showMiniToast(names[b.dataset.hdmode] + ' ON');
+  }));
+  const ab = document.getElementById('autoHdBtn');
+  const paint = () => { ab.textContent = 'Auto HD: ' + (settings.autoHD ? 'On' : 'Off'); ab.classList.toggle('active-toggle', !!settings.autoHD); };
+  ab.addEventListener('click', () => { settings.autoHD = !settings.autoHD; paint(); saveEnhanceSettings(); showMiniToast('Auto HD ' + (settings.autoHD ? 'ON (low-res video par khud lagega)' : 'OFF')); });
+  setTimeout(paint, 1500);
+  // Auto HD: low-res video (under 720p) khulte hi Smart HD khud lag jaye
+  document.addEventListener('loadedmetadata', e => {
+    const el = e.target; if (!settings.autoHD || !el || el.tagName !== 'VIDEO') return;
+    const t = tabs.find(x => x.el === el); if (!t || t.id !== activeTabId) return;
+    if (el.videoHeight && el.videoHeight < 720 && !(settings.hdQuality > 0)) {
+      settings.hdQuality = el.videoHeight <= 400 ? 75 : el.videoHeight <= 500 ? 62 : el.videoHeight <= 600 ? 52 : 42; t._gpuRequested = true; t._gradingGaveUp = false;
+      applyEnhanceSettingsToUI(); showMiniToast('Auto HD: ' + el.videoHeight + 'p video boost ho rahi hai');
+    }
+  }, true);
+})();
+document.getElementById('hdQuickBtn').addEventListener('click', () => {
+  settings.hdQuality = settings.hdQuality > 0 ? 0 : 60;
+  document.getElementById('hdQuickBtn').classList.toggle('active-toggle', settings.hdQuality > 0);
+  const t = getTab(activeTabId); if (t && t.isVideo) { t._gpuRequested = true; t._gradingGaveUp = false; }
+  applyEnhanceSettingsToUI(); saveEnhanceSettings();
+  showMiniToast(settings.hdQuality > 0 ? 'Smart HD ON' : 'Smart HD OFF');
+});
 document.getElementById('hdBoostBtn').addEventListener('click', () => {
-  Object.assign(settings, { casSharp: 55, clarity: 30, dehaze: 15, vibrance: 115, aiEnhance: Math.max(settings.aiEnhance, 35), contrast: Math.max(settings.contrast, 105) });
+  Object.assign(settings, { hdQuality: Math.max(settings.hdQuality||0, 60), casSharp: 55, clarity: 30, dehaze: 15, vibrance: 115, aiEnhance: Math.max(settings.aiEnhance, 35), contrast: Math.max(settings.contrast, 105) });
   applyEnhanceSettingsToUI(); applyFiltersToAllVideoTabs(); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings();
   showMiniToast('HD Boost applied');
 });
@@ -8009,7 +8160,7 @@ function applyPresetValues(vals) { Object.assign(settings, vals); applyEnhanceSe
 document.querySelectorAll('.presets button[data-preset]').forEach(btn => {
   btn.addEventListener('click', () => {
     const table = {
-      reset:    { bright:100, contrast:100, sat:100, sharp:0, denoise:0, detail:0, exposure:0, gamma:100, shadows:0, highlights:0, vibrance:100, selHue:0, selRange:30, selSat:100, aiEnhance:0, temperature:0, skinProtect:false, skinSmooth:0, casSharp:0, clarity:0, dehaze:0, tint:0, vignette:0 },
+      reset:    { bright:100, contrast:100, sat:100, sharp:0, denoise:0, detail:0, exposure:0, gamma:100, shadows:0, highlights:0, vibrance:100, selHue:0, selRange:30, selSat:100, aiEnhance:0, temperature:0, skinProtect:false, skinSmooth:0, casSharp:0, clarity:0, dehaze:0, tint:0, vignette:0, gamma:0, denoise:0, look:0, lookAmt:70, grain:0, letterbox:0, hdQuality:0 },
       clear:    { bright:105, contrast:115, sat:105, sharp:35, denoise:15, detail:20, exposure:5, gamma:105, shadows:10, highlights:5 },
       warm:     { bright:105, contrast:105, sat:120, sharp:15, denoise:10, detail:10, exposure:5, gamma:100, shadows:5, highlights:0, temperature:25 },
       vivid:    { bright:100, contrast:120, sat:150, sharp:25, denoise:5, detail:20, exposure:0, gamma:110, shadows:0, highlights:15 },
@@ -11385,9 +11536,13 @@ __stvHook(org);
   holder.style.cssText='position:absolute;width:0;height:0;overflow:hidden';
   holder.innerHTML='<svg xmlns="'+NS+'" width="0" height="0"><filter id="fxFallback" color-interpolation-filters="sRGB" x="0" y="0" width="100%" height="100%">'+
    '<feColorMatrix id="fxTone" type="matrix" in="SourceGraphic" result="c1" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"/>'+
-   '<feColorMatrix id="fxSat" type="saturate" in="c1" values="1" result="c2"/>'+
+   '<feColorMatrix id="fxLook" type="matrix" in="c1" result="c1b" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"/>'+
+   '<feColorMatrix id="fxSat" type="saturate" in="c1b" values="1" result="c2"/>'+
    '<feComponentTransfer id="fxHaze" in="c2" result="c3"><feFuncR type="linear" slope="1" intercept="0"/><feFuncG type="linear" slope="1" intercept="0"/><feFuncB type="linear" slope="1" intercept="0"/></feComponentTransfer>'+
-   '<feConvolveMatrix id="fxConv" in="c3" order="3" kernelMatrix="0 0 0 0 1 0 0 0 0" divisor="1" preserveAlpha="true" result="c4"/>'+
+   '<feComponentTransfer id="fxGam" in="c3" result="c3g"><feFuncR type="gamma" amplitude="1" exponent="1" offset="0"/><feFuncG type="gamma" amplitude="1" exponent="1" offset="0"/><feFuncB type="gamma" amplitude="1" exponent="1" offset="0"/></feComponentTransfer>'+
+   '<feGaussianBlur id="fxDnB" in="c3g" stdDeviation="1.1" result="dnb"/>'+
+   '<feComposite id="fxDnM" in="c3g" in2="dnb" operator="arithmetic" k1="0" k2="1" k3="0" k4="0" result="c3d"/>'+
+   '<feConvolveMatrix id="fxConv" in="c3d" order="3" kernelMatrix="0 0 0 0 1 0 0 0 0" divisor="1" preserveAlpha="true" result="c4"/>'+
    '<feGaussianBlur id="fxBlur" in="c4" stdDeviation="1.6" result="bl"/>'+
    '<feComposite id="fxMix" in="c4" in2="bl" operator="arithmetic" k1="0" k2="1" k3="0" k4="0"/>'+
    '</filter></svg>';
@@ -11399,18 +11554,21 @@ __stvHook(org);
     tab = tab || getTab(activeTabId);
     if (!tab || !tab.isVideo) { vig.style.display='none'; return; }
     const st=settings;
-    const any = st.vibrance!==100 || st.aiEnhance>0 || st.temperature!==0 || st.skinSmooth>0 ||
-      st.casSharp>0 || st.clarity>0 || st.dehaze>0 || st.tint!==0;
+    const any = st.hdQuality>0 || st.vibrance!==100 || st.aiEnhance>0 || st.temperature!==0 || st.skinSmooth>0 ||
+      st.casSharp>0 || st.clarity>0 || st.dehaze>0 || st.tint!==0 || st.gamma!==0 || st.denoise>0 || st.look!==0;
     const useFx = any && !tab._gradingReady;
     tab.el.classList.toggle('fx-fallback', useFx);
     if (useFx) {
       const t=st.temperature/100, ti=st.tint/100;
       const rr=(1+0.25*t)*(1+0.06*ti), gg=1-0.15*ti, bb=(1-0.25*t)*(1+0.06*ti);
       $('fxTone').setAttribute('values', rr.toFixed(3)+' 0 0 0 0  0 '+gg.toFixed(3)+' 0 0 0  0 0 '+bb.toFixed(3)+' 0 0  0 0 0 1 0');
-      $('fxSat').setAttribute('values', Math.max(0, 1+(st.vibrance/100-1)*0.6+st.aiEnhance/100*0.16).toFixed(3));
+      $('fxSat').setAttribute('values', Math.max(0, 1+(st.vibrance/100-1)*0.6+st.aiEnhance/100*0.16+st.hdQuality/100*0.10).toFixed(3));
       const d=st.dehaze/100, slope=1+0.4*d, icpt=-0.2*d;
       $('fxHaze').querySelectorAll('feFuncR,feFuncG,feFuncB').forEach(f=>{f.setAttribute('slope',slope.toFixed(3));f.setAttribute('intercept',icpt.toFixed(3));});
-      const k=Math.min(1.2, st.casSharp/100*0.9 + st.clarity/100*0.5 + st.aiEnhance/100*0.3);
+      { const lk=lookMatrix(), m=lk.m, o=lk.o; $('fxLook').setAttribute('values', m[0]+' '+m[1]+' '+m[2]+' 0 '+o[0]+'  '+m[3]+' '+m[4]+' '+m[5]+' 0 '+o[1]+'  '+m[6]+' '+m[7]+' '+m[8]+' 0 '+o[2]+'  0 0 0 1 0'); }
+      const ge=1-st.gamma/100*0.5; $('fxGam').querySelectorAll('feFuncR,feFuncG,feFuncB').forEach(f=>f.setAttribute('exponent',ge.toFixed(3)));
+      const dm=st.denoise/100*0.8; $('fxDnM').setAttribute('k2',(1-dm).toFixed(3)); $('fxDnM').setAttribute('k3',dm.toFixed(3));
+      const k=Math.min(1.2, st.casSharp/100*0.9 + st.clarity/100*0.5 + st.aiEnhance/100*0.3 + st.hdQuality/100*0.55);
       $('fxConv').setAttribute('kernelMatrix','0 '+(-k).toFixed(3)+' 0  '+(-k).toFixed(3)+' '+(1+4*k).toFixed(3)+' '+(-k).toFixed(3)+'  0 '+(-k).toFixed(3)+' 0');
       const a=st.skinSmooth/100*0.7;
       $('fxMix').setAttribute('k2',(1-a).toFixed(3)); $('fxMix').setAttribute('k3',a.toFixed(3));
@@ -11418,6 +11576,84 @@ __stvHook(org);
     if (st.vignette>0) { vig.style.display='block'; vig.style.background='radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(0,0,0,'+(st.vignette/100*0.85).toFixed(2)+') 100%)'; }
     else vig.style.display='none';
   };
+})();
+
+(function(){
+  const base={casSharp:0,clarity:0,dehaze:0,tint:0,vignette:0,gamma:0,denoise:0,vibrance:100};
+  const P={
+    study:{casSharp:70,clarity:45,dehaze:10,denoise:10,gamma:10},
+    cine:{vignette:35,clarity:20,tint:-8,vibrance:120,casSharp:20},
+    vivid:{vibrance:150,clarity:25,casSharp:35,dehaze:10},
+    night:{gamma:45,dehaze:20,denoise:35,casSharp:20},
+    off:{}
+  };
+  document.querySelectorAll('.fxPreset').forEach(b=>b.addEventListener('click',()=>{
+    Object.assign(settings,base,P[b.dataset.p]||{});
+    if(b.dataset.p==='off'){settings.aiEnhance=0;settings.temperature=0;settings.skinSmooth=0;}
+    applyEnhanceSettingsToUI(); applyFiltersToAllVideoTabs(); updateGradingForActiveTab(); refreshEnhanceLabels(); saveEnhanceSettings();
+    showMiniToast(b.textContent+' applied');
+  }));
+})();
+
+/* ===== Movie looks, film grain, cinema bars, compare ===== */
+(function(){
+  const I=[1,0,0,0,1,0,0,0,1];
+  const LOOKS={
+    1:{m:[1.12,-0.02,-0.10, -0.05,1.02,0.03, -0.10,0.10,1.14],o:[-0.02,0.00,0.04]},   // teal & orange
+    2:{m:[1.08,0.05,0.00, 0.00,1.00,0.02, 0.00,0.03,0.88],o:[0.02,0.005,-0.025]},     // warm film
+    3:{m:[0.36,0.62,0.12, 0.36,0.62,0.12, 0.36,0.62,0.12],o:[-0.04,-0.04,-0.04]},      // noir b&w
+    4:{m:[0.90,0.10,0.04, 0.05,0.88,0.06, 0.05,0.10,0.78],o:[0.06,0.045,0.025]},      // vintage faded
+    5:{m:[0.92,0.00,0.03, 0.00,1.00,0.05, 0.04,0.07,1.14],o:[-0.015,0.00,0.025]}       // cold thriller
+  };
+  window.lookMatrix=function(){
+    const L=LOOKS[settings.look]; if(!L) return {m:I.slice(),o:[0,0,0]};
+    const a=Math.max(0,Math.min(1,settings.lookAmt/100));
+    return {m:I.map((v,i)=>+(v+(L.m[i]-v)*a).toFixed(4)), o:L.o.map(v=>+(v*a).toFixed(4))};
+  };
+  const stage=document.getElementById('stage');
+  // film grain overlay (animated noise)
+  const st=document.createElement('style');
+  const noise="data:image/svg+xml;utf8,"+encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .5  0 0 0 0 .5  0 0 0 0 .5  1.4 1.4 1.4 0 -1.1'/></filter><rect width='100%' height='100%' filter='url(#n)'/></svg>");
+  st.textContent="#fxGrain{position:absolute;inset:-20%;pointer-events:none;z-index:3;display:none;background:url(\""+noise+"\");mix-blend-mode:overlay;animation:fxg .5s steps(5) infinite}@keyframes fxg{0%{transform:translate(0,0)}20%{transform:translate(-3%,2%)}40%{transform:translate(2%,-3%)}60%{transform:translate(-2%,-2%)}80%{transform:translate(3%,3%)}100%{transform:translate(0,0)}}"+
+   ".fxBar{position:absolute;left:0;right:0;background:#000;pointer-events:none;z-index:4;display:none}#fxBarT{top:0}#fxBarB{bottom:0}"+
+   "#stage.fx-compare canvas{display:none!important}#stage.fx-compare video.active-frame{display:block!important;visibility:visible!important;filter:none!important}#stage.fx-compare #fxGrain,#stage.fx-compare #fxVignette,#stage.fx-compare .fxBar{display:none!important}";
+  document.head.appendChild(st);
+  const gr=document.createElement('div');gr.id='fxGrain';stage.appendChild(gr);
+  const bt=document.createElement('div');bt.className='fxBar';bt.id='fxBarT';stage.appendChild(bt);
+  const bb=document.createElement('div');bb.className='fxBar';bb.id='fxBarB';stage.appendChild(bb);
+  function overlays(){
+    const t=getTab(activeTabId), isV=t&&t.isVideo;
+    gr.style.display=(isV&&settings.grain>0)?'block':'none'; gr.style.opacity=(settings.grain/100*0.9).toFixed(2);
+    const r=settings.letterbox/100;
+    if(isV&&r>0){const h=stage.clientHeight,w=stage.clientWidth,bar=Math.max(0,(h-w/r)/2);bt.style.height=bb.style.height=bar+'px';bt.style.display=bb.style.display=bar>0?'block':'none';}
+    else bt.style.display=bb.style.display='none';
+  }
+  const prev=window.syncFallbackFx;
+  window.syncFallbackFx=function(tab){prev(tab);overlays();};
+  window.addEventListener('resize',overlays);
+  // sliders / selects
+  NEWSEL.forEach(k=>{const el=document.getElementById(k+'Sel');el.addEventListener('change',()=>{settings[k]=Number(el.value);updateGradingForActiveTab();saveEnhanceSettings();});});
+  // compare (hold to see original)
+  const cb=document.getElementById('fxCompareBtn');
+  const on=e=>{e.preventDefault();stage.classList.add('fx-compare');}, off=()=>stage.classList.remove('fx-compare');
+  cb.addEventListener('pointerdown',on);['pointerup','pointercancel','pointerleave'].forEach(ev=>cb.addEventListener(ev,off));
+  // extend presets
+  const P2={
+    cinema:{look:1,lookAmt:60,letterbox:235,grain:20,vignette:30,clarity:25,casSharp:40,vibrance:115},
+    teal:{look:1,lookAmt:75,clarity:15,casSharp:25},
+    warm:{look:2,lookAmt:75,grain:12,vignette:15},
+    noir:{look:3,lookAmt:100,grain:25,vignette:35,clarity:30},
+    vintage:{look:4,lookAmt:80,grain:30,vignette:30},
+    cold:{look:5,lookAmt:75,clarity:20,vignette:15}
+  };
+  document.querySelectorAll('.fxPreset').forEach(b=>{const q=P2[b.dataset.p];if(!q)return;
+    b.addEventListener('click',()=>{ // runs after the base preset handler: add the movie parts
+      Object.assign(settings,{look:0,lookAmt:70,grain:0,letterbox:0},q);
+      applyEnhanceSettingsToUI();updateGradingForActiveTab();refreshEnhanceLabels();saveEnhanceSettings();
+    });});
+  document.querySelectorAll('.fxPreset[data-p="off"],.fxPreset[data-p="study"],.fxPreset[data-p="night"],.fxPreset[data-p="vivid"],.fxPreset[data-p="cine"]').forEach(b=>b.addEventListener('click',()=>{
+    Object.assign(settings,{look:0,lookAmt:70,grain:0,letterbox:0});applyEnhanceSettingsToUI();updateGradingForActiveTab();saveEnhanceSettings();}));
+  overlays();
 })();
 </script>
 </body>
